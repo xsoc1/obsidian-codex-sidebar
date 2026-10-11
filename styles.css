@@ -50,3 +50,37 @@
 .codex-composer textarea { width: 100%; min-height: 84px; max-height: 220px; resize: vertical; font-size: 13px; }
 .codex-compose-actions { margin-top: 6px; justify-content: flex-end; }
 .codex-sidebar-ribbon.is-active { color: var(--interactive-accent); }
+.codex-activity {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--text-accent);
+	padding: 8px 10px;
+	border-radius: 8px;
+	background: var(--background-secondary);
+	flex: 0 0 auto;
+}
+.codex-activity[hidden], .codex-usage[hidden], .codex-catalog-status[hidden] { display: none; }
+.codex-spinner {
+	width: 12px;
+	height: 12px;
+	border: 2px solid var(--background-modifier-border);
+	border-top-color: var(--interactive-accent);
+	border-radius: 50%;
+	animation: codex-spin 1s linear infinite;
+}
+@keyframes codex-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .codex-spinner { animation: none; } }
+.codex-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-bottom: 8px; }
+.codex-controls label { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 11px; color: var(--text-muted); }
+.codex-controls select { width: 100%; min-width: 0; font-size: 12px; }
+.codex-run-toggles { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.codex-run-toggles label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.codex-usage { color: var(--text-muted); font-size: 11px; margin-bottom: 8px; }
+.codex-usage progress { display: block; width: 100%; height: 4px; margin-top: 5px; accent-color: var(--interactive-accent); }
+.codex-catalog-status { color: var(--text-error); font-size: 11px; margin-bottom: 8px; }
+.codex-reasoning { color: var(--text-muted); }
+.codex-reasoning summary { cursor: pointer; font-size: 12px; }
+.codex-reasoning .codex-message-body { margin-top: 8px; }
+.codex-instructions-input { width: 100%; min-width: 260px; resize: vertical; font-size: 12px; }

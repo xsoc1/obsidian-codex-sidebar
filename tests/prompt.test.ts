@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { build_prompt, bound_text, heading_at, source_excerpt, type ContextSnapshot } from "../src/prompt";
+import { build_prompt, bound_text, heading_at, source_excerpt, instruction_items, type ContextSnapshot } from "../src/prompt";
 
 test("reading selection carries original LaTeX and an honest block mapping", () =>
 {
@@ -33,4 +33,13 @@ test("no context leaves the user's question intact; truncation is explicit", () 
 {
 	assert.equal(build_prompt("你好", null), "你好");
 	assert.deepEqual(bound_text("123456", 3), { Text: "123", Truncated: true });
+});
+
+test("work instructions use a developer item independent of user and captured note content", () =>
+{
+	const Items = instruction_items("Use $...$ and $$...$$ in Obsidian.");
+	assert.equal(Items[0].role, "developer");
+	assert.equal(Items[0].content[0].type, "input_text");
+	assert.ok(Items[0].content[0].text.endsWith("Use $...$ and $$...$$ in Obsidian."));
+	assert.equal(build_prompt("Question", null), "Question");
 });

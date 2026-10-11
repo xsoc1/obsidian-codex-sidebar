@@ -3,7 +3,7 @@
 ## Objective and scope
 
 - User requested a Windows desktop Obsidian plugin using real local Codex login and sessions, with the open/close control on Obsidian's left ribbon.
-- Version 0.1.0 provides a right chat view, streaming responses, interruption, saved plugin sessions, selection prompts, and Markdown reading-context capture.
+- Version 0.2.0 provides a right chat view, streaming responses, interruption, saved plugin sessions, selection prompts, Markdown reading-context capture, visible thinking status, model/effort/Fast controls, token usage and editable Obsidian work instructions.
 - Source lives here. Installed files belong to the vault's ignored `.obsidian/plugins/codex-sidebar` directory. Do not put generated files or private session data into the notes repository.
 - Preserve unrelated vault changes. Do not modify notes or assignment answers when testing selection capture.
 - Use the official Codex app-server JSONL protocol over an owned hidden child process. Never parse private credential files or attach to a private desktop socket. Reuse the current Windows user's Codex login.
@@ -20,7 +20,8 @@
 
 ## Current state
 
-- 2026-10-11: Version 0.1.0 is installed and enabled in the math vault. TypeScript and esbuild succeeded, and 8 protocol/prompt tests passed. Native checks covered left ribbon open/close, real ChatGPT-account Codex inference, Markdown math rendering, interruption, same-thread continuation after reload, source-editor selection, reading-mode source-block mapping, automatic selection capture, and visible viewport capture.
+- 2026-10-11: Version 0.2.0 is installed and enabled in the math vault. TypeScript/esbuild and 12 protocol/prompt/control tests passed. Native checks covered model/effort catalogs, persistent thinking status, Fast on/off, usage visibility, saved settings after reload and the same thread ID. Actual requests covered gpt-6.1-sol high/low with priority and gpt-6-luna medium with default; thread/read confirmed model and effort changes. An edited developer prompt injected by the plugin produced the requested acceptance marker in a real reply. MathJax rendered dollar-delimited formulas.
+- The 0.1.0 acceptance covered left ribbon open/close, real ChatGPT-account inference, Markdown math, interruption, continuation after reload, editor selection, reading source blocks, automatic capture and viewport capture. These remain prior checks rather than newly repeated claims.
 - PDF page extraction, screenshots/OCR, global desktop conversation browsing, direct source editing and mobile support are outside 0.1.0.
 - Reading selection maps to whole Markdown source blocks when available, not an exact character range. A text-only fallback is explicitly labeled.
 - Auto capture updates a context card. Explicit send or selection shortcuts submit the question; dragging a selection alone does not submit a turn.
@@ -33,6 +34,10 @@
 - A native screenshot captured while the app was in the background was stale after a full reading rerender. Bringing the math vault window to the foreground and maximizing it refilled the live DOM. Future reading acceptance should compare fresh visible-window screenshots, source mapping and DOM, rather than accepting background paint alone.
 - Plugin files and data are installed in the local math vault's `.obsidian/plugins/codex-sidebar`. Only research/user documentation is maintained in the separate notes repo. Machine-specific evidence paths and configuration backup locations are retained locally in ignored `LOCAL_DEV.md`.
 - Remaining acceptance boundaries: approvals are implemented but no privileged execution approval was exercised; popout windows, multiple Markdown panes, embeds, cross-note selections and source edits during capture have not been exhaustively exercised. No claim of PDF/screenshot/OCR recognition or direct desktop-session takeover.
+- 2026-10-11: User requested a thinking indicator, model and effort selection, Fast and context-usage toggles, and built-in instructions describing Obsidian rendering and work. Interpret the usage toggle as showing/hiding reported occupancy. Use the returned model catalog and service-tier IDs; send explicit model/effort/tier options each turn so returning to defaults clears sticky overrides. Fast off sends `default`, while Fast on uses the catalog tier (currently `priority`). Catalog presence alone does not prove account access.
+- Default instructions cover Chinese note assistance, explanation, proof checking, source/mapping limits, read-only behavior and Obsidian Markdown/MathJax. Editable instructions are injected as developer messages through official `thread/inject_items`, independent of user questions and captured notes. A persisted SHA-256 avoids identical reinjection; instruction changes and compaction events invalidate it. Do not replace Codex base tool instructions or alter global config/vault AGENTS files.
+- Updating developerInstructions on resume, including an owned-process restart, and a per-turn collaboration-mode override did not produce the requested marker in the test reply. These approaches were discarded; raw developer-item injection did produce the marker and the final plugin path was independently exercised. Do not infer effective instructions solely from accepted RPC parameters.
+- Context occupancy is an estimate from `tokenUsage.last.totalTokens` against `modelContextWindow`, with cumulative consumption only in the tooltip. Never use cumulative usage as occupancy or invent a missing window. Simple native requests returned no reasoning summary; simulated protocol events check summary streaming/rendering. Full long-session compaction acceptance remains unperformed.
 
 ## Git and publication
 
