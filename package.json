@@ -1,0 +1,20 @@
+{
+	"name": "codex-sidebar",
+	"version": "0.1.0",
+	"private": true,
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/xsoc1/obsidian-codex-sidebar.git"
+	},
+	"scripts": {
+		"build": "tsc --noEmit && node esbuild.mjs",
+		"test": "tsx --test tests/*.test.ts"
+	},
+	"devDependencies": {
+		"@types/node": "^24.0.0",
+		"esbuild": "^0.25.0",
+		"obsidian": "^1.8.7",
+		"tsx": "^4.20.0",
+		"typescript": "^5.9.0"
+	}
+}

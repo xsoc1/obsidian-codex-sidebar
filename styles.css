@@ -1,0 +1,52 @@
+.codex-sidebar {
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px !important;
+	padding-bottom: 36px !important;
+	height: 100%;
+	min-height: 0;
+}
+.codex-header, .codex-context-actions, .codex-compose-actions, .codex-message-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.codex-header strong { flex: 1; font-size: 16px; }
+.codex-sidebar button { font-size: 12px; padding: 4px 8px; }
+.codex-sessions { width: 100%; }
+.codex-status { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.codex-context {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 8px;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+.codex-context-label { display: flex; align-items: center; gap: 4px; }
+.codex-context summary { overflow-wrap: anywhere; cursor: pointer; margin: 4px 0; }
+.codex-context pre, .codex-approval-description {
+	white-space: pre-wrap;
+	max-height: 180px;
+	overflow: auto;
+	font-size: 11px;
+}
+.codex-messages { flex: 1; min-height: 80px; overflow-y: auto; overflow-x: hidden; }
+.codex-welcome { color: var(--text-muted); padding: 18px 2px; line-height: 1.6; }
+.codex-message { padding: 10px; margin-bottom: 10px; border-radius: 9px; border: 1px solid var(--background-modifier-border); }
+.codex-user { background: var(--background-secondary); }
+.codex-system { color: var(--text-muted); }
+.codex-message-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; justify-content: space-between; }
+.codex-message-label button { font-size: 10px; }
+.codex-message-context { color: var(--text-faint); font-size: 10px; overflow-wrap: anywhere; margin-bottom: 6px; }
+.codex-message-body { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.codex-user .codex-message-body, .codex-system .codex-message-body { white-space: pre-wrap; }
+.codex-message-body > :first-child { margin-top: 0; }
+.codex-message-body > :last-child { margin-bottom: 0; }
+.codex-message-body pre, .codex-message-body .math-block { overflow-x: auto; }
+.codex-composer { flex: 0 0 auto; }
+.codex-composer textarea { width: 100%; min-height: 84px; max-height: 220px; resize: vertical; font-size: 13px; }
+.codex-compose-actions { margin-top: 6px; justify-content: flex-end; }
+.codex-sidebar-ribbon.is-active { color: var(--interactive-accent); }

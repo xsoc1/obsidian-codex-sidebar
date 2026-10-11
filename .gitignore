@@ -1,0 +1,12 @@
+node_modules/
+main.js
+main.js.map
+data.json
+dist/
+.obsidian/
+.trash/
+.env
+.env.*
+*.log
+*.tsbuildinfo
+LOCAL_DEV.md
