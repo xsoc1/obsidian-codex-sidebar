@@ -1,12 +1,17 @@
 import {
 	Plugin, ItemView, WorkspaceLeaf, PluginSettingTab, Setting, Notice,
-	MarkdownRenderer, Component, FileSystemAdapter, Modal, type App
+	MarkdownRenderer, Component, FileSystemAdapter, Modal, editorInfoField, type App
 } from "obsidian";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { dirname, join } from "node:path";
 import { ContextCapture } from "./context";
-import { build_prompt, DefaultInstructions, instruction_items, type ContextSnapshot } from "./prompt";
+import { build_prompt, DefaultInstructions, LegacyInstructions, environment_instructions, instruction_items, type ContextSnapshot } from "./prompt";
+import { branch_prefix, history_items, type ChatMessage } from "./history";
+import { CompletionService, type CompletionInput } from "./completion";
+import { InlineCompletions } from "./inline";
+import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import { CodexConnection, type RpcMessage } from "./rpc";
 import { selected_model, fast_tier, run_options, context_usage, type ModelInfo, type RunDefaults, type TokenUsage } from "./controls";
 
@@ -24,16 +29,9 @@ interface SidebarSettings
 	Instructions: string;
 	AttachContext: boolean;
 	AutoCapture: boolean;
-}
-
-interface ChatMessage
-{
-	Id: string;
-	Role: "user" | "assistant" | "system" | "reasoning";
-	Text: string;
-	TurnId?: string;
-	ContextLabel?: string;
-	SummaryParts?: string[];
+	Completion: boolean;
+	CompletionDelay: number;
+	ObsidianCliPath: string;
 }
 
 interface ChatSession
@@ -47,6 +45,9 @@ interface ChatSession
 	EffectiveEffort?: string;
 	EffectiveTier?: string;
 	InstructionsHash?: string;
+	Private?: boolean;
+	LegacyThreadId?: string;
+	ParentId?: string;
 }
 
 interface SavedState
@@ -110,6 +111,10 @@ export default class CodexSidebarPlugin extends Plugin
 	private CaptureTimer: ReturnType<typeof setTimeout> | null = null;
 	private Modals = new Set<Modal>();
 	private BoundDocuments = new Set<Document>();
+	private CompletionWorker = new CompletionService();
+	Inline!: InlineCompletions;
+	private CompletionStatus!: HTMLElement;
+	private LiveThreads = new Map<string, string>();
 
 	get Session(): ChatSession
 	{
@@ -121,6 +126,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Connection?.close();
 		this.Connection = null;
 		this.LoadedThread = null;
+		this.LiveThreads.clear();
 	}
 
 	async onload(): Promise<void>
@@ -131,12 +137,36 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			Sessions.push(new_session());
 		}
+		for(const Session of Sessions)
+		{
+			if(Session.ThreadId && !Session.Private)
+			{
+				Session.LegacyThreadId = Session.ThreadId;
+			}
+			Session.ThreadId = null;
+			Session.InstructionsHash = "";
+		}
 		this.State =
 		{
-			Settings: { CliPath: "", Model: "", Effort: "", Fast: false, ShowUsage: true, Instructions: DefaultInstructions, AttachContext: true, AutoCapture: true, ...Saved?.Settings },
+			Settings: { CliPath: "", Model: "", Effort: "", Fast: false, ShowUsage: true, Instructions: DefaultInstructions, AttachContext: true, AutoCapture: true, Completion: true, CompletionDelay: 1200, ObsidianCliPath: "", ...Saved?.Settings },
 			Sessions,
 			ActiveId: Sessions.some(Value => Value.Id === Saved?.ActiveId) ? Saved!.ActiveId! : Sessions[0].Id
 		};
+		if(this.State.Settings.Instructions === LegacyInstructions)
+		{
+			this.State.Settings.Instructions = DefaultInstructions;
+		}
+		this.CompletionStatus = this.addStatusBarItem();
+		this.CompletionStatus.setText(this.State.Settings.Completion ? "Codex 补全已开启" : "Codex 补全已关闭");
+		this.Inline = new InlineCompletions({
+			Enabled: () => this.State.Settings.Completion && !this.Unloaded,
+			Delay: () => Math.max(500, this.State.Settings.CompletionDelay),
+			Path: View => View.state.field(editorInfoField, false)?.file?.path ?? null,
+			Request: (Input, Signal) => this.request_completion(Input, Signal),
+			Status: Text => this.CompletionStatus.setText(Text),
+			Changed: () => this.refresh()
+		});
+		this.registerEditorExtension(this.Inline.Extension);
 		this.Capture = new ContextCapture(this.app);
 		this.registerView(ViewType, Leaf => new CodexView(Leaf, this));
 		this.Ribbon = this.addRibbonIcon("bot", "Codex 聊天 (打开/收起)", () => void this.toggle_sidebar());
@@ -145,6 +175,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.addCommand({ id: "explain-selection", name: "解释选区", callback: () => void this.ask_selection(ExplainPrompt) });
 		this.addCommand({ id: "check-proof", name: "检查选区证明", callback: () => void this.ask_selection(ProofPrompt) });
 		this.addCommand({ id: "capture-reading", name: "捕获当前阅读位置", callback: () => void this.capture_current() });
+		this.addCommand({ id: "toggle-completion", name: "开启/关闭行内补全", callback: () => void this.set_completion(!this.State.Settings.Completion) });
 		this.addSettingTab(new CodexSettings(this.app, this));
 		this.registerMarkdownPostProcessor((ElementValue, Context) => this.Capture.register_block(ElementValue, Context));
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () =>
@@ -188,6 +219,50 @@ export default class CodexSidebarPlugin extends Plugin
 				}
 			}
 		});
+	}
+
+	async set_completion(Enabled: boolean): Promise<void>
+	{
+		this.State.Settings.Completion = Enabled;
+		this.Inline.clear();
+		this.CompletionWorker.close();
+		this.CompletionStatus.setText(Enabled ? "Codex 补全已开启" : "Codex 补全已关闭");
+		this.refresh();
+		await this.persist();
+	}
+
+	private work_instructions(): string
+	{
+		return environment_instructions(this.State.Settings.Instructions.trim() || DefaultInstructions, {
+			Vault: this.app.vault.getName(), Root: (this.app.vault.adapter as FileSystemAdapter).getBasePath(),
+			Cli: this.obsidian_cli()
+		});
+	}
+
+	private obsidian_cli(): string
+	{
+		return this.State.Settings.ObsidianCliPath.trim() || (existsSync(join(dirname(process.execPath), "Obsidian.com")) ? join(dirname(process.execPath), "Obsidian.com") : "obsidian");
+	}
+
+	async request_completion(Input: CompletionInput, Signal: AbortSignal): Promise<string>
+	{
+		if(Signal.aborted || this.Unloaded)
+		{
+			throw new Error("补全已取消");
+		}
+		if(!this.Models.length)
+		{
+			await this.ensure_connection();
+		}
+		const Cli = this.State.Settings.CliPath.trim() || await discover_cli();
+		if(Signal.aborted || this.Unloaded)
+		{
+			throw new Error("补全已取消");
+		}
+		const Options = run_options(this.State.Settings, this.Models, this.Defaults);
+		const Selected = selected_model(this.State.Settings, this.Models, this.Defaults);
+		Options.effort = Selected?.supportedReasoningEfforts.find(Value => Value.reasoningEffort === "low")?.reasoningEffort ?? Selected?.defaultReasoningEffort ?? "low";
+		return this.CompletionWorker.complete(Cli, (this.app.vault.adapter as FileSystemAdapter).getBasePath(), Input, Options, Signal);
 	}
 
 	private bind_document(DocumentValue: Document): void
@@ -342,6 +417,7 @@ export default class CodexSidebarPlugin extends Plugin
 					{
 						this.Connection = null;
 						this.LoadedThread = null;
+						this.LiveThreads.clear();
 						this.Busy = false;
 						this.TurnId = null;
 						this.Activity = "";
@@ -362,6 +438,37 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				throw new Error("本机 Codex 尚未登录. 请先在 Codex 应用或 CLI 中登录");
 			}
+			const Legacy = this.State.Sessions.filter(Value => Value.LegacyThreadId);
+			const Archived = new Set<string>();
+			if(Legacy.length)
+			{
+				let Cursor: string | null = null;
+				do
+				{
+					const Page = await Connection.request("thread/list", { archived: true, cwd: Adapter.getBasePath(), limit: 100, cursor: Cursor });
+					Page.data.forEach((Value: { id: string }) => Archived.add(Value.id));
+					Cursor = Page.nextCursor ?? null;
+				} while(Cursor && Legacy.some(Value => !Archived.has(Value.LegacyThreadId!)));
+			}
+			for(const Session of Legacy)
+			{
+				if(Session.LegacyThreadId)
+				{
+					try
+					{
+						if(!Archived.has(Session.LegacyThreadId))
+						{
+							await Connection.request("thread/archive", { threadId: Session.LegacyThreadId });
+						}
+						delete Session.LegacyThreadId;
+					}
+					catch(ErrorValue)
+					{
+						new Notice(`旧插件会话未能从 Codex GUI 归档: ${error_text(ErrorValue)}. 新会话仍使用临时后台模式.`, 7000);
+					}
+				}
+			}
+			await this.persist();
 			this.Models = [];
 			this.CatalogError = "";
 			try
@@ -412,16 +519,21 @@ export default class CodexSidebarPlugin extends Plugin
 	private async ensure_thread(): Promise<void>
 	{
 		await this.ensure_connection();
-		if(this.Session.ThreadId === this.LoadedThread && this.LoadedThread)
+		const LiveId = this.LiveThreads.get(this.Session.Id);
+		if(LiveId)
 		{
+			this.Session.ThreadId = LiveId;
+			this.LoadedThread = LiveId;
 			return;
 		}
 		const Options = run_options(this.State.Settings, this.Models, this.Defaults);
-		const Instructions = this.State.Settings.Instructions.trim() || DefaultInstructions;
+		const Instructions = this.work_instructions();
 		const Adapter = this.app.vault.adapter as FileSystemAdapter;
 		const Params =
 		{
 			cwd: Adapter.getBasePath(),
+			ephemeral: true,
+			dynamicTools: [ObsidianTool],
 			approvalPolicy: "on-request",
 			approvalsReviewer: "user",
 			sandbox: "read-only",
@@ -430,11 +542,21 @@ export default class CodexSidebarPlugin extends Plugin
 			serviceTier: Options.serviceTier,
 			config: { model_reasoning_summary: "auto", ...(Options.effort ? { model_reasoning_effort: Options.effort } : {}) }
 		};
-		const Result = this.Session.ThreadId
-			? await this.Connection!.request("thread/resume", { threadId: this.Session.ThreadId, ...Params })
-			: await this.Connection!.request("thread/start", Params);
+		const Result = await this.Connection!.request("thread/start", Params);
+		if(Result.thread.ephemeral !== true || Result.thread.path)
+		{
+			throw new Error("本机 Codex 未返回临时会话. 已停止发送, 请升级支持 ephemeral 的 CLI.");
+		}
 		this.Session.ThreadId = Result.thread.id;
+		this.Session.Private = true;
 		this.LoadedThread = Result.thread.id;
+		this.LiveThreads.set(this.Session.Id, Result.thread.id);
+		this.Session.InstructionsHash = "";
+		const History = history_items(this.Session.Messages);
+		if(History.length)
+		{
+			await this.Connection!.request("thread/inject_items", { threadId: Result.thread.id, items: History });
+		}
 		this.Model = Result.model ?? Result.thread.model ?? "";
 		this.Session.EffectiveModel = this.Model;
 		this.Session.EffectiveEffort = Result.reasoningEffort ?? Options.effort;
@@ -484,7 +606,7 @@ export default class CodexSidebarPlugin extends Plugin
 				this.refresh();
 				return false;
 			}
-			const Instructions = this.State.Settings.Instructions.trim() || DefaultInstructions;
+			const Instructions = this.work_instructions();
 			const InstructionsHash = createHash("sha256").update(Instructions).digest("hex");
 			if(this.Session.InstructionsHash !== InstructionsHash)
 			{
@@ -492,7 +614,7 @@ export default class CodexSidebarPlugin extends Plugin
 				this.Session.InstructionsHash = InstructionsHash;
 				await this.persist();
 			}
-			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Question.trim(), ContextLabel: Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
+			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Question.trim(), Context: Context ? structuredClone(Context) : null, Prompt: build_prompt(Question.trim(), Context), ContextLabel: Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
 			this.Session.Messages.push(Message);
 			if(this.Session.Title === "新会话")
 			{
@@ -504,7 +626,7 @@ export default class CodexSidebarPlugin extends Plugin
 			this.refresh();
 			Submitted = true;
 			const Options = run_options(this.State.Settings, this.Models, this.Defaults);
-			const Result = await this.Connection!.request("turn/start", { threadId: this.Session.ThreadId, input: [{ type: "text", text: build_prompt(Question.trim(), Context), text_elements: [] }], ...Options });
+			const Result = await this.Connection!.request("turn/start", { threadId: this.Session.ThreadId, input: [{ type: "text", text: Message.Prompt, text_elements: [] }], ...Options });
 			this.Session.EffectiveModel = Options.model;
 			this.Session.EffectiveEffort = Options.effort;
 			this.Session.EffectiveTier = Options.serviceTier;
@@ -525,9 +647,7 @@ export default class CodexSidebarPlugin extends Plugin
 			if(Submitted)
 			{
 				this.Session.Messages.push({ Id: crypto.randomUUID(), Role: "system", Text: `请求结果需核对: ${error_text(ErrorValue)}. 请重连, 不会自动重发此问题.` });
-				this.Connection?.close();
-				this.Connection = null;
-				this.LoadedThread = null;
+				this.close_connection();
 				await this.persist();
 			}
 			this.show_error(ErrorValue);
@@ -566,8 +686,8 @@ export default class CodexSidebarPlugin extends Plugin
 			return;
 		}
 		this.Generation++;
-		this.Connection?.close();
-		this.Connection = null;
+		this.close_connection();
+		this.CompletionWorker.close();
 		this.Connecting = null;
 		this.LoadedThread = null;
 		try
@@ -610,6 +730,49 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Status = this.Session.Messages.length ? "历史会话, 发送后继续" : "新会话, 可以提问";
 		await this.persist();
 		this.refresh();
+	}
+
+	async resend_message(Id: string, Text?: string): Promise<boolean>
+	{
+		if(this.Busy)
+		{
+			new Notice("请先停止当前回复");
+			return false;
+		}
+		const Original = this.Session;
+		const Message = Original.Messages.find(Value => Value.Id === Id && Value.Role === "user");
+		if(!Message || !(Text ?? Message.Text).trim())
+		{
+			return false;
+		}
+		if(Message.ContextLabel && Message.Context === undefined)
+		{
+			new Notice("旧版消息没有保存源上下文. 此次重发仅使用原问题, 不附带当前选区.", 7000);
+		}
+		const Branch = new_session();
+		Branch.Title = `${(Text ?? Message.Text).trim().slice(0, 20)} (重发)`;
+		Branch.ParentId = Original.Id;
+		Branch.Messages = branch_prefix(Original.Messages, Id);
+		this.State.Sessions.push(Branch);
+		this.State.ActiveId = Branch.Id;
+		this.LoadedThread = null;
+		this.Busy = true;
+		this.Activity = "准备重发";
+		this.StartedAt = Date.now();
+		this.refresh();
+		try
+		{
+			await this.persist();
+			this.Busy = false;
+			return this.send_message(Text ?? Message.Text, Message.Context ?? null);
+		}
+		catch(ErrorValue)
+		{
+			this.Busy = false;
+			this.Activity = "";
+			this.show_error(ErrorValue);
+			return false;
+		}
 	}
 
 	async capture_current(): Promise<void>
@@ -761,7 +924,27 @@ export default class CodexSidebarPlugin extends Plugin
 		let Result: unknown;
 		try
 		{
-			if(Message.method === "item/commandExecution/requestApproval" || Message.method === "item/fileChange/requestApproval")
+			if(Message.method === "item/tool/call" && Message.params?.tool === "obsidian_cli_read")
+			{
+				if(Message.params.threadId !== this.Session.ThreadId)
+				{
+					Connection?.send({ id: Message.id, error: { code: -32602, message: "工具请求不属于当前会话" } });
+					return;
+				}
+				this.Activity = "正在读取 Obsidian CLI";
+				this.refresh();
+				try
+				{
+					Result = await run_obsidian_read(this.obsidian_cli(), this.app.vault.getName(), Message.params.arguments);
+				}
+				catch(ErrorValue)
+				{
+					Result = { success: false, contentItems: [{ type: "inputText", text: error_text(ErrorValue) }] };
+				}
+				this.Activity = this.Busy ? "思考中" : "";
+				this.refresh();
+			}
+			else if(Message.method === "item/commandExecution/requestApproval" || Message.method === "item/fileChange/requestApproval")
 			{
 				const Params = Message.params;
 				const Changes = this.ApprovalItems.get(Params.itemId);
@@ -831,6 +1014,8 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		this.Unloaded = true;
 		this.Generation++;
+		this.Inline?.clear();
+		this.CompletionWorker.close();
 		if(this.CaptureTimer)
 		{
 			clearTimeout(this.CaptureTimer);
@@ -848,6 +1033,7 @@ class CodexView extends ItemView
 {
 	private StatusElement!: HTMLElement;
 	private ContextElement!: HTMLElement;
+	private CompletionElement!: HTMLElement;
 	private MessagesElement!: HTMLElement;
 	private Input!: HTMLTextAreaElement;
 	private SendButton!: HTMLButtonElement;
@@ -857,6 +1043,7 @@ class CodexView extends ItemView
 	private EffortElement!: HTMLSelectElement;
 	private FastElement!: HTMLInputElement;
 	private UsageToggle!: HTMLInputElement;
+	private CompletionToggle!: HTMLInputElement;
 	private UsageElement!: HTMLElement;
 	private CatalogElement!: HTMLElement;
 	private ActivityElement!: HTMLElement;
@@ -868,6 +1055,9 @@ class CodexView extends ItemView
 	private Rendering = false;
 	private Opened = false;
 	private Version = 0;
+	private EditingId = "";
+	private EditingSession = "";
+	private EditText = "";
 
 	constructor(Leaf: WorkspaceLeaf, private Owner: CodexSidebarPlugin)
 	{
@@ -907,6 +1097,7 @@ class CodexView extends ItemView
 		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
 		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
 		this.ContextElement = Root.createDiv({ cls: "codex-context" });
+		this.CompletionElement = Root.createDiv({ cls: "codex-completion-proposal" });
 		this.MessagesElement = Root.createDiv({ cls: "codex-messages", attr: { role: "log", "aria-label": "Codex 对话" } });
 		this.ActivityElement = Root.createDiv({ cls: "codex-activity", attr: { role: "status", "aria-live": "polite" } });
 		this.ActivityElement.createSpan({ cls: "codex-spinner", attr: { "aria-hidden": "true" } });
@@ -927,6 +1118,11 @@ class CodexView extends ItemView
 		const UsageLabel = Toggles.createEl("label");
 		this.UsageToggle = UsageLabel.createEl("input", { type: "checkbox", attr: { "aria-label": "显示上下文占用" } });
 		UsageLabel.createSpan({ text: "上下文占用" });
+		const CompletionLabel = Toggles.createEl("label");
+		this.CompletionToggle = CompletionLabel.createEl("input", { type: "checkbox", attr: { "aria-label": "行内补全" } });
+		CompletionLabel.createSpan({ text: "行内补全" });
+		CompletionLabel.title = "编辑停顿后请求建议, 会消耗 Codex 用量. 在侧栏确认插入, Esc 取消, Ctrl+Alt+Space 手动请求";
+		this.CompletionToggle.addEventListener("change", () => void this.Owner.set_completion(this.CompletionToggle.checked));
 		const ApplyOptions = () => void this.Owner.update_run_settings(this.ModelElement.value, this.EffortElement.value, this.FastElement.checked);
 		this.ModelElement.addEventListener("change", ApplyOptions);
 		this.EffortElement.addEventListener("change", ApplyOptions);
@@ -1003,6 +1199,7 @@ class CodexView extends ItemView
 		this.FastElement.disabled = this.Owner.Busy || (!fast_tier(Selected) && !Settings.Fast);
 		this.FastElement.checked = Settings.Fast;
 		this.UsageToggle.checked = Settings.ShowUsage;
+		this.CompletionToggle.checked = Settings.Completion;
 		this.CatalogElement.setText(this.Owner.CatalogError);
 		this.CatalogElement.hidden = !this.Owner.CatalogError;
 		this.UsageElement.hidden = !Settings.ShowUsage;
@@ -1056,7 +1253,8 @@ class CodexView extends ItemView
 		this.StatusElement.setText(`${this.Owner.Status}${Effective ? ` | 最近请求: ${Effective}` : ""}`);
 		this.refresh_activity();
 		this.refresh_controls();
-		this.StatusElement.title = Session.ThreadId ? `Codex thread: ${Session.ThreadId}` : "发送第一条消息后创建 Codex 会话";
+		this.refresh_completion();
+		this.StatusElement.title = "隐藏后台 CLI 临时会话. 聊天保存在插件本地, 不写入 Codex GUI 会话列表.";
 		this.SendButton.disabled = this.Owner.Busy;
 		this.StopButton.disabled = !this.Owner.Busy || !this.Owner.TurnId;
 		const Options = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
@@ -1119,7 +1317,11 @@ class CodexView extends ItemView
 			return;
 		}
 		const Messages = this.Owner.Session.Messages;
-		const Signature = JSON.stringify(Messages);
+		if(this.EditingSession !== this.Owner.Session.Id)
+		{
+			this.EditingId = "";
+		}
+		const Signature = this.message_signature();
 		if(Signature === this.LastRendered)
 		{
 			return;
@@ -1152,6 +1354,21 @@ class CodexView extends ItemView
 				{
 					this.button(Header, "复制", () => void navigator.clipboard.writeText(Message.Text));
 				}
+				if(Message.Role === "user")
+				{
+					this.button(Header, "编辑", () =>
+					{
+						if(this.Owner.Busy)
+						{
+							return;
+						}
+						this.EditingId = Message.Id;
+						this.EditingSession = this.Owner.Session.Id;
+						this.EditText = Message.Text;
+						this.refresh();
+					}).disabled = this.Owner.Busy;
+					this.button(Header, "重新发送", () => void this.Owner.resend_message(Message.Id)).disabled = this.Owner.Busy;
+				}
 				if(Message.ContextLabel)
 				{
 					Card.createDiv({ cls: "codex-message-context", text: Message.ContextLabel });
@@ -1162,7 +1379,26 @@ class CodexView extends ItemView
 					Content.createEl("summary", { text: "查看 Codex 返回的思考摘要" });
 				}
 				const Body = Content.createDiv({ cls: "codex-message-body markdown-rendered" });
-				if(Message.Role === "assistant" || Message.Role === "reasoning")
+				if(Message.Role === "user" && this.EditingId === Message.Id)
+				{
+					const Editor = Body.createEl("textarea", { cls: "codex-edit-message", attr: { "aria-label": "编辑已发送内容" } });
+					Editor.value = this.EditText;
+					Editor.addEventListener("input", () => { this.EditText = Editor.value; });
+					const Actions = Body.createDiv({ cls: "codex-edit-actions" });
+					this.button(Actions, "保存并重发", () =>
+					{
+						if(this.Owner.Busy || !this.EditText.trim() || this.EditingSession !== this.Owner.Session.Id)
+						{
+							return;
+						}
+						const Text = this.EditText;
+						this.EditingId = "";
+						void this.Owner.resend_message(Message.Id, Text);
+					}).disabled = this.Owner.Busy;
+					this.button(Actions, "取消", () => { this.EditingId = ""; this.refresh(); });
+					Body.createDiv({ cls: "codex-message-context", text: "将使用原消息上下文创建分支, 原会话保留." });
+				}
+				else if(Message.Role === "assistant" || Message.Role === "reasoning")
 				{
 					await MarkdownRenderer.render(this.app, Message.Text || "...", Body, this.Owner.Capture.LastView?.file?.path ?? "", RenderComponent);
 				}
@@ -1177,11 +1413,41 @@ class CodexView extends ItemView
 		finally
 		{
 			this.Rendering = false;
-			if(this.Opened && Signature !== JSON.stringify(this.Owner.Session.Messages))
+			if(this.Opened && Signature !== this.message_signature())
 			{
 				this.refresh();
 			}
 		}
+	}
+
+	private refresh_completion(): void
+	{
+		const Proposal = this.Owner.Inline.get_suggestion();
+		const Signature = JSON.stringify(Proposal ? [Proposal.Path, Proposal.Text] : null);
+		if(this.CompletionElement.dataset.signature === Signature)
+		{
+			return;
+		}
+		this.CompletionElement.dataset.signature = Signature;
+		this.CompletionElement.empty();
+		this.CompletionElement.hidden = !Proposal;
+		if(!Proposal)
+		{
+			return;
+		}
+		this.CompletionElement.createEl("strong", { text: "待确认补全" });
+		this.CompletionElement.createDiv({ cls: "codex-message-context", text: Proposal.Path });
+		this.CompletionElement.createEl("pre", { text: Proposal.Text });
+		const Actions = this.CompletionElement.createDiv({ cls: "codex-edit-actions" });
+		this.button(Actions, "确认插入", () =>
+		{
+			if(!this.Owner.Inline.accept(Proposal.View))
+			{
+				new Notice("建议已失效, 请在笔记中重新请求补全");
+			}
+			this.refresh();
+		}).addClass("mod-cta");
+		this.button(Actions, "取消", () => { this.Owner.Inline.dismiss_suggestion(Proposal.View); this.refresh(); });
 	}
 
 	async onClose(): Promise<void>
@@ -1200,6 +1466,11 @@ class CodexView extends ItemView
 		this.RenderComponent?.unload();
 		this.Owner.refresh();
 	}
+
+	private message_signature(): string
+	{
+		return JSON.stringify([this.Owner.Session.Id, this.Owner.Session.Messages, this.Owner.Busy, this.EditingId]);
+	}
 }
 
 class CodexSettings extends PluginSettingTab
@@ -1213,6 +1484,21 @@ class CodexSettings extends PluginSettingTab
 	{
 		this.containerEl.empty();
 		this.containerEl.createEl("h2", { text: "Codex Sidebar" });
+		new Setting(this.containerEl).setName("行内补全").setDesc("编辑停顿后显示灰色建议. 在侧栏确认插入, Esc 取消, Ctrl+Alt+Space 手动请求. 保留 Obsidian 原生 Tab. 自动请求会消耗 Codex 用量, 使用当前模型的 low 档次.").addToggle(Toggle => Toggle.setValue(this.Owner.State.Settings.Completion).onChange(Value => this.Owner.set_completion(Value)));
+		new Setting(this.containerEl).setName("补全等待时间 (毫秒)").setDesc("默认 1200, 最小 500. 继续输入或移动光标会取消旧请求.").addText(TextValue => TextValue.setValue(String(this.Owner.State.Settings.CompletionDelay)).onChange(async Value =>
+		{
+			const Delay = Number(Value);
+			if(Number.isFinite(Delay) && Delay >= 500 && Delay <= 30000)
+			{
+				this.Owner.State.Settings.CompletionDelay = Math.round(Delay);
+				await this.Owner.persist();
+			}
+		}));
+		new Setting(this.containerEl).setName("Obsidian CLI 路径").setDesc("默认检测当前 Obsidian 安装的 Obsidian.com, 将实际路径和 vault 注入工作提示词. 也可填写自定义路径.").addText(TextValue => TextValue.setValue(this.Owner.State.Settings.ObsidianCliPath).onChange(async Value =>
+		{
+			this.Owner.State.Settings.ObsidianCliPath = Value.trim();
+			await this.Owner.persist();
+		}));
 		new Setting(this.containerEl).setName("Codex 可执行文件").setDesc("留空时从 PATH 查找 codex.exe. 使用本机 Codex 登录.").addText(TextValue => TextValue
 			.setValue(this.Owner.State.Settings.CliPath).setPlaceholder("C:\\...\\codex.exe").onChange(async Value =>
 			{

@@ -6,7 +6,7 @@ await build({
 	platform: "node",
 	format: "cjs",
 	target: "es2022",
-	external: ["obsidian", "electron"],
+	external: ["obsidian", "electron", "@codemirror/state", "@codemirror/view"],
 	outfile: "main.js",
 	sourcemap: "external",
 	logLevel: "info"

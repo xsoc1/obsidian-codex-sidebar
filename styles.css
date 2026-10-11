@@ -84,3 +84,40 @@
 .codex-reasoning summary { cursor: pointer; font-size: 12px; }
 .codex-reasoning .codex-message-body { margin-top: 8px; }
 .codex-instructions-input { width: 100%; min-width: 260px; resize: vertical; font-size: 12px; }
+.codex-inline-ghost
+{
+	color: var(--text-faint);
+	opacity: 0.75;
+	white-space: pre-wrap;
+	pointer-events: none;
+}
+
+.codex-edit-message
+{
+	width: 100%;
+	min-height: 90px;
+	resize: vertical;
+}
+
+.codex-edit-actions
+{
+	display: flex;
+	gap: 6px;
+	margin-top: 6px;
+}
+
+.codex-completion-proposal
+{
+	border: 1px solid var(--interactive-accent);
+	border-radius: 8px;
+	padding: 10px;
+	flex-shrink: 0;
+}
+
+.codex-completion-proposal pre
+{
+	white-space: pre-wrap;
+	max-height: 110px;
+	overflow-y: auto;
+	margin: 6px 0;
+}
