@@ -7,12 +7,13 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import { ContextCapture } from "./context";
-import { build_prompt, DefaultInstructions, LegacyInstructions, environment_instructions, instruction_items, type ContextSnapshot } from "./prompt";
+import { build_prompt, DefaultInstructions, editing_instructions, migrate_instructions, environment_instructions, instruction_items, type ContextSnapshot } from "./prompt";
 import { branch_prefix, history_items, type ChatMessage } from "./history";
 import { CompletionService, type CompletionInput } from "./completion";
 import { InlineCompletions } from "./inline";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import { CodexConnection, type RpcMessage } from "./rpc";
+import { math_writing_skill, skill_input, type SkillInput } from "./skills";
 import { selected_model, fast_tier, run_options, context_usage, type ModelInfo, type RunDefaults, type TokenUsage } from "./controls";
 
 const ViewType = "codex-sidebar-view";
@@ -95,6 +96,8 @@ export default class CodexSidebarPlugin extends Plugin
 	Models: ModelInfo[] = [];
 	Defaults: RunDefaults = { Model: "", Effort: "" };
 	CatalogError = "";
+	MathWritingSkill: SkillInput | null = null;
+	SkillStatus = "math-writing: 连接后检查";
 	Activity = "";
 	StartedAt = 0;
 	Busy = false;
@@ -102,6 +105,7 @@ export default class CodexSidebarPlugin extends Plugin
 	Ribbon!: HTMLElement;
 	private Connection: CodexConnection | null = null;
 	private Connecting: Promise<void> | null = null;
+	private LoadingSkill: Promise<SkillInput> | null = null;
 	private LoadedThread: string | null = null;
 	private Generation = 0;
 	private Unloaded = false;
@@ -127,6 +131,9 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Connection = null;
 		this.LoadedThread = null;
 		this.LiveThreads.clear();
+		this.MathWritingSkill = null;
+		this.LoadingSkill = null;
+		this.SkillStatus = "math-writing: 连接后检查";
 	}
 
 	async onload(): Promise<void>
@@ -152,10 +159,7 @@ export default class CodexSidebarPlugin extends Plugin
 			Sessions,
 			ActiveId: Sessions.some(Value => Value.Id === Saved?.ActiveId) ? Saved!.ActiveId! : Sessions[0].Id
 		};
-		if(this.State.Settings.Instructions === LegacyInstructions)
-		{
-			this.State.Settings.Instructions = DefaultInstructions;
-		}
+		this.State.Settings.Instructions = migrate_instructions(this.State.Settings.Instructions);
 		this.CompletionStatus = this.addStatusBarItem();
 		this.CompletionStatus.setText(this.State.Settings.Completion ? "Codex 补全已开启" : "Codex 补全已关闭");
 		this.Inline = new InlineCompletions({
@@ -233,7 +237,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	private work_instructions(): string
 	{
-		return environment_instructions(this.State.Settings.Instructions.trim() || DefaultInstructions, {
+		return environment_instructions(editing_instructions(this.State.Settings.Instructions), {
 			Vault: this.app.vault.getName(), Root: (this.app.vault.adapter as FileSystemAdapter).getBasePath(),
 			Cli: this.obsidian_cli()
 		});
@@ -250,10 +254,8 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			throw new Error("补全已取消");
 		}
-		if(!this.Models.length)
-		{
-			await this.ensure_connection();
-		}
+		await this.ensure_connection();
+		const Skill = await this.ensure_math_skill();
 		const Cli = this.State.Settings.CliPath.trim() || await discover_cli();
 		if(Signal.aborted || this.Unloaded)
 		{
@@ -262,7 +264,66 @@ export default class CodexSidebarPlugin extends Plugin
 		const Options = run_options(this.State.Settings, this.Models, this.Defaults);
 		const Selected = selected_model(this.State.Settings, this.Models, this.Defaults);
 		Options.effort = Selected?.supportedReasoningEfforts.find(Value => Value.reasoningEffort === "low")?.reasoningEffort ?? Selected?.defaultReasoningEffort ?? "low";
-		return this.CompletionWorker.complete(Cli, (this.app.vault.adapter as FileSystemAdapter).getBasePath(), Input, Options, Signal);
+		return this.CompletionWorker.complete(Cli, (this.app.vault.adapter as FileSystemAdapter).getBasePath(), Input, Options, Signal, Skill);
+	}
+
+	async ensure_math_skill(): Promise<SkillInput>
+	{
+		if(this.MathWritingSkill)
+		{
+			return this.MathWritingSkill;
+		}
+		if(this.LoadingSkill)
+		{
+			return this.LoadingSkill;
+		}
+		const Connection = this.Connection;
+		if(!Connection)
+		{
+			throw new Error("请先连接本机 Codex");
+		}
+		const Work = (async () =>
+		{
+			try
+			{
+				const Cwd = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+				const Result = await Connection.request("skills/list", { cwds: [Cwd], forceReload: true });
+				const Skill = math_writing_skill(Result, Cwd);
+				if(this.Connection !== Connection || this.Unloaded)
+				{
+					throw new Error("技能检查已取消");
+				}
+				if(!existsSync(Skill.path))
+				{
+					throw new Error("math-writing 的 SKILL.md 不存在, 请重新安装技能并重连");
+				}
+				this.MathWritingSkill = Skill;
+				this.SkillStatus = "math-writing 就绪, 每次请求加载";
+				this.refresh();
+				return Skill;
+			}
+			catch(ErrorValue)
+			{
+				if(this.Connection === Connection && !this.Unloaded)
+				{
+					this.SkillStatus = `math-writing 未就绪: ${error_text(ErrorValue)}`;
+					this.refresh();
+				}
+				throw ErrorValue;
+			}
+		})();
+		this.LoadingSkill = Work;
+		try
+		{
+			return await Work;
+		}
+		finally
+		{
+			if(this.LoadingSkill === Work)
+			{
+				this.LoadingSkill = null;
+			}
+		}
 	}
 
 	private bind_document(DocumentValue: Document): void
@@ -416,6 +477,9 @@ export default class CodexSidebarPlugin extends Plugin
 					if(Generation === this.Generation && !this.Unloaded)
 					{
 						this.Connection = null;
+						this.MathWritingSkill = null;
+						this.LoadingSkill = null;
+						this.SkillStatus = "math-writing: 连接后检查";
 						this.LoadedThread = null;
 						this.LiveThreads.clear();
 						this.Busy = false;
@@ -492,6 +556,7 @@ export default class CodexSidebarPlugin extends Plugin
 				throw new Error("连接已取消");
 			}
 			this.Status = `已连接 (${Account.account.type === "chatgpt" ? "ChatGPT 登录" : Account.account.type})`;
+			await this.ensure_math_skill().catch(() => {});
 			this.refresh();
 		})();
 		this.Connecting = Work;
@@ -519,6 +584,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private async ensure_thread(): Promise<void>
 	{
 		await this.ensure_connection();
+		await this.ensure_math_skill();
 		const LiveId = this.LiveThreads.get(this.Session.Id);
 		if(LiveId)
 		{
@@ -600,6 +666,7 @@ export default class CodexSidebarPlugin extends Plugin
 		try
 		{
 			await this.ensure_thread();
+			const Skill = await this.ensure_math_skill();
 			if(this.TurnId)
 			{
 				this.Status = "已恢复正在运行的回复, 请等待或点击停止";
@@ -626,7 +693,7 @@ export default class CodexSidebarPlugin extends Plugin
 			this.refresh();
 			Submitted = true;
 			const Options = run_options(this.State.Settings, this.Models, this.Defaults);
-			const Result = await this.Connection!.request("turn/start", { threadId: this.Session.ThreadId, input: [{ type: "text", text: Message.Prompt, text_elements: [] }], ...Options });
+			const Result = await this.Connection!.request("turn/start", { threadId: this.Session.ThreadId, input: skill_input(Message.Prompt!, Skill), ...Options });
 			this.Session.EffectiveModel = Options.model;
 			this.Session.EffectiveEffort = Options.effort;
 			this.Session.EffectiveTier = Options.serviceTier;
@@ -815,6 +882,13 @@ export default class CodexSidebarPlugin extends Plugin
 
 	private handle_message(Message: RpcMessage): void
 	{
+		if(Message.method === "skills/changed")
+		{
+			this.MathWritingSkill = null;
+			this.SkillStatus = "math-writing 已变更, 下次请求重新检查";
+			this.refresh();
+			return;
+		}
 		if(Message.id !== undefined && Message.method)
 		{
 			void this.handle_request(Message);
@@ -1250,7 +1324,7 @@ class CodexView extends ItemView
 		}
 		const Session = this.Owner.Session;
 		const Effective = [Session.EffectiveModel, Session.EffectiveEffort, Session.EffectiveTier === "priority" || Session.EffectiveTier === "fast" ? "Fast" : ""].filter(Boolean).join(" / ");
-		this.StatusElement.setText(`${this.Owner.Status}${Effective ? ` | 最近请求: ${Effective}` : ""}`);
+		this.StatusElement.setText(`${this.Owner.Status}${Effective ? ` | 最近请求: ${Effective}` : ""} | ${this.Owner.SkillStatus}`);
 		this.refresh_activity();
 		this.refresh_controls();
 		this.refresh_completion();
@@ -1484,6 +1558,21 @@ class CodexSettings extends PluginSettingTab
 	{
 		this.containerEl.empty();
 		this.containerEl.createEl("h2", { text: "Codex Sidebar" });
+		new Setting(this.containerEl).setName("math-writing 技能").setDesc(`${this.Owner.SkillStatus}. 从本机 Codex 的 skills/list 自动发现, 聊天与补全每次通过 skill 输入加载. 技能未安装或被禁用时明确报错; 不更改全局配置.`).addButton(Button => Button.setButtonText("重新检查").onClick(async () =>
+		{
+			try
+			{
+				await this.Owner.ensure_connection();
+				this.Owner.MathWritingSkill = null;
+				await this.Owner.ensure_math_skill();
+			}
+			catch(ErrorValue)
+			{
+				new Notice(error_text(ErrorValue));
+			}
+			this.display();
+		}));
+		new Setting(this.containerEl).setName("数学内容修改准则").setDesc("题目可判断并标注补充条件; 完整答案最小修补, 需推倒重来时先由你决定; 解题思路严格沿原路线证明; 模仿原稿语言. 固定随请求注入, 自定义工作提示词仍保留.");
 		new Setting(this.containerEl).setName("行内补全").setDesc("编辑停顿后显示灰色建议. 在侧栏确认插入, Esc 取消, Ctrl+Alt+Space 手动请求. 保留 Obsidian 原生 Tab. 自动请求会消耗 Codex 用量, 使用当前模型的 low 档次.").addToggle(Toggle => Toggle.setValue(this.Owner.State.Settings.Completion).onChange(Value => this.Owner.set_completion(Value)));
 		new Setting(this.containerEl).setName("补全等待时间 (毫秒)").setDesc("默认 1200, 最小 500. 继续输入或移动光标会取消旧请求.").addText(TextValue => TextValue.setValue(String(this.Owner.State.Settings.CompletionDelay)).onChange(async Value =>
 		{

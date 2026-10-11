@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { build_prompt, bound_text, heading_at, source_excerpt, instruction_items, type ContextSnapshot } from "../src/prompt";
+import { build_prompt, bound_text, heading_at, source_excerpt, instruction_items, DefaultInstructions, LegacyInstructions, PreviousInstructions, EditingRules, editing_instructions, migrate_instructions, type ContextSnapshot } from "../src/prompt";
 
 test("reading selection carries original LaTeX and an honest block mapping", () =>
 {
@@ -42,4 +42,23 @@ test("work instructions use a developer item independent of user and captured no
 	assert.equal(Items[0].content[0].type, "input_text");
 	assert.ok(Items[0].content[0].text.endsWith("Use $...$ and $$...$$ in Obsidian."));
 	assert.equal(build_prompt("Question", null), "Question");
+});
+
+test("unchanged prior defaults migrate but custom instructions remain intact", () =>
+{
+	assert.equal(migrate_instructions(LegacyInstructions), DefaultInstructions);
+	assert.equal(migrate_instructions(PreviousInstructions), DefaultInstructions);
+	assert.equal(migrate_instructions("Custom work instructions."), "Custom work instructions.");
+});
+
+test("fixed editing rules accompany custom instructions without duplicating the default policy", () =>
+{
+	assert.equal(editing_instructions("Custom work instructions."), "Custom work instructions.\n\n" + EditingRules);
+	assert.equal(editing_instructions(DefaultInstructions), DefaultInstructions);
+	assert.equal(editing_instructions(""), DefaultInstructions);
+	assert.ok(EditingRules.includes("题目文本可由你判断"));
+	assert.ok(EditingRules.includes("答案文本已有完整过程"));
+	assert.ok(EditingRules.includes("给出可供用户决定的处理选择并等待决定"));
+	assert.ok(EditingRules.includes("严格遵循原有思路"));
+	assert.ok(EditingRules.includes("语言风格模仿用户的写法"));
 });
