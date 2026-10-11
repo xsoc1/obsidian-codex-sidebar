@@ -52,6 +52,8 @@
 
 ## Git and publication
 
+- 2026-10-12: Published 0.3.0 implementation commit `34973aefccbd70fc974c1c5948adf264c4f586cc` to `origin/codex/initial`; `git ls-remote` matched. Anonymous GitHub API readback confirmed the repository remains public. Final installed manifest/bundle/map/styles match the source build byte-for-byte, the original message arrays and active session are preserved, and the private local ZIP contains only manifest, bundle, map, styles and README. Generated files and acceptance data remain ignored.
+
 - 2026-10-11: User explicitly requested Git management and a public GitHub repository. Created [xsoc1/obsidian-codex-sidebar](https://github.com/xsoc1/obsidian-codex-sidebar) and pushed the initial source commit `4d9ed414d8a8adaff671fc9d1e95b8a4dc028adc`. Anonymous GitHub API readback confirmed public visibility and default branch `codex/initial`; `git ls-remote` matched local HEAD. The local branch tracks `origin/codex/initial`.
 - Publication checks passed: staged whitespace check, tracked-file review and a scan for machine paths and credential patterns. No runtime code changed during publication; the build, 8 tests and native acceptance recorded above were performed during implementation. Global Git identity and the separate notes repository were preserved.
 - Track source, tests, package/lock files, manifest, styles, build configuration and documentation. Ignore built bundles, dependencies, local installations, environment files, chats and machine-specific records. Do not commit credentials or actual thread data.
