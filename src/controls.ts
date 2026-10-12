@@ -16,12 +16,6 @@ export interface RunSettings
 	Fast: boolean;
 }
 
-export interface RunDefaults
-{
-	Model: string;
-	Effort: string;
-}
-
 export interface TokenUsage
 {
 	last: { totalTokens: number; inputTokens: number; outputTokens: number };
@@ -29,9 +23,16 @@ export interface TokenUsage
 	modelContextWindow: number | null;
 }
 
-export function selected_model(Settings: RunSettings, Models: ModelInfo[], Defaults: RunDefaults): ModelInfo | undefined
+export function selected_model(Settings: RunSettings, Models: ModelInfo[]): ModelInfo | undefined
 {
-	return Models.find(Value => Value.model === (Settings.Model || Defaults.Model)) ?? (!Settings.Model ? Models.find(Value => Value.isDefault) : undefined);
+	return Models.find(Value => Value.model === Settings.Model);
+}
+
+export function initial_selection(Settings: RunSettings, Models: ModelInfo[]): RunSettings
+{
+	const ModelName = Settings.Model || Models.find(Value => Value.isDefault)?.model || Models[0]?.model || "";
+	const Model = Models.find(Value => Value.model === ModelName);
+	return { Model: ModelName, Effort: Settings.Effort || Model?.defaultReasoningEffort || Model?.supportedReasoningEfforts[0]?.reasoningEffort || "", Fast: Settings.Fast };
 }
 
 export function fast_tier(Model: ModelInfo | undefined): string | null
@@ -40,12 +41,15 @@ export function fast_tier(Model: ModelInfo | undefined): string | null
 		?? (Model?.additionalSpeedTiers?.includes("fast") ? "priority" : null);
 }
 
-export function run_options(Settings: RunSettings, Models: ModelInfo[], Defaults: RunDefaults): { model?: string; effort?: string; serviceTier: string; summary: "auto" }
+export function run_options(Settings: RunSettings, Models: ModelInfo[]): { model: string; effort: string; serviceTier: string; summary: "auto" }
 {
-	const Model = selected_model(Settings, Models, Defaults);
-	const ModelName = Settings.Model || Defaults.Model || Model?.model;
-	const Effort = Settings.Effort || (!Settings.Model ? Defaults.Effort : "") || Model?.defaultReasoningEffort;
-	if(Effort && Model && !Model.supportedReasoningEfforts.some(Value => Value.reasoningEffort === Effort))
+	const Model = selected_model(Settings, Models);
+	if(!Model)
+	{
+		throw new Error("所选模型当前不可用, 请等待模型列表加载或重新选择模型");
+	}
+	const Effort = Settings.Effort;
+	if(!Effort || !Model.supportedReasoningEfforts.some(Value => Value.reasoningEffort === Effort))
 	{
 		throw new Error(`${Model.displayName} 不支持思考档次 ${Effort}, 请重新选择`);
 	}
@@ -54,7 +58,7 @@ export function run_options(Settings: RunSettings, Models: ModelInfo[], Defaults
 	{
 		throw new Error("当前模型未报告 Fast 支持, 请关闭 Fast 或选择其他模型");
 	}
-	return { ...(ModelName ? { model: ModelName } : {}), ...(Effort ? { effort: Effort } : {}), serviceTier: Settings.Fast ? FastTier! : "default", summary: "auto" };
+	return { model: Model.model, effort: Effort, serviceTier: Settings.Fast ? FastTier! : "default", summary: "auto" };
 }
 
 export function context_usage(Usage: TokenUsage | undefined): { Used: number; Window: number | null; Percent: number | null; Total: number } | null

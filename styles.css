@@ -53,6 +53,7 @@
 .codex-message-label button { font-size: 10px; }
 .codex-message-context { color: var(--text-faint); font-size: 10px; overflow-wrap: anywhere; margin-bottom: 6px; }
 .codex-message-body { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.codex-assistant .codex-message-body { user-select: text; -webkit-user-select: text; }
 .codex-user .codex-message-body, .codex-system .codex-message-body { white-space: pre-wrap; }
 .codex-message-body > :first-child { margin-top: 0; }
 .codex-message-body > :last-child { margin-bottom: 0; }
@@ -91,6 +92,21 @@
 .codex-usage { color: var(--text-muted); font-size: 11px; margin-bottom: 8px; }
 .codex-usage progress { display: block; width: 100%; height: 4px; margin-top: 5px; accent-color: var(--interactive-accent); }
 .codex-catalog-status { color: var(--text-error); font-size: 11px; margin-bottom: 8px; }
+.codex-answer-quote {
+	border-left: 3px solid var(--interactive-accent);
+	padding: 8px;
+	margin-bottom: 8px;
+	background: var(--background-secondary);
+	border-radius: 4px;
+}
+.codex-answer-quote[hidden] { display: none; }
+.codex-answer-quote pre {
+	white-space: pre-wrap;
+	font-size: 12px;
+	max-height: 90px;
+	overflow: auto;
+	margin: 4px 0 8px;
+}
 .codex-reasoning { color: var(--text-muted); }
 .codex-reasoning summary { cursor: pointer; font-size: 12px; }
 .codex-reasoning .codex-message-body { margin-top: 8px; }

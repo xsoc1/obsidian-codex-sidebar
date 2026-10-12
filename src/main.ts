@@ -7,14 +7,15 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import { ContextCapture } from "./context";
-import { build_prompt, DefaultInstructions, editing_instructions, migrate_instructions, environment_instructions, instruction_items, type ContextSnapshot } from "./prompt";
+import { build_prompt, DefaultInstructions, editing_instructions, migrate_instructions, environment_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
+import { answer_quote } from "./quote";
 import { branch_prefix, history_items, type ChatMessage } from "./history";
 import { CompletionService, type CompletionInput } from "./completion";
 import { InlineCompletions } from "./inline";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import { CodexConnection, type RpcMessage } from "./rpc";
 import { math_writing_skill, skill_input, type SkillInput } from "./skills";
-import { selected_model, fast_tier, run_options, context_usage, type ModelInfo, type RunDefaults, type TokenUsage } from "./controls";
+import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo, type TokenUsage } from "./controls";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -104,7 +105,7 @@ export default class CodexSidebarPlugin extends Plugin
 	Status = "尚未连接";
 	Model = "";
 	Models: ModelInfo[] = [];
-	Defaults: RunDefaults = { Model: "", Effort: "" };
+	AnswerQuote: AnswerQuote | null = null;
 	CatalogError = "";
 	MathWritingSkill: SkillInput | null = null;
 	SkillStatus = "math-writing: 连接后检查";
@@ -170,6 +171,11 @@ export default class CodexSidebarPlugin extends Plugin
 			ActiveId: Sessions.some(Value => Value.Id === Saved?.ActiveId) ? Saved!.ActiveId! : Sessions[0].Id
 		};
 		this.State.Settings.Instructions = migrate_instructions(this.State.Settings.Instructions);
+		if(!this.State.Settings.Model)
+		{
+			this.State.Settings.Model = this.Session.EffectiveModel ?? "";
+			this.State.Settings.Effort ||= this.Session.EffectiveEffort ?? "";
+		}
 		this.CompletionStatus = this.addStatusBarItem();
 		this.CompletionStatus.setText(this.State.Settings.Completion ? "Codex 补全已开启" : "Codex 补全已关闭");
 		this.Inline = new InlineCompletions({
@@ -271,8 +277,8 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			throw new Error("补全已取消");
 		}
-		const Options = run_options(this.State.Settings, this.Models, this.Defaults);
-		const Selected = selected_model(this.State.Settings, this.Models, this.Defaults);
+		const Options = run_options(this.State.Settings, this.Models);
+		const Selected = selected_model(this.State.Settings, this.Models);
 		Options.effort = Selected?.supportedReasoningEfforts.find(Value => Value.reasoningEffort === "low")?.reasoningEffort ?? Selected?.defaultReasoningEffort ?? "low";
 		return this.CompletionWorker.complete(Cli, (this.app.vault.adapter as FileSystemAdapter).getBasePath(), Input, Options, Signal, Skill);
 	}
@@ -376,6 +382,7 @@ export default class CodexSidebarPlugin extends Plugin
 		const Leaves = this.app.workspace.getLeavesOfType(ViewType);
 		if(Leaves.length)
 		{
+			await this.persist();
 			Leaves.forEach(Leaf => Leaf.detach());
 			this.refresh();
 			return;
@@ -435,8 +442,8 @@ export default class CodexSidebarPlugin extends Plugin
 		const Settings = this.State.Settings;
 		const ModelChanged = Settings.Model !== Model;
 		Settings.Model = Model;
-		const Selected = selected_model(Settings, this.Models, this.Defaults);
-		Settings.Effort = ModelChanged && !Selected?.supportedReasoningEfforts.some(Value => Value.reasoningEffort === Effort) ? "" : Effort;
+		const Selected = selected_model(Settings, this.Models);
+		Settings.Effort = ModelChanged && !Selected?.supportedReasoningEfforts.some(Value => Value.reasoningEffort === Effort) ? Selected?.defaultReasoningEffort ?? Selected?.supportedReasoningEfforts[0]?.reasoningEffort ?? "" : Effort;
 		Settings.Fast = Fast && !!fast_tier(Selected);
 		this.refresh();
 		await this.persist();
@@ -554,8 +561,8 @@ export default class CodexSidebarPlugin extends Plugin
 					this.Models.push(...Page.data);
 					Cursor = Page.nextCursor ?? null;
 				} while(Cursor);
-				const Config = await Connection.request("config/read", {});
-				this.Defaults = { Model: Config.config.model ?? "", Effort: Config.config.model_reasoning_effort ?? "" };
+				Object.assign(this.State.Settings, initial_selection(this.State.Settings, this.Models));
+				await this.persist();
 			}
 			catch(ErrorValue)
 			{
@@ -602,7 +609,7 @@ export default class CodexSidebarPlugin extends Plugin
 			this.LoadedThread = LiveId;
 			return;
 		}
-		const Options = run_options(this.State.Settings, this.Models, this.Defaults);
+		const Options = run_options(this.State.Settings, this.Models);
 		const Instructions = this.work_instructions();
 		const Adapter = this.app.vault.adapter as FileSystemAdapter;
 		const Params =
@@ -661,7 +668,7 @@ export default class CodexSidebarPlugin extends Plugin
 		await this.persist();
 	}
 
-	async send_message(Question: string, Context = this.State.Settings.AttachContext ? this.Capture.Snapshot : null): Promise<boolean>
+	async send_message(Question: string, Context = this.State.Settings.AttachContext ? this.Capture.Snapshot : null, Quote: AnswerQuote | null = null): Promise<boolean>
 	{
 		if(this.Busy || !Question.trim())
 		{
@@ -691,7 +698,7 @@ export default class CodexSidebarPlugin extends Plugin
 				this.Session.InstructionsHash = InstructionsHash;
 				await this.persist();
 			}
-			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Question.trim(), Context: Context ? structuredClone(Context) : null, Prompt: build_prompt(Question.trim(), Context), ContextLabel: Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
+			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Question.trim(), Context: Context ? structuredClone(Context) : null, Quote: Quote ? structuredClone(Quote) : null, Prompt: build_prompt(Question.trim(), Context, Quote), ContextLabel: Quote ? "追问选中的回答 / 渲染选区 + 原回答 Markdown" : Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
 			this.Session.Messages.push(Message);
 			if(this.Session.Title === "新会话")
 			{
@@ -702,7 +709,7 @@ export default class CodexSidebarPlugin extends Plugin
 			this.Activity = "思考中";
 			this.refresh();
 			Submitted = true;
-			const Options = run_options(this.State.Settings, this.Models, this.Defaults);
+			const Options = run_options(this.State.Settings, this.Models);
 			const Result = await this.Connection!.request("turn/start", { threadId: this.Session.ThreadId, input: skill_input(Message.Prompt!, Skill), ...Options });
 			this.Session.EffectiveModel = Options.model;
 			this.Session.EffectiveEffort = Options.effort;
@@ -800,6 +807,7 @@ export default class CodexSidebarPlugin extends Plugin
 			this.State.Sessions.push(Session);
 			this.State.ActiveId = Session.Id;
 		}
+		this.AnswerQuote = null;
 		this.LoadedThread = null;
 		this.TurnId = null;
 		this.Model = "";
@@ -841,7 +849,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			await this.persist();
 			this.Busy = false;
-			return this.send_message(Text ?? Message.Text, Message.Context ?? null);
+			return this.send_message(Text ?? Message.Text, Message.Context ?? null, Message.Quote ?? null);
 		}
 		catch(ErrorValue)
 		{
@@ -1120,6 +1128,8 @@ class CodexView extends ItemView
 	private CompletionElement!: HTMLElement;
 	private MessagesElement!: HTMLElement;
 	private Input!: HTMLTextAreaElement;
+	private QuoteElement!: HTMLElement;
+	private SelectedAnswer: AnswerQuote | null = null;
 	private SendButton!: HTMLButtonElement;
 	private StopButton!: HTMLButtonElement;
 	private SessionsElement!: HTMLSelectElement;
@@ -1189,6 +1199,7 @@ class CodexView extends ItemView
 		this.ActivityElement.createSpan({ cls: "codex-spinner", attr: { "aria-hidden": "true" } });
 		this.ActivityLabel = this.ActivityElement.createSpan();
 		const Composer = Root.createDiv({ cls: "codex-composer" });
+		this.QuoteElement = Composer.createDiv({ cls: "codex-answer-quote" });
 		const Controls = Composer.createDiv({ cls: "codex-controls" });
 		const ModelLabel = Controls.createEl("label");
 		ModelLabel.createSpan({ text: "模型" });
@@ -1234,7 +1245,72 @@ class CodexView extends ItemView
 		this.SendButton.addClass("mod-cta");
 		this.StopButton = this.button(Actions, "停止", () => void this.Owner.stop_turn());
 		this.ActivityTimer = setInterval(() => this.refresh_activity(), 1000);
+		const CaptureAnswer = () => this.capture_answer_selection();
+		this.registerDomEvent(Root.ownerDocument, "selectionchange", CaptureAnswer);
+		this.registerDomEvent(this.MessagesElement, "pointerup", CaptureAnswer);
+		this.registerDomEvent(this.MessagesElement, "keyup", CaptureAnswer);
 		this.refresh();
+	}
+
+	private capture_answer_selection(): void
+	{
+		if(!this.Opened)
+		{
+			return;
+		}
+		const SelectionValue = this.contentEl.ownerDocument.defaultView?.getSelection();
+		const RangeValue = SelectionValue?.rangeCount ? SelectionValue.getRangeAt(0) : null;
+		const NodeValue = RangeValue?.commonAncestorContainer;
+		const ElementValue = NodeValue?.nodeType === 1 ? NodeValue as Element : NodeValue?.parentElement;
+		const Body = ElementValue?.closest<HTMLElement>(".codex-assistant .codex-message-body");
+		const Card = Body?.closest<HTMLElement>(".codex-message");
+		const Message = this.Owner.Session.Messages.find(Value => Value.Id === Card?.dataset.messageId && Value.Role === "assistant");
+		this.SelectedAnswer = RangeValue && !RangeValue.collapsed && Body && this.MessagesElement.contains(Body) && Message && SelectionValue!.toString().trim()
+			? answer_quote(this.Owner.Session.Id, Message.Id, SelectionValue!.toString(), Message.Text) : null;
+		this.refresh_quote();
+	}
+
+	private refresh_quote(): void
+	{
+		if(this.Owner.AnswerQuote?.SessionId !== this.Owner.Session.Id)
+		{
+			this.Owner.AnswerQuote = null;
+		}
+		if(this.SelectedAnswer?.SessionId !== this.Owner.Session.Id)
+		{
+			this.SelectedAnswer = null;
+		}
+		const Quote = this.Owner.AnswerQuote ?? this.SelectedAnswer;
+		this.QuoteElement.hidden = !Quote;
+		this.Input.placeholder = this.Owner.AnswerQuote ? "针对选中的回答继续提问..." : "随时提问... Enter 发送, Shift+Enter 换行";
+		this.QuoteElement.empty();
+		if(!Quote)
+		{
+			return;
+		}
+		this.QuoteElement.createDiv({ text: this.Owner.AnswerQuote ? "已引用回答片段" : "已选中回答片段", cls: "codex-message-context" });
+		this.QuoteElement.createEl("pre", { text: Quote.SelectedText });
+		if(!this.Owner.AnswerQuote)
+		{
+			const Button = this.button(this.QuoteElement, "追问这段", () =>
+			{
+				this.Owner.AnswerQuote = structuredClone(Quote);
+				this.SelectedAnswer = null;
+				this.contentEl.ownerDocument.defaultView?.getSelection()?.removeAllRanges();
+				this.refresh_quote();
+				this.Input.focus();
+			});
+			Button.addEventListener("pointerdown", Event => Event.preventDefault());
+		}
+		else
+		{
+			this.QuoteElement.createDiv({ text: "围绕这段回答追问, 原回答的数学公式一并保留.", cls: "codex-message-context" });
+			this.button(this.QuoteElement, "取消引用", () => { this.Owner.AnswerQuote = null; this.refresh_quote(); });
+		}
+		if(Quote.SelectedTruncated || Quote.SourceTruncated)
+		{
+			this.QuoteElement.createDiv({ text: "引用已按长度限制截断", cls: "codex-message-context" });
+		}
 	}
 
 	private refresh_activity(): void
@@ -1265,21 +1341,28 @@ class CodexView extends ItemView
 	private refresh_controls(): void
 	{
 		const Settings = this.Owner.State.Settings;
-		const Selected = selected_model(Settings, this.Owner.Models, this.Owner.Defaults);
-		const ModelOptions = [{ Value: "", Label: `本机默认${this.Owner.Defaults.Model ? ` (${this.Owner.Defaults.Model})` : ""}` }, ...this.Owner.Models.map(Value => ({ Value: Value.model, Label: Value.displayName }))];
+		const Selected = selected_model(Settings, this.Owner.Models);
+		const ModelOptions = this.Owner.Models.map(Value => ({ Value: Value.model, Label: Value.displayName }));
 		if(Settings.Model && !ModelOptions.some(Value => Value.Value === Settings.Model))
 		{
-			ModelOptions.push({ Value: Settings.Model, Label: `${Settings.Model} (自定义)` });
+			ModelOptions.push({ Value: Settings.Model, Label: `${Settings.Model} (${this.Owner.Models.length ? "当前不可用" : "加载中"})` });
+		}
+		if(!ModelOptions.length)
+		{
+			ModelOptions.push({ Value: "", Label: "加载模型..." });
 		}
 		this.set_options(this.ModelElement, ModelOptions, Settings.Model);
-		const DefaultEffort = (!Settings.Model ? this.Owner.Defaults.Effort : "") || Selected?.defaultReasoningEffort;
-		const EffortOptions = [{ Value: "", Label: `默认${DefaultEffort ? ` (${DefaultEffort})` : ""}` }, ...(Selected?.supportedReasoningEfforts ?? []).map(Value => ({ Value: Value.reasoningEffort, Label: Value.reasoningEffort }))];
+		const EffortOptions = (Selected?.supportedReasoningEfforts ?? []).map(Value => ({ Value: Value.reasoningEffort, Label: Value.reasoningEffort }));
 		if(Settings.Effort && !EffortOptions.some(Value => Value.Value === Settings.Effort))
 		{
 			EffortOptions.push({ Value: Settings.Effort, Label: `${Settings.Effort} (请重新选择)` });
 		}
+		if(!EffortOptions.length)
+		{
+			EffortOptions.push({ Value: "", Label: "加载思考档次..." });
+		}
 		this.set_options(this.EffortElement, EffortOptions, Settings.Effort);
-		this.ModelElement.disabled = this.Owner.Busy;
+		this.ModelElement.disabled = this.Owner.Busy || !this.Owner.Models.length;
 		this.EffortElement.disabled = this.Owner.Busy || !Selected;
 		this.FastElement.disabled = this.Owner.Busy || (!fast_tier(Selected) && !Settings.Fast);
 		this.FastElement.checked = Settings.Fast;
@@ -1320,10 +1403,16 @@ class CodexView extends ItemView
 	private async send_input(): Promise<void>
 	{
 		const Text = this.Input.value;
-		const Accepted = await this.Owner.send_message(Text);
+		const Quote = this.Owner.AnswerQuote;
+		const Accepted = await this.Owner.send_message(Text, Quote ? null : this.Owner.State.Settings.AttachContext ? this.Owner.Capture.Snapshot : null, Quote);
 		if(Accepted && this.Input.value === Text)
 		{
 			this.Input.value = "";
+			if(this.Owner.AnswerQuote === Quote)
+			{
+				this.Owner.AnswerQuote = null;
+				this.refresh_quote();
+			}
 		}
 	}
 
@@ -1339,6 +1428,7 @@ class CodexView extends ItemView
 		this.refresh_activity();
 		this.refresh_controls();
 		this.refresh_completion();
+		this.refresh_quote();
 		this.SendButton.disabled = this.Owner.Busy;
 		this.StopButton.disabled = !this.Owner.Busy || !this.Owner.TurnId;
 		const Options = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
@@ -1432,6 +1522,7 @@ class CodexView extends ItemView
 					return;
 				}
 				const Card = this.MessagesElement.createDiv({ cls: `codex-message codex-${Message.Role}` });
+				Card.dataset.messageId = Message.Id;
 				const Header = Card.createDiv({ cls: "codex-message-label" });
 				Header.createSpan({ text: Message.Role === "user" ? "你" : Message.Role === "assistant" ? "Codex" : Message.Role === "reasoning" ? "思考摘要" : "状态" });
 				if(Message.Role === "assistant")
@@ -1605,14 +1696,7 @@ class CodexSettings extends PluginSettingTab
 				this.Owner.State.Settings.CliPath = Value.trim();
 				await this.Owner.persist();
 			}));
-		new Setting(this.containerEl).setName("模型").setDesc("推荐在侧栏选择后端返回的模型. 此处也可输入模型 ID, 留空沿用本机配置. 下一次发送生效.").addText(TextValue => TextValue
-			.setValue(this.Owner.State.Settings.Model).onChange(async Value =>
-			{
-				this.Owner.State.Settings.Model = Value.trim();
-				this.Owner.State.Settings.Effort = "";
-				this.Owner.refresh();
-				await this.Owner.persist();
-			}));
+		new Setting(this.containerEl).setName("模型与思考档次").setDesc("在侧栏直接选择. 选择状态自动保存, 收起后重开或重载插件都会恢复上次选择.");
 		new Setting(this.containerEl).setName("内置工作提示词").setDesc("作为 Codex developer 消息注入会话, 保留其基础工具指令. 默认说明 Obsidian 阅读与研究工作及 Markdown/MathJax 渲染规则. 修改后在下一次发送更新当前会话.").addTextArea(TextValue =>
 		{
 			TextValue.inputEl.rows = 12;

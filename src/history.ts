@@ -1,4 +1,4 @@
-import { build_prompt, type ContextSnapshot } from "./prompt";
+import { build_prompt, type ContextSnapshot, type AnswerQuote } from "./prompt";
 
 export interface ChatMessage
 {
@@ -9,6 +9,7 @@ export interface ChatMessage
 	ContextLabel?: string;
 	Context?: ContextSnapshot | null;
 	Prompt?: string;
+	Quote?: AnswerQuote | null;
 	SummaryParts?: string[];
 }
 
@@ -18,7 +19,7 @@ export function history_items(Messages: ChatMessage[])
 	({
 		type: "message",
 		role: Value.Role,
-		content: [{ type: Value.Role === "user" ? "input_text" : "output_text", text: Value.Role === "user" ? Value.Prompt ?? build_prompt(Value.Text, Value.Context ?? null) : Value.Text }]
+		content: [{ type: Value.Role === "user" ? "input_text" : "output_text", text: Value.Role === "user" ? Value.Prompt ?? build_prompt(Value.Text, Value.Context ?? null, Value.Quote ?? null) : Value.Text }]
 	}));
 }
 
