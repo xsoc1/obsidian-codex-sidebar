@@ -68,6 +68,16 @@ function error_text(ErrorValue: unknown): string
 	return ErrorValue instanceof Error ? ErrorValue.message : String(ErrorValue);
 }
 
+function accessible_name(ElementValue: HTMLElement, Text: string): void
+{
+	const Label = ElementValue.ownerDocument.createElement("span");
+	Label.id = `codex-label-${crypto.randomUUID()}`;
+	Label.className = "codex-sr-only";
+	Label.textContent = Text;
+	ElementValue.insertAdjacentElement("afterend", Label);
+	ElementValue.setAttribute("aria-labelledby", Label.id);
+}
+
 function discover_cli(): Promise<string>
 {
 	return new Promise((Resolve, Reject) =>
@@ -1163,7 +1173,8 @@ class CodexView extends ItemView
 		Header.createEl("strong", { text: "Codex" });
 		this.button(Header, "新会话", () => void this.Owner.choose_session());
 		this.button(Header, "重连", () => void this.Owner.reconnect());
-		this.SessionsElement = Root.createEl("select", { cls: "codex-sessions", attr: { "aria-label": "Codex 会话" } });
+		this.SessionsElement = Root.createEl("select", { cls: "codex-sessions" });
+		accessible_name(this.SessionsElement, "Codex 会话");
 		this.SessionsElement.addEventListener("change", () => void this.Owner.choose_session(this.SessionsElement.value));
 		this.StatusElement = Root.createDiv({ cls: "codex-status" });
 		const ContextBar = Root.createDiv({ cls: "codex-context-actions" });
@@ -1172,7 +1183,8 @@ class CodexView extends ItemView
 		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
 		this.ContextElement = Root.createDiv({ cls: "codex-context" });
 		this.CompletionElement = Root.createDiv({ cls: "codex-completion-proposal" });
-		this.MessagesElement = Root.createDiv({ cls: "codex-messages", attr: { role: "log", "aria-label": "Codex 对话" } });
+		this.MessagesElement = Root.createDiv({ cls: "codex-messages", attr: { role: "log" } });
+		accessible_name(this.MessagesElement, "Codex 对话");
 		this.ActivityElement = Root.createDiv({ cls: "codex-activity", attr: { role: "status", "aria-live": "polite" } });
 		this.ActivityElement.createSpan({ cls: "codex-spinner", attr: { "aria-hidden": "true" } });
 		this.ActivityLabel = this.ActivityElement.createSpan();
@@ -1180,22 +1192,20 @@ class CodexView extends ItemView
 		const Controls = Composer.createDiv({ cls: "codex-controls" });
 		const ModelLabel = Controls.createEl("label");
 		ModelLabel.createSpan({ text: "模型" });
-		this.ModelElement = ModelLabel.createEl("select", { attr: { "aria-label": "Codex 模型" } });
+		this.ModelElement = ModelLabel.createEl("select");
 		const EffortLabel = Controls.createEl("label");
 		EffortLabel.createSpan({ text: "思考档次" });
-		this.EffortElement = EffortLabel.createEl("select", { attr: { "aria-label": "Codex 思考档次" } });
+		this.EffortElement = EffortLabel.createEl("select");
 		const Toggles = Composer.createDiv({ cls: "codex-run-toggles" });
 		const FastLabel = Toggles.createEl("label");
-		this.FastElement = FastLabel.createEl("input", { type: "checkbox", attr: { "aria-label": "Fast 模式" } });
+		this.FastElement = FastLabel.createEl("input", { type: "checkbox" });
 		FastLabel.createSpan({ text: "Fast" });
-		FastLabel.title = "请求更快的服务档次, 可能增加用量; 是否可用由后端决定";
 		const UsageLabel = Toggles.createEl("label");
-		this.UsageToggle = UsageLabel.createEl("input", { type: "checkbox", attr: { "aria-label": "显示上下文占用" } });
+		this.UsageToggle = UsageLabel.createEl("input", { type: "checkbox" });
 		UsageLabel.createSpan({ text: "上下文占用" });
 		const CompletionLabel = Toggles.createEl("label");
-		this.CompletionToggle = CompletionLabel.createEl("input", { type: "checkbox", attr: { "aria-label": "行内补全" } });
+		this.CompletionToggle = CompletionLabel.createEl("input", { type: "checkbox" });
 		CompletionLabel.createSpan({ text: "行内补全" });
-		CompletionLabel.title = "编辑停顿后请求建议, 会消耗 Codex 用量. 在侧栏确认插入, Esc 取消, Ctrl+Alt+Space 手动请求";
 		this.CompletionToggle.addEventListener("change", () => void this.Owner.set_completion(this.CompletionToggle.checked));
 		const ApplyOptions = () => void this.Owner.update_run_settings(this.ModelElement.value, this.EffortElement.value, this.FastElement.checked);
 		this.ModelElement.addEventListener("change", ApplyOptions);
@@ -1209,7 +1219,8 @@ class CodexView extends ItemView
 		});
 		this.CatalogElement = Composer.createDiv({ cls: "codex-catalog-status" });
 		this.UsageElement = Composer.createDiv({ cls: "codex-usage" });
-		this.Input = Composer.createEl("textarea", { attr: { placeholder: "随时提问... Enter 发送, Shift+Enter 换行", "aria-label": "向 Codex 提问" } });
+		this.Input = Composer.createEl("textarea", { attr: { placeholder: "随时提问... Enter 发送, Shift+Enter 换行" } });
+		accessible_name(this.Input, "向 Codex 提问");
 		this.Input.addEventListener("keydown", Event =>
 		{
 			if(Event.key === "Enter" && !Event.shiftKey && !Event.isComposing)
@@ -1291,10 +1302,10 @@ class CodexView extends ItemView
 				this.UsageElement.createSpan({ text: `上下文${Usage.Percent !== null ? ` ~${Usage.Percent.toFixed(1)}%` : ""}: ${Format(Usage.Used)}${Usage.Window ? ` / ${Format(Usage.Window)}` : " tokens (窗口未知)"}` });
 				if(Usage.Percent !== null)
 				{
-					const Progress = this.UsageElement.createEl("progress", { attr: { max: "100", "aria-label": "上下文占用估计" } });
+					const Progress = this.UsageElement.createEl("progress", { attr: { max: "100" } });
+					accessible_name(Progress, "上下文占用估计");
 					Progress.value = Usage.Percent;
 				}
-				this.UsageElement.title = `后端最近一次模型请求的输入及输出总量, 估计上下文占用; 尚未计入未发送文字或下一次请求. 会话累计消耗 ${Format(Usage.Total)} tokens. 历史会话显示最近保存的报告.`;
 			}
 		}
 	}
@@ -1328,7 +1339,6 @@ class CodexView extends ItemView
 		this.refresh_activity();
 		this.refresh_controls();
 		this.refresh_completion();
-		this.StatusElement.title = "隐藏后台 CLI 临时会话. 聊天保存在插件本地, 不写入 Codex GUI 会话列表.";
 		this.SendButton.disabled = this.Owner.Busy;
 		this.StopButton.disabled = !this.Owner.Busy || !this.Owner.TurnId;
 		const Options = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
@@ -1455,7 +1465,8 @@ class CodexView extends ItemView
 				const Body = Content.createDiv({ cls: "codex-message-body markdown-rendered" });
 				if(Message.Role === "user" && this.EditingId === Message.Id)
 				{
-					const Editor = Body.createEl("textarea", { cls: "codex-edit-message", attr: { "aria-label": "编辑已发送内容" } });
+					const Editor = Body.createEl("textarea", { cls: "codex-edit-message" });
+					accessible_name(Editor, "编辑已发送内容");
 					Editor.value = this.EditText;
 					Editor.addEventListener("input", () => { this.EditText = Editor.value; });
 					const Actions = Body.createDiv({ cls: "codex-edit-actions" });

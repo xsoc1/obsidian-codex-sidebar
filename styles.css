@@ -17,6 +17,17 @@
 .codex-header strong { flex: 1; font-size: 16px; }
 .codex-sidebar button { font-size: 12px; padding: 4px 8px; }
 .codex-sessions { width: 100%; }
+.codex-sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
 .codex-status { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .codex-context {
 	border: 1px solid var(--background-modifier-border);
