@@ -1,19 +1,16 @@
 import {
 	Plugin, ItemView, WorkspaceLeaf, PluginSettingTab, Setting, Notice,
-	MarkdownRenderer, Component, FileSystemAdapter, Modal, editorInfoField, type App
+	MarkdownRenderer, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, type App
 } from "obsidian";
-import { existsSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { dirname, join } from "node:path";
 import { ContextCapture } from "./context";
 import { build_prompt, DefaultInstructions, editing_instructions, migrate_instructions, environment_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
 import { answer_quote } from "./quote";
 import { branch_prefix, history_items, type ChatMessage } from "./history";
-import { CompletionService, type CompletionInput } from "./completion";
+import type { CompletionService, CompletionInput } from "./completion";
 import { InlineCompletions } from "./inline";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
-import { CodexConnection, type RpcMessage } from "./rpc";
+import type { RpcMessage } from "./rpc";
+import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } from "./remote";
 import { math_writing_skill, skill_input, type SkillInput } from "./skills";
 import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo, type TokenUsage } from "./controls";
 
@@ -79,23 +76,10 @@ function accessible_name(ElementValue: HTMLElement, Text: string): void
 	ElementValue.setAttribute("aria-labelledby", Label.id);
 }
 
-function discover_cli(): Promise<string>
+async function instruction_hash(Text: string): Promise<string>
 {
-	return new Promise((Resolve, Reject) =>
-	{
-		execFile("where.exe", ["codex.exe"], { windowsHide: true, timeout: 5000 }, (ErrorValue, Output) =>
-		{
-			const Path = Output?.trim().split(/\r?\n/).find(Value => existsSync(Value));
-			if(ErrorValue || !Path)
-			{
-				Reject(new Error("未找到 codex.exe. 请在插件设置中填写本机 Codex 可执行文件路径"));
-			}
-			else
-			{
-				Resolve(Path);
-			}
-		});
-	});
+	const Hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(Text));
+	return [...new Uint8Array(Hash)].map(Value => Value.toString(16).padStart(2, "0")).join("");
 }
 
 export default class CodexSidebarPlugin extends Plugin
@@ -114,7 +98,12 @@ export default class CodexSidebarPlugin extends Plugin
 	Busy = false;
 	TurnId: string | null = null;
 	Ribbon!: HTMLElement;
-	private Connection: CodexConnection | null = null;
+	private Connection: RpcConnection | null = null;
+	Remote!: RemoteConfig;
+	private RemoteKey = "";
+	private RemoteStatePath = "";
+	private Desktop: typeof import("./desktop") | null = null;
+	private HostInfo: { cwd: string; vault: string; cli: string; client: string } | null = null;
 	private Connecting: Promise<void> | null = null;
 	private LoadingSkill: Promise<SkillInput> | null = null;
 	private LoadedThread: string | null = null;
@@ -126,7 +115,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private CaptureTimer: ReturnType<typeof setTimeout> | null = null;
 	private Modals = new Set<Modal>();
 	private BoundDocuments = new Set<Document>();
-	private CompletionWorker = new CompletionService();
+	private CompletionWorker: CompletionService | null = null;
 	Inline!: InlineCompletions;
 	private CompletionStatus!: HTMLElement;
 	private LiveThreads = new Map<string, string>();
@@ -149,7 +138,33 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async onload(): Promise<void>
 	{
-		const Saved = await this.loadData() as Partial<SavedState> | null;
+		this.RemoteKey = `codex-sidebar-remote:${this.app.vault.getName()}`;
+		let RemoteSaved: Partial<RemoteConfig> = {};
+		try
+		{
+			RemoteSaved = JSON.parse(localStorage.getItem(this.RemoteKey) || "{}");
+		}
+		catch
+		{
+			/* Ignore invalid device-local configuration. */
+		}
+		this.Remote = { Enabled: Platform.isMobileApp, Url: "", Token: "", Cursor: 0, Server: "", ...RemoteSaved };
+		if(!/^[a-z0-9-]{36}$/i.test(this.Remote.CacheId ?? ""))
+		{
+			this.Remote.CacheId = crypto.randomUUID();
+		}
+		if(Platform.isMobileApp)
+		{
+			this.Remote.Enabled = true;
+		}
+		this.RemoteStatePath = `${this.manifest.dir}/remote-${this.Remote.CacheId}-state.json`;
+		this.save_remote_config();
+		if(!this.Remote.Enabled)
+		{
+			this.Desktop = await import("./desktop");
+			this.CompletionWorker = new this.Desktop.CompletionService();
+		}
+		const Saved = this.Remote.Enabled ? await this.app.vault.adapter.exists(this.RemoteStatePath) ? JSON.parse(await this.app.vault.adapter.read(this.RemoteStatePath)) as Partial<SavedState> : null : await this.loadData() as Partial<SavedState> | null;
 		const Sessions = Saved?.Sessions?.filter(Value => Value.Id && Array.isArray(Value.Messages)) ?? [];
 		if(!Sessions.length)
 		{
@@ -157,6 +172,10 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		for(const Session of Sessions)
 		{
+			if(this.Remote.Enabled)
+			{
+				continue;
+			}
 			if(Session.ThreadId && !Session.Private)
 			{
 				Session.LegacyThreadId = Session.ThreadId;
@@ -245,7 +264,7 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		this.State.Settings.Completion = Enabled;
 		this.Inline.clear();
-		this.CompletionWorker.close();
+		this.CompletionWorker?.close();
 		this.CompletionStatus.setText(Enabled ? "Codex 补全已开启" : "Codex 补全已关闭");
 		this.refresh();
 		await this.persist();
@@ -254,14 +273,40 @@ export default class CodexSidebarPlugin extends Plugin
 	private work_instructions(): string
 	{
 		return environment_instructions(editing_instructions(this.State.Settings.Instructions), {
-			Vault: this.app.vault.getName(), Root: (this.app.vault.adapter as FileSystemAdapter).getBasePath(),
+			Vault: this.app.vault.getName(), Root: this.host_cwd(),
 			Cli: this.obsidian_cli()
-		});
+		}) + (this.Remote.Enabled ? "\n\n这是独立的 iPad/远程 Obsidian 会话. CLI 在 Windows, 用户界面在客户端. 当前笔记与选区以用户随问题提供的源快照为准, Windows vault 副本可能尚未同步. 只读 CLI 工具读到的是电脑副本, 不能声称看到了 iPad 屏幕、未同步文件或桌面其他会话. 不修改笔记, 补全只返回建议供客户端确认." : "");
+	}
+
+	private host_cwd(): string
+	{
+		return this.Remote.Enabled ? this.HostInfo?.cwd ?? "" : (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+	}
+
+	save_remote_config(): void
+	{
+		localStorage.setItem(this.RemoteKey, JSON.stringify(this.Remote));
+	}
+
+	async remote_http(Path: string, Method: string, Body?: unknown): Promise<any>
+	{
+		const Url = remote_url(this.Remote.Url);
+		if(!this.Remote.Token.trim())
+		{
+			throw new Error("请在设置中填写远程配对密钥");
+		}
+		const Response = await requestUrl({ url: Url + Path, method: Method, headers: { Authorization: `Bearer ${this.Remote.Token.trim()}` }, contentType: "application/json", ...(Body === undefined ? {} : { body: JSON.stringify(Body) }), throw: false });
+		const Value = Response.json;
+		if(Response.status !== 200)
+		{
+			throw new Error(Value.error ?? `远程服务错误 (${Response.status})`);
+		}
+		return Value;
 	}
 
 	private obsidian_cli(): string
 	{
-		return this.State.Settings.ObsidianCliPath.trim() || (existsSync(join(dirname(process.execPath), "Obsidian.com")) ? join(dirname(process.execPath), "Obsidian.com") : "obsidian");
+		return this.Remote.Enabled ? this.HostInfo?.cli ?? "obsidian" : this.Desktop!.obsidian_cli(this.State.Settings.ObsidianCliPath);
 	}
 
 	async request_completion(Input: CompletionInput, Signal: AbortSignal): Promise<string>
@@ -272,7 +317,6 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		await this.ensure_connection();
 		const Skill = await this.ensure_math_skill();
-		const Cli = this.State.Settings.CliPath.trim() || await discover_cli();
 		if(Signal.aborted || this.Unloaded)
 		{
 			throw new Error("补全已取消");
@@ -280,7 +324,28 @@ export default class CodexSidebarPlugin extends Plugin
 		const Options = run_options(this.State.Settings, this.Models);
 		const Selected = selected_model(this.State.Settings, this.Models);
 		Options.effort = Selected?.supportedReasoningEfforts.find(Value => Value.reasoningEffort === "low")?.reasoningEffort ?? Selected?.defaultReasoningEffort ?? "low";
-		return this.CompletionWorker.complete(Cli, (this.app.vault.adapter as FileSystemAdapter).getBasePath(), Input, Options, Signal, Skill);
+		if(this.Remote.Enabled)
+		{
+			const Job = crypto.randomUUID();
+			const Connection = this.Connection!;
+			const Cancel = () => void Connection.request("bridge/completion/cancel", { job: Job }).catch(() => {});
+			Signal.addEventListener("abort", Cancel, { once: true });
+			try
+			{
+				const Result = await Connection.request("bridge/completion", { job: Job, input: Input, options: Options });
+				if(Signal.aborted)
+				{
+					throw new Error("补全已取消");
+				}
+				return Result.text;
+			}
+			finally
+			{
+				Signal.removeEventListener("abort", Cancel);
+			}
+		}
+		const Cli = this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
+		return this.CompletionWorker!.complete(Cli, this.host_cwd(), Input, Options, Signal, Skill);
 	}
 
 	async ensure_math_skill(): Promise<SkillInput>
@@ -302,14 +367,14 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			try
 			{
-				const Cwd = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+				const Cwd = this.host_cwd();
 				const Result = await Connection.request("skills/list", { cwds: [Cwd], forceReload: true });
 				const Skill = math_writing_skill(Result, Cwd);
 				if(this.Connection !== Connection || this.Unloaded)
 				{
 					throw new Error("技能检查已取消");
 				}
-				if(!existsSync(Skill.path))
+				if(!this.Remote.Enabled && !this.Desktop!.existsSync(Skill.path))
 				{
 					throw new Error("math-writing 的 SKILL.md 不存在, 请重新安装技能并重连");
 				}
@@ -407,7 +472,15 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		await this.app.workspace.revealLeaf(Leaf);
 		this.refresh();
-		void this.ensure_connection().catch(ErrorValue => this.show_error(ErrorValue));
+		void this.ensure_connection().then(async () =>
+		{
+			if(this.Remote.Enabled)
+			{
+				await this.ensure_thread();
+				this.Busy = !!this.TurnId;
+				this.refresh();
+			}
+		}).catch(ErrorValue => this.show_error(ErrorValue));
 	}
 
 	refresh(): void
@@ -429,8 +502,82 @@ export default class CodexSidebarPlugin extends Plugin
 	persist(): Promise<void>
 	{
 		const Data = JSON.parse(JSON.stringify(this.State));
-		this.SaveQueue = this.SaveQueue.catch(() => {}).then(() => this.saveData(Data));
+		const RemoteMode = this.Remote.Enabled;
+		const RemoteConnectionValue = this.Connection instanceof RemoteConnection ? this.Connection : null;
+		const RemoteCursor = RemoteConnectionValue?.cursor_snapshot() ?? 0;
+		this.SaveQueue = this.SaveQueue.catch(() => {}).then(async () =>
+		{
+			if(RemoteMode)
+			{
+				await this.app.vault.adapter.write(this.RemoteStatePath, JSON.stringify(Data));
+				if(RemoteConnectionValue)
+				{
+					await RemoteConnectionValue.sync_state(Data, RemoteCursor);
+				}
+			}
+			else
+			{
+				await this.saveData(Data);
+			}
+		});
 		return this.SaveQueue;
+	}
+
+	async set_remote_mode(Enabled: boolean): Promise<void>
+	{
+		if(this.Busy)
+		{
+			throw new Error("请先停止当前回复再切换连接");
+		}
+		await this.persist();
+		this.Generation++;
+		this.close_connection();
+		this.CompletionWorker?.close();
+		this.Connecting = null;
+		this.Remote.Enabled = Enabled || Platform.isMobileApp;
+		this.RemoteStatePath = `${this.manifest.dir}/remote-${this.Remote.CacheId}-state.json`;
+		this.save_remote_config();
+		const Saved = this.Remote.Enabled ? await this.app.vault.adapter.exists(this.RemoteStatePath) ? JSON.parse(await this.app.vault.adapter.read(this.RemoteStatePath)) : null : await this.loadData();
+		this.State = Saved?.Sessions?.length ? Saved : { Settings: { ...this.State.Settings }, Sessions: [new_session()], ActiveId: "" };
+		if(!this.State.Sessions.some(Value => Value.Id === this.State.ActiveId))
+		{
+			this.State.ActiveId = this.State.Sessions[0].Id;
+		}
+		if(!this.Remote.Enabled)
+		{
+			this.Desktop ??= await import("./desktop");
+			this.CompletionWorker = new this.Desktop.CompletionService();
+			this.State.Sessions.forEach(Value => { Value.ThreadId = null; Value.InstructionsHash = ""; });
+		}
+		this.AnswerQuote = null;
+		this.Models = [];
+		this.Status = this.Remote.Enabled ? "独立远程会话, 连接后使用" : "本机桌面会话";
+		this.refresh();
+		await this.persist();
+	}
+
+	async configure_remote(Url: string, Token: string): Promise<void>
+	{
+		remote_url(Url);
+		if(this.Busy)
+		{
+			throw new Error("请先停止当前回复再更换远程连接");
+		}
+		await this.persist();
+		this.close_connection();
+		if(this.Remote.Url !== Url || this.Remote.Token !== Token)
+		{
+			this.Remote.CacheId = crypto.randomUUID();
+			this.Remote.Cursor = 0;
+			this.Remote.Server = "";
+		}
+		this.Remote.Url = Url;
+		this.Remote.Token = Token;
+		this.save_remote_config();
+		await this.set_remote_mode(true);
+		await this.ensure_thread();
+		this.Busy = !!this.TurnId;
+		this.refresh();
 	}
 
 	async update_run_settings(Model: string, Effort: string, Fast: boolean): Promise<void>
@@ -467,29 +614,28 @@ export default class CodexSidebarPlugin extends Plugin
 			return;
 		}
 		const Generation = ++this.Generation;
-		this.Status = "连接本机 Codex...";
+		this.Status = this.Remote.Enabled ? "连接独立远程 Codex..." : "连接本机 Codex...";
 		this.refresh();
 		const Work = (async () =>
 		{
-			const CliPath = this.State.Settings.CliPath.trim() || await discover_cli();
+			const CliPath = this.Remote.Enabled ? "" : this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
 			if(Generation !== this.Generation || this.Unloaded)
 			{
 				throw new Error("连接已取消");
 			}
 			const Adapter = this.app.vault.adapter;
-			if(!(Adapter instanceof FileSystemAdapter))
+			if(!this.Remote.Enabled && !(Adapter instanceof FileSystemAdapter))
 			{
 				throw new Error("此插件需要桌面本地 vault");
 			}
-			const Connection = new CodexConnection(CliPath, Adapter.getBasePath(),
-				Message =>
+			const OnMessage = (Message: RpcMessage) =>
 				{
 					if(Generation === this.Generation)
 					{
 						this.handle_message(Message);
 					}
-				},
-				ErrorValue =>
+				};
+			const OnClosed = (ErrorValue: Error) =>
 				{
 					if(Generation === this.Generation && !this.Unloaded)
 					{
@@ -506,8 +652,28 @@ export default class CodexSidebarPlugin extends Plugin
 						this.refresh();
 						void this.persist();
 					}
-				});
+				};
+			const Connection: RpcConnection = this.Remote.Enabled
+				? new RemoteConnection((Path, Method, Body) => this.remote_http(Path, Method, Body), this.Remote, OnMessage, OnClosed, () => this.save_remote_config())
+				: new this.Desktop!.CodexConnection(CliPath, this.host_cwd(), OnMessage, OnClosed);
 			this.Connection = Connection;
+			if(Connection instanceof RemoteConnection)
+			{
+				await Connection.connect();
+				this.HostInfo = Connection.Info;
+				if(this.HostInfo?.vault !== this.app.vault.getName())
+				{
+					throw new Error("远程服务绑定的 vault 与当前库不同");
+				}
+				const Restored = await this.remote_http("/state", "GET");
+				if(Restored.state?.Sessions?.length)
+				{
+					this.State = Restored.state;
+				}
+				Connection.set_cursor(Restored.cursor);
+				Connection.start();
+				this.refresh();
+			}
 			await Connection.request("initialize", { clientInfo: { name: "obsidian_codex_sidebar", title: "Obsidian Codex Sidebar", version: this.manifest.version }, capabilities: { experimentalApi: true } });
 			Connection.send({ method: "initialized", params: {} });
 			const Account = await Connection.request("account/read", { refreshToken: false });
@@ -526,7 +692,7 @@ export default class CodexSidebarPlugin extends Plugin
 				let Cursor: string | null = null;
 				do
 				{
-					const Page = await Connection.request("thread/list", { archived: true, cwd: Adapter.getBasePath(), limit: 100, cursor: Cursor });
+					const Page = await Connection.request("thread/list", { archived: true, cwd: this.host_cwd(), limit: 100, cursor: Cursor });
 					Page.data.forEach((Value: { id: string }) => Archived.add(Value.id));
 					Cursor = Page.nextCursor ?? null;
 				} while(Cursor && Legacy.some(Value => !Archived.has(Value.LegacyThreadId!)));
@@ -572,7 +738,7 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				throw new Error("连接已取消");
 			}
-			this.Status = `已连接 (${Account.account.type === "chatgpt" ? "ChatGPT 登录" : Account.account.type})`;
+			this.Status = `${this.Remote.Enabled ? "独立远程已连接" : "已连接"} (${Account.account.type === "chatgpt" ? "ChatGPT 登录" : Account.account.type})`;
 			await this.ensure_math_skill().catch(() => {});
 			this.refresh();
 		})();
@@ -611,10 +777,15 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		const Options = run_options(this.State.Settings, this.Models);
 		const Instructions = this.work_instructions();
-		const Adapter = this.app.vault.adapter as FileSystemAdapter;
+		let Existing: any = null;
+		if(this.Remote.Enabled && this.Session.ThreadId)
+		{
+			Existing = await this.Connection!.request("bridge/resume", { threadId: this.Session.ThreadId });
+		}
 		const Params =
 		{
-			cwd: Adapter.getBasePath(),
+			cwd: this.host_cwd(),
+			...(this.Remote.Enabled ? { clientSessionId: this.Session.Id } : {}),
 			ephemeral: true,
 			dynamicTools: [ObsidianTool],
 			approvalPolicy: "on-request",
@@ -625,7 +796,7 @@ export default class CodexSidebarPlugin extends Plugin
 			serviceTier: Options.serviceTier,
 			config: { model_reasoning_summary: "auto", ...(Options.effort ? { model_reasoning_effort: Options.effort } : {}) }
 		};
-		const Result = await this.Connection!.request("thread/start", Params);
+		const Result = Existing ?? await this.Connection!.request("thread/start", Params);
 		if(Result.thread.ephemeral !== true || Result.thread.path)
 		{
 			throw new Error("本机 Codex 未返回临时会话. 已停止发送, 请升级支持 ephemeral 的 CLI.");
@@ -634,9 +805,12 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Session.Private = true;
 		this.LoadedThread = Result.thread.id;
 		this.LiveThreads.set(this.Session.Id, Result.thread.id);
-		this.Session.InstructionsHash = "";
+		if(!Existing)
+		{
+			this.Session.InstructionsHash = "";
+		}
 		const History = history_items(this.Session.Messages);
-		if(History.length)
+		if(History.length && !Existing)
 		{
 			await this.Connection!.request("thread/inject_items", { threadId: Result.thread.id, items: History });
 		}
@@ -691,7 +865,7 @@ export default class CodexSidebarPlugin extends Plugin
 				return false;
 			}
 			const Instructions = this.work_instructions();
-			const InstructionsHash = createHash("sha256").update(Instructions).digest("hex");
+			const InstructionsHash = await instruction_hash(Instructions);
 			if(this.Session.InstructionsHash !== InstructionsHash)
 			{
 				await this.Connection!.request("thread/inject_items", { threadId: this.Session.ThreadId, items: instruction_items(Instructions) });
@@ -771,7 +945,7 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		this.Generation++;
 		this.close_connection();
-		this.CompletionWorker.close();
+		this.CompletionWorker?.close();
 		this.Connecting = null;
 		this.LoadedThread = null;
 		try
@@ -1107,7 +1281,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Unloaded = true;
 		this.Generation++;
 		this.Inline?.clear();
-		this.CompletionWorker.close();
+		this.CompletionWorker?.close();
 		if(this.CaptureTimer)
 		{
 			clearTimeout(this.CaptureTimer);
@@ -1527,7 +1701,15 @@ class CodexView extends ItemView
 				Header.createSpan({ text: Message.Role === "user" ? "你" : Message.Role === "assistant" ? "Codex" : Message.Role === "reasoning" ? "思考摘要" : "状态" });
 				if(Message.Role === "assistant")
 				{
-					this.button(Header, "复制", () => void navigator.clipboard.writeText(Message.Text));
+					this.button(Header, "复制", () =>
+					{
+						if(!navigator.clipboard?.writeText)
+						{
+							new Notice("当前环境无法访问剪贴板, 请选中文字后使用系统复制");
+							return;
+						}
+						void navigator.clipboard.writeText(Message.Text).catch(() => new Notice("复制失败, 请使用系统复制"));
+					});
 				}
 				if(Message.Role === "user")
 				{
@@ -1660,7 +1842,40 @@ class CodexSettings extends PluginSettingTab
 	{
 		this.containerEl.empty();
 		this.containerEl.createEl("h2", { text: "Codex Sidebar" });
-		new Setting(this.containerEl).setName("math-writing 技能").setDesc(`${this.Owner.SkillStatus}. 从本机 Codex 的 skills/list 自动发现, 聊天与补全每次通过 skill 输入加载. 技能未安装或被禁用时明确报错; 不更改全局配置.`).addButton(Button => Button.setButtonText("重新检查").onClick(async () =>
+		new Setting(this.containerEl).setName("独立远程连接").setDesc("iPad 使用独立后台 Codex 进程和会话记录. 桌面本机会话单独保留.").addToggle(Toggle => Toggle.setValue(this.Owner.Remote.Enabled).setDisabled(Platform.isMobileApp).onChange(async Value =>
+		{
+			try
+			{
+				await this.Owner.set_remote_mode(Value);
+				this.display();
+			}
+			catch(ErrorValue)
+			{
+				new Notice(error_text(ErrorValue));
+			}
+		}));
+		let RemoteUrl = this.Owner.Remote.Url;
+		let RemoteToken = this.Owner.Remote.Token;
+		new Setting(this.containerEl).setName("远程服务地址").setDesc("填写电脑私有 HTTPS 地址. 地址与密钥只保存在此设备, 不写入同步的桌面设置.").addText(Value => Value.setValue(RemoteUrl).setPlaceholder("https://电脑地址:8445").onChange(Text => { RemoteUrl = Text.trim(); }));
+		new Setting(this.containerEl).setName("配对密钥").addText(Value =>
+		{
+			Value.inputEl.type = "password";
+			Value.setValue(RemoteToken).onChange(Text => { RemoteToken = Text.trim(); });
+		});
+		new Setting(this.containerEl).setName("连接独立远程 Agent").addButton(Button => Button.setButtonText("保存并连接").onClick(async () =>
+		{
+			try
+			{
+				await this.Owner.configure_remote(RemoteUrl, RemoteToken);
+				new Notice("独立远程会话已连接");
+				this.display();
+			}
+			catch(ErrorValue)
+			{
+				new Notice(error_text(ErrorValue));
+			}
+		}));
+		new Setting(this.containerEl).setName("math-writing 技能").setDesc(`${this.Owner.SkillStatus}. 从${this.Owner.Remote.Enabled ? "Windows 服务端" : "本机"} Codex 的 skills/list 自动发现, 聊天与补全每次通过 skill 输入加载. 技能未安装或被禁用时明确报错; 不更改全局配置.`).addButton(Button => Button.setButtonText("重新检查").onClick(async () =>
 		{
 			try
 			{
@@ -1685,17 +1900,20 @@ class CodexSettings extends PluginSettingTab
 				await this.Owner.persist();
 			}
 		}));
-		new Setting(this.containerEl).setName("Obsidian CLI 路径").setDesc("默认检测当前 Obsidian 安装的 Obsidian.com, 将实际路径和 vault 注入工作提示词. 也可填写自定义路径.").addText(TextValue => TextValue.setValue(this.Owner.State.Settings.ObsidianCliPath).onChange(async Value =>
+		if(!this.Owner.Remote.Enabled)
 		{
-			this.Owner.State.Settings.ObsidianCliPath = Value.trim();
-			await this.Owner.persist();
-		}));
-		new Setting(this.containerEl).setName("Codex 可执行文件").setDesc("留空时从 PATH 查找 codex.exe. 使用本机 Codex 登录.").addText(TextValue => TextValue
-			.setValue(this.Owner.State.Settings.CliPath).setPlaceholder("C:\\...\\codex.exe").onChange(async Value =>
+			new Setting(this.containerEl).setName("Obsidian CLI 路径").setDesc("默认检测当前 Obsidian 安装的 Obsidian.com, 将实际路径和 vault 注入工作提示词. 也可填写自定义路径.").addText(TextValue => TextValue.setValue(this.Owner.State.Settings.ObsidianCliPath).onChange(async Value =>
 			{
-				this.Owner.State.Settings.CliPath = Value.trim();
+				this.Owner.State.Settings.ObsidianCliPath = Value.trim();
 				await this.Owner.persist();
 			}));
+			new Setting(this.containerEl).setName("Codex 可执行文件").setDesc("留空时从 PATH 查找 codex.exe. 使用本机 Codex 登录.").addText(TextValue => TextValue
+				.setValue(this.Owner.State.Settings.CliPath).setPlaceholder("C:\\...\\codex.exe").onChange(async Value =>
+				{
+					this.Owner.State.Settings.CliPath = Value.trim();
+					await this.Owner.persist();
+				}));
+		}
 		new Setting(this.containerEl).setName("模型与思考档次").setDesc("在侧栏直接选择. 选择状态自动保存, 收起后重开或重载插件都会恢复上次选择.");
 		new Setting(this.containerEl).setName("内置工作提示词").setDesc("作为 Codex developer 消息注入会话, 保留其基础工具指令. 默认说明 Obsidian 阅读与研究工作及 Markdown/MathJax 渲染规则. 修改后在下一次发送更新当前会话.").addTextArea(TextValue =>
 		{

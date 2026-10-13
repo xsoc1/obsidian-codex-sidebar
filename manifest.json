@@ -1,9 +1,9 @@
 {
 	"id": "codex-sidebar",
 	"name": "Codex Sidebar",
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"minAppVersion": "1.7.2",
 	"description": "Private background Codex chat, note context and sidebar-confirmed inline completion.",
 	"author": "HuangZY",
-	"isDesktopOnly": true
+	"isDesktopOnly": false
 }

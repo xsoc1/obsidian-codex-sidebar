@@ -1,10 +1,10 @@
 # Codex Sidebar
 
-Windows 桌面 Obsidian 插件, 使用本机 Codex 登录. 点击 Obsidian 左侧工具栏的机器人图标, 打开或收起右侧聊天栏.
+Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动隐藏 CLI, iPad 可连接 Windows 独立远程 Agent. 点击 Obsidian 工具栏的机器人图标, 打开或收起聊天栏.
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-当前 0.5.0 为桌面版, 不能直接在 iPad 加载. 接受电脑保持开机时, 可以改造为 iPad Obsidian 前端连接 Windows 后台 Codex 服务; 方案和待验证边界见 [iPad 支持可行性调研](docs/ipad-support-research.md). 移动版尚未实现或完成真机验收.
+0.6.0 已实现移动入口与私有 HTTPS 远程桥. 每个配对设备使用独立隐藏进程、临时线程和会话记录, 与桌面本地聊天分开. Windows 原生插件的实际远程对话、math-writing、补全、重连续聊与断线恢复已验证; iPad 真机加载、触控、键盘和后台行为尚待验收. 安装及连接步骤见 [iPad 初版使用指南](docs/ipad-setup.md), 迁移依据见 [可行性调研](docs/ipad-support-research.md).
 
 ## 使用
 
@@ -33,10 +33,10 @@ Windows 桌面 Obsidian 插件, 使用本机 Codex 登录. 点击 Obsidian 左�
 - 回答引用保存渲染选区 (最多 4000 字符) 与捕获时的原回答 Markdown (最多 24000 字符), 超长时明确标明截断. 选区不是精确源字符映射; 原 Markdown 用于核对公式和上下文.
 - 自动捕获不自动发送. 快捷动作自动构造 prompt; 用户发送后才调用 Codex.
 - 此插件运行自己的 Codex app-server 并复用登录. 历史列表为本插件创建的会话, 不直接接管 Codex 桌面应用正在运行的聊天.
-- 重连或重载会新建临时线程, 恢复已保存的问题与回答文本. 内部工具调用、工具输出及运行状态不会完整恢复; 需要时重新核验. 临时线程 ID 会变化, 本地会话 ID 保持. `data.json` 包含聊天和源上下文, 应视为私有资料; 临时会话不表示请求不发送给模型服务.
-- 问答采用只读沙箱. Codex 的批准请求通过窗口显示. 初版没有将答案写回笔记的按钮.
-- 收起面板保留连接与当前回复. 禁用插件或退出 Obsidian 会关闭本插件创建的子进程.
-- 未验证 PDF/OCR、Canvas、手机及其他操作系统.
+- 桌面本地重连会新建临时线程, 恢复已保存的问答文本. 远程重连在桥进程存活时续接原临时线程; 桥重启后恢复问答到新临时线程. 内部工具输出及进程状态不会完整恢复. `data.json`、远程缓存与桥记录包含聊天和源上下文, 应视为私有资料; 临时会话不表示请求不发送给模型服务.
+- 问答采用只读沙箱. 本地批准请求通过窗口显示, 远程初版使用 `approvalPolicy=never`, 不支持特权批准. 初版没有将答案写回笔记的按钮.
+- 收起面板保留连接与当前回复. 禁用插件或退出 Obsidian 关闭其本地子进程; 独立远程桥继续运行并保存回答.
+- iPad 功能已实现但未完成真机验收. 未验证 PDF/OCR、Canvas、手机及其他桌面操作系统.
 - 思考摘要只展示后端实际返回的摘要. 没有摘要时仍显示思考状态, 不推测或伪造内部推理.
 
 ## 开发与安装
@@ -51,6 +51,8 @@ npm test
 
 将 `manifest.json`, `main.js`, `main.js.map`, `styles.css` 复制到 vault 的 `.obsidian/plugins/codex-sidebar/`, 在社区插件中启用. 不覆盖已有 `data.json`.
 
+远程桥构建产物为 `bridge.cjs`, 通过 `scripts/start-bridge.ps1` 独立隐藏启动. 服务配置、配对密钥和问答放在 vault 外的私有目录. 当前不会注册开机任务, Windows 重启后需重新启动桥. 不把这些私有文件加入插件包或同步到 iPad. 具体配置见上述使用指南.
+
 仓库跟踪源码、测试与依赖锁文件. 构建产物、依赖目录、本机路径、环境文件及聊天记录不纳入版本控制.
 
 协议参考: [Codex app-server](https://learn.chatgpt.com/docs/app-server), [Obsidian API](https://github.com/obsidianmd/obsidian-api).
@@ -60,6 +62,8 @@ npm test
 技能接入使用 [官方 app-server Skills 接口](https://learn.chatgpt.com/docs/app-server#skills): `skills/list` 只接受当前 vault 的发现结果, 选择已启用的 math-writing (优先用户安装版本). 每次 `turn/start` 的原问题/源上下文保持原样, 独立追加 `{type:"skill", name:"math-writing", path:...}`. 连接关闭或 `skills/changed` 通知使发现缓存失效. 自定义工作说明后始终附带用户修改准则; 补全另加短片段 JSON、无工具、无自行写入的任务约束.
 
 ## 本机验收
+
+0.6.0 (2026-10-13): TypeScript/esbuild 与 33 项测试通过, 包括无 Node/Electron 的移动入口初始化、受控双设备隔离、认证/权限白名单、请求去重和离线回复合并. Windows 原生插件经 Tailscale 私有 HTTPS 获得真实回答, 正确使用客户端未同步的代号/LaTeX 快照并解释 math-writing R1. 真实远程补全返回 `2`, 未创建或修改笔记. 已修复 CLI 临时线程拒绝 `includeTurns` 导致的续聊故障: 桥改用自身事件/状态记录, 随后同线程重连再提问成功; 桥重启后的文本恢复也成功. 客户端在生成结束前断开, Windows 继续生成, 重连后补回完整回答. 本地/远程 Codex 同时拥有不同进程及父进程; 测试记录清理后原有三份桌面消息、活动会话和全部设置保持一致. 私有 HTTPS 无密钥返回 401, 带密钥返回 200, 保留已有 Tailscale 路由且未启用 Funnel. 原生错误记录存在本轮前已有的 app.js currentMode 错误, 不据此声称应用零错误或确定插件致因. 上述为桌面/协议/网络验收, 不替代 iPad 真机触控、IME、分屏、锁屏和网络切换验收.
 
 0.5.0 (2026-10-12): TypeScript/esbuild 与 29 项测试通过. 原生侧栏验证回答选择、真实鼠标点击 `追问这段`、输入框聚焦、取消引用、收起重开保留待发送引用、切换会话清除引用. 实际追问返回引用中的代号和原 LaTeX 积分式; 编辑重发沿用原引用, 创建分支并保留原会话, 未误附带当前笔记选区. 实际请求核对模型/档次/标准速度及 math-writing 输入. 左侧开关和插件重载均恢复模型选择, 下拉框无默认选项, 重连无全局 config/read. 回答正文显式启用文字选择, 修复 Obsidian 侧栏继承的禁止选择样式. 已查看可见窗口截图, dev:errors 无捕获错误. 清理临时验收会话后, 原有三份会话、消息和其余设置保留; 旧空模型选择迁移为当前会话最近使用值. 本轮没有编辑源笔记, 没有新增补全插入验收.
 

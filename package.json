@@ -1,6 +1,6 @@
 {
 	"name": "codex-sidebar",
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"private": true,
 	"repository": {
 		"type": "git",
@@ -8,6 +8,7 @@
 	},
 	"scripts": {
 		"build": "tsc --noEmit && node esbuild.mjs",
+		"pretest": "node esbuild.mjs",
 		"test": "tsx --test tests/*.test.ts"
 	},
 	"devDependencies": {

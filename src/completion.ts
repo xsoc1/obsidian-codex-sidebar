@@ -99,7 +99,7 @@ export class CompletionService
 		const Timer = setTimeout(Cancel, 45000);
 		try
 		{
-			await Worker.request("initialize", { clientInfo: { name: "obsidian_codex_completion", version: "0.5.0" }, capabilities: { experimentalApi: true } });
+			await Worker.request("initialize", { clientInfo: { name: "obsidian_codex_completion", version: "0.6.0" }, capabilities: { experimentalApi: true } });
 			Worker.send({ method: "initialized", params: {} });
 			const Result = await Worker.request("thread/start", { cwd: Cwd, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", developerInstructions: MathCompletionInstructions, model: Options.model, serviceTier: Options.serviceTier, config: { model_reasoning_effort: Options.effort ?? "low" } });
 			ThreadId = Result.thread.id;

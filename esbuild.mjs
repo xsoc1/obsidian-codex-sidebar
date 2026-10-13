@@ -11,3 +11,13 @@ await build({
 	sourcemap: "external",
 	logLevel: "info"
 });
+
+await build({
+	entryPoints: ["src/bridge-cli.ts"],
+	bundle: true,
+	platform: "node",
+	format: "cjs",
+	target: "es2022",
+	outfile: "bridge.cjs",
+	logLevel: "info"
+});

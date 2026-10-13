@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-
 const Commands: Record<string, string[]> =
 {
 	help: [], version: [],
@@ -85,6 +83,7 @@ export function cli_arguments(Vault: string, Input: unknown): string[]
 
 export function run_obsidian_read(Cli: string, Vault: string, Input: unknown): Promise<{ success: boolean; contentItems: { type: "inputText"; text: string }[] }>
 {
+	const { execFile } = require("node:child_process") as typeof import("node:child_process");
 	const Args = cli_arguments(Vault, Input);
 	return new Promise(Resolve =>
 	{

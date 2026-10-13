@@ -1,6 +1,7 @@
 node_modules/
 main.js
 main.js.map
+bridge.cjs
 data.json
 dist/
 .obsidian/
