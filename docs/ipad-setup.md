@@ -43,12 +43,14 @@ node .\bridge.cjs --init --config "$env:LOCALAPPDATA\CodexObsidianRemote\config.
 ```powershell
 tailscale status
 tailscale serve status
-tailscale serve --bg --https=8445 http://127.0.0.1:17895
+tailscale serve --bg --https=443 --set-path=/obsidian-codex http://127.0.0.1:17895
 ```
 
-配置前检查 8445 未被已有服务占用, 保留其他路由. 使用 Serve 给出的 `https://<电脑的私有DNS名>:8445` 填写到 `connection-private.json` 的 `Url` 和插件设置. iPad 的 Tailscale 必须已连接并有访问该电脑的权限. 首次 Serve 如需在账户页面启用 HTTPS, 按 Tailscale 自己的提示操作.
+配置前检查 443 上的 `/obsidian-codex` 路径未被已有服务占用, 保留其他路由. 使用 `https://<电脑的私有DNS名>/obsidian-codex` 填写到 `connection-private.json` 的 `Url` 和插件设置, 不在基础地址末尾加 `/info`. 原来配置的 8445 地址也可用于具备对应网络可达性的设备. iPad 的 Tailscale 必须已连接并有访问该电脑的权限. 首次 Serve 如需在账户页面启用 HTTPS, 按 Tailscale 自己的提示操作.
 
 所有接口都需要配对密钥. 插件拒绝非 HTTPS 网络地址; localhost HTTP 仅用于本机测试. 密钥通过 Authorization 请求头发送, 不放进 URL、日志或公开安装包. 撤销设备时从私有 `config.json` 移除对应 `Clients` 项并重启桥; 其他设备条目保留. 额外设备须生成独立随机令牌及 SHA-256 哈希并登记不同 ID, 当前未提供多设备配对向导.
+
+连接报网络错误时, 先在同一台 iPad 的 Safari 打开 `<基础地址>/info`. 无密钥访问返回 `远程配对密钥无效` 是预期的连通性结果, 不要求在 Safari 输入密钥. Safari 也打不开时, 先定位该设备的私有网络/DNS/HTTPS 路径, 不据电脑端成功就宣布 iPad 已恢复. Safari 正常后再核对插件使用相同的基础地址、密钥和实际连接结果. 2026-10-13 的用户实测中, 8445 的诊断地址不可访问, 新增 443 子路径第一次也失败、随后返回预期 JSON; 该观察支持使用已实测可达的入口, 尚不证明端口是唯一根因.
 
 ## 使用与恢复边界
 
