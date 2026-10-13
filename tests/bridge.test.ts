@@ -22,7 +22,7 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 				Peer.calls.push({ Method, Params });
 				if(Method === "model/list")
 				{
-					return { data: [{ model: "model-a", displayName: "A", defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }], serviceTiers: [] }], nextCursor: null };
+					return { data: [{ model: "model-a", displayName: "A", defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Unused description" }], serviceTiers: [{ id: "priority", name: "Fast", description: "Unused description" }], additionalSpeedTiers: ["fast"], isDefault: true, description: "Unused description".repeat(100), upgradeInfo: { model: "unused" } }], nextCursor: null };
 				}
 				if(Method === "skills/list")
 				{
@@ -58,8 +58,15 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 		const Unauthenticated = await fetch(`http://127.0.0.1:${Port}/info`);
 		assert.equal(Unauthenticated.status, 401); assert.equal(Peers.length, 0);
 		await Http(0, "/info"); await Http(1, "/info"); assert.equal(Peers.length, 2);
+		const Catalog = (await Rpc(0, "model/list", {})).body;
+		assert.deepEqual(Catalog.data[0], { model: "model-a", displayName: "A", defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low", description: "" }], serviceTiers: [{ id: "priority", name: "Fast", description: "" }], additionalSpeedTiers: ["fast"], isDefault: true });
+		assert.equal(Catalog.nextCursor, null);
+		assert.ok(JSON.stringify(Catalog).length < 512);
 		const State = { Settings: { Model: "model-a" }, Sessions: [{ Id: "session-a", Messages: [{ Id: "q", Role: "user", Text: "private" }] }], ActiveId: "session-a" };
-		await Http(0, "/state", { state: State, cursor: 0 });
+		const Saved = await Http(0, "/state", { state: State, cursor: 0 });
+		assert.equal(Saved.status, 200);
+		assert.deepEqual(Saved.body, { cursor: 0 });
+		assert.ok(JSON.stringify(Saved.body).length < 64);
 		const StartParams = { clientSessionId: "session-a", model: "model-a", cwd: "outside", sandbox: "danger-full-access", config: { model_reasoning_effort: "low" } };
 		const [Thread, SameSession] = await Promise.all([Rpc(0, "thread/start", StartParams), Rpc(0, "thread/start", StartParams)]);
 		assert.equal(Thread.status, 200);

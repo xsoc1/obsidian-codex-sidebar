@@ -41,3 +41,29 @@ test("remote polling replays each event once and state sync uses the captured cu
 	assert.equal(Requests.at(-1).Body.cursor, 0);
 	Connection.close(); assert.equal(Config.Cursor, 1);
 });
+
+test("state writes stay ordered per connection and closed queues cannot post old snapshots", async () =>
+{
+	let Release: () => void = () => {};
+	let Reached: () => void = () => {};
+	const Pending = new Promise<void>(Resolve => { Release = Resolve; });
+	const Started = new Promise<void>(Resolve => { Reached = Resolve; });
+	const Posted: unknown[] = [];
+	const Config = { Enabled: true, Url: "https://example.test", Token: "fixture", Server: "", Cursor: 0 };
+	const Connection = new RemoteConnection(async (_Url, _Method, Body) =>
+	{
+		Posted.push(Body); Reached(); await Pending; return { cursor: 0 };
+	}, Config, () => {}, () => {}, () => {});
+	const First = Connection.sync_state({ revision: 1 });
+	await Started;
+	const Second = Connection.sync_state({ revision: 2 });
+	const Rejected = assert.rejects(Second, /远程连接已关闭/);
+	Connection.close();
+	let FreshSaved = false;
+	const Fresh = new RemoteConnection(async () => { FreshSaved = true; return {}; }, { ...Config }, () => {}, () => {}, () => {});
+	await Fresh.sync_state({ revision: 3 });
+	assert.equal(FreshSaved, true);
+	assert.equal(Posted.length, 1);
+	Release(); await First; await Rejected; Fresh.close();
+	assert.equal(Posted.length, 1);
+});

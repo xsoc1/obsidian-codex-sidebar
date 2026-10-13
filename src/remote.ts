@@ -33,6 +33,7 @@ export class RemoteConnection implements RpcConnection
 {
 	private Closed = false;
 	private Timer: ReturnType<typeof setTimeout> | null = null;
+	private StateQueue: Promise<void> = Promise.resolve();
 	private Cursor: number;
 	Server = "";
 	Info: any;
@@ -64,7 +65,10 @@ export class RemoteConnection implements RpcConnection
 
 	start(): void
 	{
-		void this.poll();
+		if(!this.Closed)
+		{
+			void this.poll();
+		}
 	}
 
 	async request(Method: string, Params: any): Promise<any>
@@ -90,9 +94,17 @@ export class RemoteConnection implements RpcConnection
 		return this.Cursor;
 	}
 
-	async sync_state(State: any, Cursor = this.Cursor): Promise<void>
+	sync_state(State: any, Cursor = this.Cursor): Promise<void>
 	{
-		await this.Http("/state", "POST", { state: State, cursor: Cursor });
+		this.StateQueue = this.StateQueue.catch(() => {}).then(async () =>
+		{
+			if(this.Closed)
+			{
+				throw new Error("远程连接已关闭, 状态已保存在本机");
+			}
+			await this.Http("/state", "POST", { state: State, cursor: Cursor });
+		});
+		return this.StateQueue;
 	}
 
 	private async poll(): Promise<void>

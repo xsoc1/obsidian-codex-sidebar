@@ -295,13 +295,21 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			throw new Error("请在设置中填写远程配对密钥");
 		}
-		const Response = await requestUrl({ url: Url + Path, method: Method, headers: { Authorization: `Bearer ${this.Remote.Token.trim()}` }, contentType: "application/json", ...(Body === undefined ? {} : { body: JSON.stringify(Body) }), throw: false });
-		const Value = Response.json;
-		if(Response.status !== 200)
+		const Operation = Path === "/rpc" ? (Body as { method?: string })?.method ?? "RPC" : Path.split("?")[0];
+		try
 		{
-			throw new Error(Value.error ?? `远程服务错误 (${Response.status})`);
+			const Response = await requestUrl({ url: Url + Path, method: Method, headers: { Authorization: `Bearer ${this.Remote.Token.trim()}` }, contentType: "application/json", ...(Body === undefined ? {} : { body: JSON.stringify(Body) }), throw: false });
+			const Value = Response.json;
+			if(Response.status !== 200)
+			{
+				throw new Error(Value.error ?? `远程服务错误 (${Response.status})`);
+			}
+			return Value;
 		}
-		return Value;
+		catch(ErrorValue)
+		{
+			throw new Error(`远程 ${Method} ${Operation}: ${error_text(ErrorValue)}`);
+		}
 	}
 
 	private obsidian_cli(): string
@@ -499,28 +507,26 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 	}
 
-	persist(): Promise<void>
+	persist(SyncRemote = true): Promise<void>
 	{
 		const Data = JSON.parse(JSON.stringify(this.State));
 		const RemoteMode = this.Remote.Enabled;
+		const StatePath = this.RemoteStatePath;
 		const RemoteConnectionValue = this.Connection instanceof RemoteConnection ? this.Connection : null;
 		const RemoteCursor = RemoteConnectionValue?.cursor_snapshot() ?? 0;
 		this.SaveQueue = this.SaveQueue.catch(() => {}).then(async () =>
 		{
 			if(RemoteMode)
 			{
-				await this.app.vault.adapter.write(this.RemoteStatePath, JSON.stringify(Data));
-				if(RemoteConnectionValue)
-				{
-					await RemoteConnectionValue.sync_state(Data, RemoteCursor);
-				}
+				await this.app.vault.adapter.write(StatePath, JSON.stringify(Data));
 			}
 			else
 			{
 				await this.saveData(Data);
 			}
 		});
-		return this.SaveQueue;
+		return RemoteMode && RemoteConnectionValue && SyncRemote
+			? this.SaveQueue.then(() => RemoteConnectionValue.sync_state(Data, RemoteCursor)) : this.SaveQueue;
 	}
 
 	async set_remote_mode(Enabled: boolean): Promise<void>
@@ -529,7 +535,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			throw new Error("请先停止当前回复再切换连接");
 		}
-		await this.persist();
+		await this.persist(false);
 		this.Generation++;
 		this.close_connection();
 		this.CompletionWorker?.close();
@@ -563,7 +569,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			throw new Error("请先停止当前回复再更换远程连接");
 		}
-		await this.persist();
+		await this.persist(false);
 		this.close_connection();
 		if(this.Remote.Url !== Url || this.Remote.Token !== Token)
 		{
@@ -671,7 +677,6 @@ export default class CodexSidebarPlugin extends Plugin
 					this.State = Restored.state;
 				}
 				Connection.set_cursor(Restored.cursor);
-				Connection.start();
 				this.refresh();
 			}
 			await Connection.request("initialize", { clientInfo: { name: "obsidian_codex_sidebar", title: "Obsidian Codex Sidebar", version: this.manifest.version }, capabilities: { experimentalApi: true } });
@@ -715,7 +720,7 @@ export default class CodexSidebarPlugin extends Plugin
 					}
 				}
 			}
-			await this.persist();
+			await this.persist(false);
 			this.Models = [];
 			this.CatalogError = "";
 			try
@@ -728,11 +733,13 @@ export default class CodexSidebarPlugin extends Plugin
 					Cursor = Page.nextCursor ?? null;
 				} while(Cursor);
 				Object.assign(this.State.Settings, initial_selection(this.State.Settings, this.Models));
-				await this.persist();
+				this.refresh();
+				await this.persist(false);
 			}
 			catch(ErrorValue)
 			{
 				this.CatalogError = `模型选项读取失败: ${error_text(ErrorValue)}; 点击重连重试`;
+				this.refresh();
 			}
 			if(Generation !== this.Generation || this.Unloaded)
 			{
@@ -741,6 +748,10 @@ export default class CodexSidebarPlugin extends Plugin
 			this.Status = `${this.Remote.Enabled ? "独立远程已连接" : "已连接"} (${Account.account.type === "chatgpt" ? "ChatGPT 登录" : Account.account.type})`;
 			await this.ensure_math_skill().catch(() => {});
 			this.refresh();
+			if(Connection instanceof RemoteConnection)
+			{
+				Connection.start();
+			}
 		})();
 		this.Connecting = Work;
 		try
@@ -1864,6 +1875,7 @@ class CodexSettings extends PluginSettingTab
 		});
 		new Setting(this.containerEl).setName("连接独立远程 Agent").addButton(Button => Button.setButtonText("保存并连接").onClick(async () =>
 		{
+			Button.setDisabled(true).setButtonText("连接中...");
 			try
 			{
 				await this.Owner.configure_remote(RemoteUrl, RemoteToken);
@@ -1872,7 +1884,13 @@ class CodexSettings extends PluginSettingTab
 			}
 			catch(ErrorValue)
 			{
+				this.Owner.Status = error_text(ErrorValue);
+				this.Owner.refresh();
 				new Notice(error_text(ErrorValue));
+			}
+			finally
+			{
+				Button.setDisabled(false).setButtonText("保存并连接");
 			}
 		}));
 		new Setting(this.containerEl).setName("math-writing 技能").setDesc(`${this.Owner.SkillStatus}. 从${this.Owner.Remote.Enabled ? "Windows 服务端" : "本机"} Codex 的 skills/list 自动发现, 聊天与补全每次通过 skill 输入加载. 技能未安装或被禁用时明确报错; 不更改全局配置.`).addButton(Button => Button.setButtonText("重新检查").onClick(async () =>

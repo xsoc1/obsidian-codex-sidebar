@@ -87,7 +87,7 @@ class DeviceAgent
 				this.Connection = null; this.Ready = null; this.Threads.clear();
 				this.event({ method: "bridge/disconnected", params: { message: ErrorValue.message } });
 			});
-			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: "0.6.0" }, capabilities: { experimentalApi: true } });
+			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: "0.6.1" }, capabilities: { experimentalApi: true } });
 			this.Connection.send({ method: "initialized", params: {} });
 			let Cursor: string | null = null;
 			this.Models = [];
@@ -311,7 +311,13 @@ class DeviceAgent
 		}
 		if(Method === "model/list")
 		{
-			return { data: this.Models, nextCursor: null };
+			return { data: this.Models.map(Model => ({
+				model: Model.model, displayName: Model.displayName, isDefault: Model.isDefault,
+				defaultReasoningEffort: Model.defaultReasoningEffort,
+				supportedReasoningEfforts: Model.supportedReasoningEfforts.map(Effort => ({ reasoningEffort: Effort.reasoningEffort, description: "" })),
+				serviceTiers: Model.serviceTiers?.map(Tier => ({ id: Tier.id, name: Tier.name, description: "" })),
+				additionalSpeedTiers: Model.additionalSpeedTiers
+			})), nextCursor: null };
 		}
 		if(Method === "skills/list")
 		{
@@ -508,7 +514,7 @@ export class RemoteBridge
 			}
 			else if(Request.method === "POST" && Url.pathname === "/state")
 			{
-				Result = Agent.state(Body.cursor, Body.state);
+				Result = { cursor: Agent.state(Body.cursor, Body.state).cursor };
 			}
 			else if(Request.method === "POST" && Url.pathname === "/rpc")
 			{

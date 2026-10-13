@@ -1,11 +1,11 @@
-# iPad 远程初版 (0.6.0)
+# iPad 远程初版 (0.6.1)
 
-iPad 运行 Obsidian 侧栏, Windows 电脑运行独立隐藏 Codex CLI. 电脑必须开机、联网, iPad 与电脑连接同一 Tailscale 私有网络. 此版已完成 Windows 原生插件、私有 HTTPS 实际模型对话和补全验证; iPad 真机验收仍待完成.
+iPad 运行 Obsidian 侧栏, Windows 电脑运行独立隐藏 Codex CLI. 电脑必须开机、联网, iPad 与电脑连接同一 Tailscale 私有网络. 此版已完成 Windows 原生插件、私有 HTTPS 实际模型对话和补全验证. 用户的 iPad 已能通过 Safari 访问入口, 插件仍报告超时; 0.6.1 修复已复现的客户端等待问题并细分错误, 真机恢复仍待验证.
 
 ## 安装插件和连接
 
 1. 从本版本插件包取出 `manifest.json`, `main.js`, `styles.css` (可另加 `main.js.map`), 放入 iPad vault 的 `.obsidian/plugins/codex-sidebar/`. 可用 vault 同步或支持隐藏目录的文件管理工具传入. 保留已有 `data.json`, 不把 Windows 私有服务配置同步到 vault.
-2. 在 iPad Obsidian 的社区插件中启用 Codex Sidebar. 尚未发布到 Obsidian 社区目录, 需要手动安装. 重启或重载插件, 确认加载的是 0.6.0.
+2. 在 iPad Obsidian 的社区插件中启用 Codex Sidebar. 尚未发布到 Obsidian 社区目录, 需要手动安装或用 BRAT 的指定版本功能安装本仓库的发布标签. 重启或重载插件, 确认加载的是 0.6.1. 从旧版升级仅替换插件构建文件, 保留 data.json 和 remote-*-state.json; 地址、密钥与聊天记录不需要清空.
 3. 打开插件设置, 填写电脑的私有 HTTPS 地址与配对密钥, 点击 `保存并连接`. 两项来自电脑私有目录中的 `connection-private.json`: `Url` 是地址, `Token` 是密钥. 不填 Codex 登录密码或 OpenAI API key. iPad 与服务绑定的 vault 名称必须一致.
 4. 用工具栏的机器人按钮或命令面板的 `Codex Sidebar: 打开/收起聊天栏` 打开侧栏. 首次连接从实际模型列表初始化一个具体选择; 之后保存并恢复模型、思考档次、Fast 与开关选择.
 5. 先发一个短问题. 再选中笔记中的一段文字, 查看上下文卡片后解释/检查证明. 回答里的文字可选中并通过 `追问这段` 引用. 行内补全在侧栏确认插入, 保留 Obsidian 原生 Tab. 编辑已发送的问题并重发会保留原会话并创建分支.
