@@ -4,6 +4,8 @@ Windows 桌面 Obsidian 插件, 使用本机 Codex 登录. 点击 Obsidian 左�
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
+当前 0.5.0 为桌面版, 不能直接在 iPad 加载. 接受电脑保持开机时, 可以改造为 iPad Obsidian 前端连接 Windows 后台 Codex 服务; 方案和待验证边界见 [iPad 支持可行性调研](docs/ipad-support-research.md). 移动版尚未实现或完成真机验收.
+
 ## 使用
 
 - 直接输入问题, Enter 发送, Shift+Enter 换行. 回复支持 Markdown 和数学公式, 可以停止或复制.
