@@ -4,7 +4,7 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-0.6.2 包含移动入口与私有 HTTPS 远程桥. 每个配对设备使用独立隐藏进程、临时线程和会话记录, 与桌面本地聊天分开. Windows 原生插件的实际远程对话、math-writing、补全、重连续聊与断线恢复已验证. 用户已确认 iPad 模型列表显示, 但发送仍停在准备阶段; 0.6.2 改用可取消的移动 HTTP 传输并显示具体准备步骤, 真机发送仍待复测. 安装及连接步骤见 [iPad 初版使用指南](docs/ipad-setup.md), 迁移依据见 [可行性调研](docs/ipad-support-research.md).
+0.6.2 包含移动入口与私有 HTTPS 远程桥. 每个配对设备使用独立隐藏进程、临时线程和会话记录, 与桌面本地聊天分开. 用户已确认 iPad 模型列表显示并收到实际短问题的完整回答, 前台基础对话通过真机验收. Windows 原生插件的远程对话、math-writing、补全、重连续聊与断线恢复另有验证; iPad 触控选区、补全、中文输入和后台恢复等仍待实测. 安装及连接步骤见 [iPad 初版使用指南](docs/ipad-setup.md), 迁移依据见 [可行性调研](docs/ipad-support-research.md).
 
 ## 使用
 
@@ -62,6 +62,8 @@ npm test
 技能接入使用 [官方 app-server Skills 接口](https://learn.chatgpt.com/docs/app-server#skills): `skills/list` 只接受当前 vault 的发现结果, 选择已启用的 math-writing (优先用户安装版本). 每次 `turn/start` 的原问题/源上下文保持原样, 独立追加 `{type:"skill", name:"math-writing", path:...}`. 连接关闭或 `skills/changed` 通知使发现缓存失效. 自定义工作说明后始终附带用户修改准则; 补全另加短片段 JSON、无工具、无自行写入的任务约束.
 
 ## 本机验收
+
+0.6.2 iPad 真机后续 (2026-10-14): 用户通过 GitHub/BRAT 更新后, 明确确认收到测试问题要求的完整回答. 桥记录对应实际 turn/start、completed 状态和预期回复; 较大状态上传的接收等待已由此前约 65 秒降为该次桥侧约 1 毫秒. 已撤去临时诊断包装进程并恢复正常桥服务, 清理前后远程会话记录完全保留, 配对认证仍为有效密钥 200、无密钥 401. 服务重启会更新临时运行线程, 客户端可点一次重连恢复文本. 这是前台基础问答的通过结果, 不扩大为 iPad 全部交互/后台行为通过, 也不把传输更换后的成功等同于唯一根因证明.
 
 0.6.2 (2026-10-14): TypeScript/esbuild 与 41 项测试通过. 用户确认 0.6.1 交付后模型列表出现, 发送却一直准备请求. 日志定位到续接会话后的 7660 字节状态上传: 接收请求体用时约 65 秒, 后端保存处理仅约 3 毫秒, 尚未提交模型轮次. 移动端改用有超时和取消能力的浏览器 fetch, 服务端提供 CORS 预检; 实际操作仍需配对密钥, 不使用浏览器 Cookie, 不自动重发. 准备状态细分为保存会话、检查技能、加载/保存工作说明和保存提问. 测试覆盖上传和响应正文超时、预检不创建 Agent、真实接口继续认证和停留步骤. Windows Obsidian 实际 app://obsidian.md 浏览器上下文经私有 HTTPS 读取 /info 成功, 30098 字节只读模型列表请求用时 8 毫秒并返回 7 个模型. 该结果不是 iPad 发送验收, 也不能据此认定 native requestUrl 或 Tailscale 是唯一根因.
 
