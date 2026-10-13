@@ -11,6 +11,7 @@ import { InlineCompletions } from "./inline";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcMessage } from "./rpc";
 import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } from "./remote";
+import { browser_http } from "./browser-http";
 import { math_writing_skill, skill_input, type SkillInput } from "./skills";
 import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo, type TokenUsage } from "./controls";
 
@@ -298,7 +299,10 @@ export default class CodexSidebarPlugin extends Plugin
 		const Operation = Path === "/rpc" ? (Body as { method?: string })?.method ?? "RPC" : Path.split("?")[0];
 		try
 		{
-			const Response = await requestUrl({ url: Url + Path, method: Method, headers: { Authorization: `Bearer ${this.Remote.Token.trim()}` }, contentType: "application/json", ...(Body === undefined ? {} : { body: JSON.stringify(Body) }), throw: false });
+			const Params = { url: Url + Path, method: Method, headers: { Authorization: `Bearer ${this.Remote.Token.trim()}`, "Content-Type": "application/json" }, ...(Body === undefined ? {} : { body: JSON.stringify(Body) }) };
+			const Response = Platform.isMobileApp
+				? await browser_http({ ...Params, timeout: Operation === "bridge/completion" ? 120000 : 30000 })
+				: await requestUrl({ ...Params, throw: false });
 			const Value = Response.json;
 			if(Response.status !== 200)
 			{
@@ -850,6 +854,11 @@ export default class CodexSidebarPlugin extends Plugin
 				this.StartedAt = Date.now();
 			}
 		}
+		if(this.Busy)
+		{
+			this.Activity = "保存会话";
+			this.refresh();
+		}
 		await this.persist();
 	}
 
@@ -861,13 +870,15 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		this.Busy = true;
 		this.TurnId = null;
-		this.Activity = "准备请求";
+		this.Activity = "准备会话";
 		this.StartedAt = Date.now();
 		this.refresh();
 		let Submitted = false;
 		try
 		{
 			await this.ensure_thread();
+			this.Activity = "检查 math-writing";
+			this.refresh();
 			const Skill = await this.ensure_math_skill();
 			if(this.TurnId)
 			{
@@ -876,11 +887,17 @@ export default class CodexSidebarPlugin extends Plugin
 				return false;
 			}
 			const Instructions = this.work_instructions();
+			this.Activity = "准备工作说明";
+			this.refresh();
 			const InstructionsHash = await instruction_hash(Instructions);
 			if(this.Session.InstructionsHash !== InstructionsHash)
 			{
+				this.Activity = "加载工作说明";
+				this.refresh();
 				await this.Connection!.request("thread/inject_items", { threadId: this.Session.ThreadId, items: instruction_items(Instructions) });
 				this.Session.InstructionsHash = InstructionsHash;
+				this.Activity = "保存工作说明";
+				this.refresh();
 				await this.persist();
 			}
 			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Question.trim(), Context: Context ? structuredClone(Context) : null, Quote: Quote ? structuredClone(Quote) : null, Prompt: build_prompt(Question.trim(), Context, Quote), ContextLabel: Quote ? "追问选中的回答 / 渲染选区 + 原回答 Markdown" : Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
@@ -889,6 +906,8 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				this.Session.Title = Question.trim().slice(0, 24);
 			}
+			this.Activity = "保存提问";
+			this.refresh();
 			await this.persist();
 			this.Status = "Codex 正在思考...";
 			this.Activity = "思考中";

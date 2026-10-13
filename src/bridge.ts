@@ -87,7 +87,7 @@ class DeviceAgent
 				this.Connection = null; this.Ready = null; this.Threads.clear();
 				this.event({ method: "bridge/disconnected", params: { message: ErrorValue.message } });
 			});
-			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: "0.6.1" }, capabilities: { experimentalApi: true } });
+			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: "0.6.2" }, capabilities: { experimentalApi: true } });
 			this.Connection.send({ method: "initialized", params: {} });
 			let Cursor: string | null = null;
 			this.Models = [];
@@ -466,6 +466,16 @@ export class RemoteBridge
 	{
 		Response.setHeader("Content-Type", "application/json; charset=utf-8");
 		Response.setHeader("Cache-Control", "no-store");
+		Response.setHeader("Access-Control-Allow-Origin", "*");
+		Response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		Response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+		Response.setHeader("Access-Control-Max-Age", "600");
+		if(Request.method === "OPTIONS")
+		{
+			Response.statusCode = 204;
+			Response.end();
+			return;
+		}
 		try
 		{
 			const Token = Request.headers.authorization?.match(/^Bearer ([a-zA-Z0-9_-]{32,128})$/)?.[1] ?? "";

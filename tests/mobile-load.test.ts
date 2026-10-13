@@ -67,14 +67,19 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 	const Export = { exports: {} as any };
 	const Define = () => ({});
 	runInNewContext(readFileSync(process.env.CODEX_SIDEBAR_TEST_BUNDLE ?? "main.js", "utf8"), {
-		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, URL, Error, TextEncoder, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
+		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, URL, Error, AbortController, TextEncoder, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
+		fetch: async (Url: string, Params: any) =>
+		{
+			const Response = await Http?.({ ...Params, url: Url });
+			return { status: Response.status, json: async () => Response.json };
+		},
 		localStorage: { getItem: (Key: string) => Local.get(Key), setItem: (Key: string, Value: string) => Local.set(Key, Value) },
 		require(Name: string)
 		{
 			Required.push(Name);
 			if(Name === "obsidian")
 			{
-				return { Plugin, ItemView: Component, PluginSettingTab: Component, Modal: Component, MarkdownView: Component, Platform: { isMobileApp: true }, requestUrl: Http };
+				return { Plugin, ItemView: Component, PluginSettingTab: Component, Modal: Component, MarkdownView: Component, Notice: Component, Platform: { isMobileApp: true }, requestUrl: Http };
 			}
 			if(Name === "@codemirror/state")
 			{
@@ -122,6 +127,14 @@ function bootstrap_http(Before?: (Params: any) => Promise<void>)
 		else if(Body?.method === "skills/list")
 		{
 			Value = { data: [{ cwd: "/vault", skills: [{ name: "math-writing", path: "/skills/SKILL.md", enabled: true }] }] };
+		}
+		else if(Body?.method === "thread/start")
+		{
+			Value = { model: "test-model", reasoningEffort: "low", thread: { id: "fixture-thread", ephemeral: true, path: null, turns: [] } };
+		}
+		else if(Body?.method === "turn/start")
+		{
+			Value = { turn: { id: "fixture-turn" } };
 		}
 		return { status: 200, json: Value };
 	};
@@ -216,4 +229,34 @@ test("mobile network errors identify the failed operation without including cred
 		assert.ok(!Message.includes("private-fixture-body"));
 		return true;
 	});
+});
+
+test("a pending session state upload reports its preparation stage before any turn is submitted", async () =>
+{
+	let Release: () => void = () => {};
+	let Reached: () => void = () => {};
+	const Pending = new Promise<void>(Resolve => { Release = Resolve; });
+	const Saving = new Promise<void>(Resolve => { Reached = Resolve; });
+	const Operations: string[] = [];
+	const { Instance } = await mobile_fixture(bootstrap_http(async Params =>
+	{
+		if(Params.body?.includes('"method"')) Operations.push(JSON.parse(Params.body).method);
+		if(new URL(Params.url).pathname === "/state" && Params.method === "POST")
+		{
+			Reached(); await Pending;
+		}
+	}));
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
+	await Instance.ensure_connection();
+	const Sending = Instance.send_message("fixture question", null);
+	try
+	{
+		await Saving;
+		assert.equal(Instance.Activity, "保存会话");
+		assert.ok(!Operations.includes("turn/start"));
+	}
+	finally
+	{
+		Release(); await Sending; Instance.Connection?.close();
+	}
 });

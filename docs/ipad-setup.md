@@ -1,11 +1,11 @@
-# iPad 远程初版 (0.6.1)
+# iPad 远程初版 (0.6.2)
 
-iPad 运行 Obsidian 侧栏, Windows 电脑运行独立隐藏 Codex CLI. 电脑必须开机、联网, iPad 与电脑连接同一 Tailscale 私有网络. 此版已完成 Windows 原生插件、私有 HTTPS 实际模型对话和补全验证. 用户的 iPad 已能通过 Safari 访问入口, 插件仍报告超时; 0.6.1 修复已复现的客户端等待问题并细分错误, 真机恢复仍待验证.
+iPad 运行 Obsidian 侧栏, Windows 电脑运行独立隐藏 Codex CLI. 电脑必须开机、联网, iPad 与电脑连接同一 Tailscale 私有网络. 此版已完成 Windows 原生插件、私有 HTTPS 实际模型对话和补全验证. 用户已确认 iPad 模型列表出现, 但发送停在准备阶段; 0.6.2 改用可取消的移动 HTTP 传输并细分准备步骤, 真机问答仍待验证.
 
 ## 安装插件和连接
 
 1. 从本版本插件包取出 `manifest.json`, `main.js`, `styles.css` (可另加 `main.js.map`), 放入 iPad vault 的 `.obsidian/plugins/codex-sidebar/`. 可用 vault 同步或支持隐藏目录的文件管理工具传入. 保留已有 `data.json`, 不把 Windows 私有服务配置同步到 vault.
-2. 在 iPad Obsidian 的社区插件中启用 Codex Sidebar. 尚未发布到 Obsidian 社区目录, 需要手动安装或用 BRAT 的指定版本功能安装本仓库的发布标签. 重启或重载插件, 确认加载的是 0.6.1. 从旧版升级仅替换插件构建文件, 保留 data.json 和 remote-*-state.json; 地址、密钥与聊天记录不需要清空.
+2. 在 iPad Obsidian 的社区插件中启用 Codex Sidebar. 尚未发布到 Obsidian 社区目录, 需要手动安装或用 BRAT 的指定版本功能安装本仓库的发布标签. 重启或重载插件, 确认加载的是 0.6.2. 从旧版升级仅替换插件构建文件, 保留 data.json 和 remote-*-state.json; 地址、密钥与聊天记录不需要清空.
 3. 打开插件设置, 填写电脑的私有 HTTPS 地址与配对密钥, 点击 `保存并连接`. 两项来自电脑私有目录中的 `connection-private.json`: `Url` 是地址, `Token` 是密钥. 不填 Codex 登录密码或 OpenAI API key. iPad 与服务绑定的 vault 名称必须一致.
 4. 用工具栏的机器人按钮或命令面板的 `Codex Sidebar: 打开/收起聊天栏` 打开侧栏. 首次连接从实际模型列表初始化一个具体选择; 之后保存并恢复模型、思考档次、Fast 与开关选择.
 5. 先发一个短问题. 再选中笔记中的一段文字, 查看上下文卡片后解释/检查证明. 回答里的文字可选中并通过 `追问这段` 引用. 行内补全在侧栏确认插入, 保留 Obsidian 原生 Tab. 编辑已发送的问题并重发会保留原会话并创建分支.
@@ -58,6 +58,7 @@ tailscale serve --bg --https=443 --set-path=/obsidian-codex http://127.0.0.1:178
 - 远程问答保持固定 vault、只读权限和 `approvalPolicy=never`. 不支持远程批准写入、通用 shell、全局 Codex 设置、账号操作或浏览桌面聊天.
 - math-writing 在 Windows 自动发现并在每次聊天/补全中显式加载. 缺失或禁用会阻止请求. 最小改动、原思路证明、重大重建先征求用户决定与模仿原稿语言等固定准则继续生效.
 - 客户端断开后, 电脑继续生成并保存回答. 网络恢复后点击 `重连`, 恢复桥保存的文本及当前运行状态. 超出事件缓存窗口时也需要重连. 网络超时不会自动重发未知结果的问题.
+- 移动端普通 HTTP 在前台等待超过 30 秒会取消并显示具体接口; 补全请求上限 120 秒. 准备阶段显示当前会话、技能、工作说明或提问保存步骤. 切后台/锁屏可能暂停客户端脚本, 不能承诺后台也精确在上述秒数显示提示. 移动浏览器传输需要桥的 CORS 预检支持; 升级插件时同时更新电脑 bridge.cjs 并重启独立桥. 预检不读取记录或启动 Agent, 正式请求仍用 Authorization 配对认证, 不发送 Cookie. 实施依据为 [Fetch 标准](https://fetch.spec.whatwg.org/#http-access-control-allow-origin).
 - 当前 CLI 的临时线程不支持 `thread/read(includeTurns=true)`. 桥用自己收到的事件、文本记录和运行状态续接原线程; 桥重启后新建临时线程并注入保存的问答. 不恢复完整工具输出和进程状态.
 - 补全仅返回建议, 由客户端检查文档/光标/输入法状态并在侧栏确认. 电脑不直接写入笔记. 不支持 PDF 页面识别、截图/OCR.
 

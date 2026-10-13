@@ -55,8 +55,15 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 	const Rpc = (Device: number, Method: string, Params: any, Id: string = crypto.randomUUID()) => Http(Device, "/rpc", { id: Id, method: Method, params: Params });
 	try
 	{
+		const Preflight = await fetch(`http://127.0.0.1:${Port}/rpc`, { method: "OPTIONS", headers: { Origin: "app://obsidian.md", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization,content-type" } });
+		assert.equal(Preflight.status, 204);
+		assert.equal(Preflight.headers.get("Access-Control-Allow-Origin"), "*");
+		assert.equal(Preflight.headers.get("Access-Control-Allow-Credentials"), null);
+		assert.match(Preflight.headers.get("Access-Control-Allow-Headers")!, /Authorization/);
+		assert.equal(Peers.length, 0);
 		const Unauthenticated = await fetch(`http://127.0.0.1:${Port}/info`);
 		assert.equal(Unauthenticated.status, 401); assert.equal(Peers.length, 0);
+		assert.equal(Unauthenticated.headers.get("Access-Control-Allow-Origin"), "*");
 		await Http(0, "/info"); await Http(1, "/info"); assert.equal(Peers.length, 2);
 		const Catalog = (await Rpc(0, "model/list", {})).body;
 		assert.deepEqual(Catalog.data[0], { model: "model-a", displayName: "A", defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low", description: "" }], serviceTiers: [{ id: "priority", name: "Fast", description: "" }], additionalSpeedTiers: ["fast"], isDefault: true });
