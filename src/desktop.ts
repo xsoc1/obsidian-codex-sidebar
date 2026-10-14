@@ -1,9 +1,15 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 export { CodexConnection } from "./rpc";
 export { CompletionService } from "./completion";
 export { existsSync };
+
+export function skill_version(Path: string): string
+{
+	const Header = readFileSync(Path, "utf8").slice(0, 4096).split("---")[1] ?? "";
+	return Header.match(/^\s*version:\s*["']?([0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.-]+)?)/m)?.[1] ?? "未确认";
+}
 
 export function discover_cli(): Promise<string>
 {

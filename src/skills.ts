@@ -30,7 +30,7 @@ export function math_writing_skill(Result: { data?: { cwd: string; skills: Skill
 	return { type: "skill", name: "math-writing", path: Skill.path };
 }
 
-export function skill_input(Text: string, Skill: SkillInput)
+export function skill_input(Text: string, Skill: SkillInput): [{ type: "text"; text: string; text_elements: never[] }, SkillInput]
 {
 	return [{ type: "text", text: Text, text_elements: [] }, { ...Skill }];
 }

@@ -1,4 +1,5 @@
 import { build_prompt, type ContextSnapshot, type AnswerQuote } from "./prompt";
+import type { TaskSpec } from "./study/task";
 
 export interface ChatMessage
 {
@@ -11,6 +12,9 @@ export interface ChatMessage
 	Prompt?: string;
 	Quote?: AnswerQuote | null;
 	SummaryParts?: string[];
+	Task?: TaskSpec;
+	CompletionStatus?: "completed" | "interrupted" | "failed";
+	Phase?: "commentary" | "final_answer" | null;
 }
 
 export function history_items(Messages: ChatMessage[])

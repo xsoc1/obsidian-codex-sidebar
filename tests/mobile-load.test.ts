@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { webcrypto, randomUUID } from "node:crypto";
+import { make_task } from "../src/study/task";
 
 async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 {
@@ -13,6 +14,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 		manifest = { id: "codex-sidebar", dir: ".obsidian/plugins/codex-sidebar" };
 		app = {
 			vault: {
+				on: () => {},
 				getName: () => "test", adapter: {
 					exists: async (Path: string) => Files.has(Path), read: async (Path: string) => Files.get(Path), write: async (Path: string, Text: string) =>
 					{
@@ -67,7 +69,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 	const Export = { exports: {} as any };
 	const Define = () => ({});
 	runInNewContext(readFileSync(process.env.CODEX_SIDEBAR_TEST_BUNDLE ?? "main.js", "utf8"), {
-		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, URL, Error, AbortController, TextEncoder, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
+		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
 		fetch: async (Url: string, Params: any) =>
 		{
 			const Response = await Http?.({ ...Params, url: Url });
@@ -147,6 +149,35 @@ test("built mobile entry loads and initializes without Node, Electron or desktop
 	assert.equal(Instance.State.Sessions.length, 1);
 	assert.ok(Required.every(Name => ["obsidian", "@codemirror/state", "@codemirror/view"].includes(Name)));
 	await Instance.persist(); assert.equal(Files.size, 1);
+});
+
+test("mobile study tasks use existing two-input transport, keep records outside remote state and preserve task on resend", async () =>
+{
+	const Requests: any[] = [];
+	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
+	Instance.Study.Host.read_current = async () => "original";
+	const Source: any = { Path: "scratch.md", Mode: "阅读", Kind: "选区", Text: "$x$", SelectedText: "$x$", Mapping: "源块", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "original-time" };
+	const Task = make_task("exercise", Source, "给一题");
+	await Instance.Study.send(Task);
+	const Turn = Requests.find(Value => Value.method === "turn/start");
+	assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing");
+	Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "final", type: "agentMessage", phase: "final_answer", text: JSON.stringify({ schemaVersion: 1, kind: "symbols", statement: "解释 $x$", hints: ["看输入"], solution: null, verification: "unverified" }) } } });
+	Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+	await new Promise(Resolve => setTimeout(Resolve, 30));
+	assert.equal(Instance.Study.Store.Data.Exercises.length, 1);
+	const OldUser = Instance.Session.Messages.find((Value: any) => Value.Role === "user");
+	Instance.Capture.Snapshot = { ...Source, Path: "unrelated.md", Text: "new" };
+	await Instance.resend_message(OldUser.Id);
+	const NewUser = Instance.Session.Messages.at(-1);
+	assert.equal(NewUser.Task.Source.Path, "scratch.md"); assert.equal(NewUser.Task.Source.CapturedAt, "original-time"); assert.notEqual(NewUser.Task.Id, Task.Id);
+	await Instance.persist(); const StatePost = Requests.filter(Value => Value.method === undefined && Value.state).at(-1);
+	assert.equal(StatePost?.state?.Study, undefined);
+	assert.ok(!JSON.stringify(Instance.State).includes("HintUses"));
+	const Records = Instance.Study.Store.export_records();
+	Instance.State = { ...Instance.State, Sessions: [{ Id: "replacement", Title: "remote", Messages: [], ThreadId: null }], ActiveId: "replacement" };
+	assert.equal(Instance.Study.Store.export_records(), Records);
+	Instance.Connection?.close();
 });
 
 test("mobile bootstrap displays received models while the following state save is pending", async () =>

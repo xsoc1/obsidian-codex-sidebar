@@ -14,6 +14,13 @@ import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } f
 import { browser_http } from "./browser-http";
 import { math_writing_skill, skill_input, type SkillInput } from "./skills";
 import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo, type TokenUsage } from "./controls";
+import { StudyStore } from "./study/store";
+import { StudyController } from "./study/controller";
+import { ObsidianWriteHost } from "./study/obsidian-host";
+import { StudyPanel } from "./study/panel";
+import { task_prompt, type TaskSpec } from "./study/task";
+import { structured_task, question_label } from "./study/presentation";
+import { safe_math_markdown } from "./study/safe-markdown";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -104,7 +111,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private RemoteKey = "";
 	private RemoteStatePath = "";
 	private Desktop: typeof import("./desktop") | null = null;
-	private HostInfo: { cwd: string; vault: string; cli: string; client: string } | null = null;
+	private HostInfo: { cwd: string; vault: string; cli: string; client: string; mathWritingVersion?: string } | null = null;
 	private Connecting: Promise<void> | null = null;
 	private LoadingSkill: Promise<SkillInput> | null = null;
 	private LoadedThread: string | null = null;
@@ -114,12 +121,15 @@ export default class CodexSidebarPlugin extends Plugin
 	private ApprovalItems = new Map<string, unknown>();
 	private SaveQueue: Promise<void> = Promise.resolve();
 	private CaptureTimer: ReturnType<typeof setTimeout> | null = null;
+	private StudyVersionTimer: ReturnType<typeof setTimeout> | null = null;
 	private Modals = new Set<Modal>();
 	private BoundDocuments = new Set<Document>();
 	private CompletionWorker: CompletionService | null = null;
 	Inline!: InlineCompletions;
 	private CompletionStatus!: HTMLElement;
 	private LiveThreads = new Map<string, string>();
+	Study: StudyController | null = null;
+	private StudyAnswerFocused = false;
 
 	get Session(): ChatSession
 	{
@@ -199,7 +209,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.CompletionStatus = this.addStatusBarItem();
 		this.CompletionStatus.setText(this.State.Settings.Completion ? "Codex 补全已开启" : "Codex 补全已关闭");
 		this.Inline = new InlineCompletions({
-			Enabled: () => this.State.Settings.Completion && !this.Unloaded,
+			Enabled: () => this.State.Settings.Completion && !this.Unloaded && !this.StudyAnswerFocused,
 			Delay: () => Math.max(500, this.State.Settings.CompletionDelay),
 			Path: View => View.state.field(editorInfoField, false)?.file?.path ?? null,
 			Request: (Input, Signal) => this.request_completion(Input, Signal),
@@ -208,6 +218,29 @@ export default class CodexSidebarPlugin extends Plugin
 		});
 		this.registerEditorExtension(this.Inline.Extension);
 		this.Capture = new ContextCapture(this.app);
+		try
+		{
+			const Host = new ObsidianWriteHost(this.app);
+			this.Study = new StudyController(new StudyStore(localStorage, this.app.vault.getName()), {
+				read_current: Path => Host.read_current(Path),
+				compare_write: (Path, Before, After) => Host.compare_write(Path, Before, After),
+				send_task: Task => this.send_message(Task.Request, Task.Source, null, Task),
+				changed: () => this.refresh(),
+				suppress_completion: Paused =>
+				{
+					this.StudyAnswerFocused = Paused;
+					if(Paused)
+					{
+						this.Inline.clear(); this.CompletionWorker?.close();
+					}
+					this.CompletionStatus.setText(Paused ? "学习作答中, 补全暂停" : this.State.Settings.Completion ? "Codex 补全已开启" : "Codex 补全已关闭");
+				}
+			});
+		}
+		catch(ErrorValue)
+		{
+			this.Status = error_text(ErrorValue);
+		}
 		this.registerView(ViewType, Leaf => new CodexView(Leaf, this));
 		this.Ribbon = this.addRibbonIcon("bot", "Codex 聊天 (打开/收起)", () => void this.toggle_sidebar());
 		this.Ribbon.addClass("codex-sidebar-ribbon");
@@ -228,6 +261,18 @@ export default class CodexSidebarPlugin extends Plugin
 			this.refresh();
 		}));
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.refresh()));
+		const VersionChanged = (Path: string | undefined) =>
+		{
+			if(!Path || !this.Study?.Store.Data.Exercises.some(Value => Value.Source.Path === Path)) { return; }
+			if(this.StudyVersionTimer) { clearTimeout(this.StudyVersionTimer); }
+			this.StudyVersionTimer = setTimeout(() =>
+			{
+				this.StudyVersionTimer = null;
+				void this.Study?.check_versions().catch(ErrorValue => { this.Status = error_text(ErrorValue); this.refresh(); });
+			}, 300);
+		};
+		this.registerEvent(this.app.vault.on("modify", File => VersionChanged(File.path)));
+		this.registerEvent(this.app.workspace.on("editor-change", (_Editor, Info) => VersionChanged(Info?.file?.path)));
 		this.registerEvent(this.app.workspace.on("editor-menu", (MenuValue, Editor, Info) =>
 		{
 			if(!Editor.getSelection().trim())
@@ -323,13 +368,13 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async request_completion(Input: CompletionInput, Signal: AbortSignal): Promise<string>
 	{
-		if(Signal.aborted || this.Unloaded)
+		if(Signal.aborted || this.Unloaded || this.StudyAnswerFocused)
 		{
 			throw new Error("补全已取消");
 		}
 		await this.ensure_connection();
 		const Skill = await this.ensure_math_skill();
-		if(Signal.aborted || this.Unloaded)
+		if(Signal.aborted || this.Unloaded || this.StudyAnswerFocused)
 		{
 			throw new Error("补全已取消");
 		}
@@ -390,8 +435,9 @@ export default class CodexSidebarPlugin extends Plugin
 				{
 					throw new Error("math-writing 的 SKILL.md 不存在, 请重新安装技能并重连");
 				}
+				const Version = this.Remote.Enabled ? this.HostInfo?.mathWritingVersion ?? "未确认" : this.Desktop!.skill_version(Skill.path);
 				this.MathWritingSkill = Skill;
-				this.SkillStatus = "math-writing 就绪, 每次请求加载";
+				this.SkillStatus = `math-writing 就绪 (${Version}), 每次请求加载${Version === "未确认" ? "; 入门使用内置等效规则" : ""}`;
 				this.refresh();
 				return Skill;
 			}
@@ -429,6 +475,10 @@ export default class CodexSidebarPlugin extends Plugin
 		this.registerDomEvent(DocumentValue, "selectionchange", () => this.queue_capture());
 		this.registerDomEvent(DocumentValue, "pointerup", () => this.queue_capture());
 		this.registerDomEvent(DocumentValue, "keyup", () => this.queue_capture());
+		this.registerDomEvent(DocumentValue, "scroll", () =>
+		{
+			if(this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading") { this.queue_capture(); }
+		}, { capture: true });
 	}
 
 	private queue_capture(): void
@@ -444,8 +494,12 @@ export default class CodexSidebarPlugin extends Plugin
 		this.CaptureTimer = setTimeout(() =>
 		{
 			this.CaptureTimer = null;
-			void this.Capture.capture("选区").then(Snapshot =>
+			void this.Capture.capture("选区").then(async Snapshot =>
 			{
+				if(!Snapshot && this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading")
+				{
+					Snapshot = await this.Capture.capture("当前位置");
+				}
 				if(Snapshot && !this.Unloaded)
 				{
 					this.refresh();
@@ -502,6 +556,7 @@ export default class CodexSidebarPlugin extends Plugin
 			return;
 		}
 		this.Ribbon?.toggleClass("is-active", this.app.workspace.getLeavesOfType(ViewType).length > 0);
+		this.Study?.consume(this.Session.Messages);
 		for(const Leaf of this.app.workspace.getLeavesOfType(ViewType))
 		{
 			if(Leaf.view instanceof CodexView)
@@ -862,7 +917,7 @@ export default class CodexSidebarPlugin extends Plugin
 		await this.persist();
 	}
 
-	async send_message(Question: string, Context = this.State.Settings.AttachContext ? this.Capture.Snapshot : null, Quote: AnswerQuote | null = null): Promise<boolean>
+	async send_message(Question: string, Context = this.State.Settings.AttachContext ? this.Capture.Snapshot : null, Quote: AnswerQuote | null = null, Task: TaskSpec | null = null): Promise<boolean>
 	{
 		if(this.Busy || !Question.trim())
 		{
@@ -900,7 +955,21 @@ export default class CodexSidebarPlugin extends Plugin
 				this.refresh();
 				await this.persist();
 			}
-			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Question.trim(), Context: Context ? structuredClone(Context) : null, Quote: Quote ? structuredClone(Quote) : null, Prompt: build_prompt(Question.trim(), Context, Quote), ContextLabel: Quote ? "追问选中的回答 / 渲染选区 + 原回答 Markdown" : Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
+			const Prompt = Task ? task_prompt(Task) : build_prompt(Question.trim(), Context, Quote);
+			if(Prompt.length > 95000)
+			{
+				throw new Error("任务超过远程输入上限, 请缩小来源或已确认样章");
+			}
+			if(Task)
+			{
+				this.Study?.register_task(Task);
+			}
+			const PublicTask = Task ? structuredClone(Task) : undefined;
+			if(PublicTask?.Target)
+			{
+				PublicTask.Target.Before = null;
+			}
+			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Task ? question_label(Task) : Question.trim(), Context: Context ? structuredClone(Context) : null, Quote: Quote ? structuredClone(Quote) : null, Prompt, Task: PublicTask, ContextLabel: Quote ? "追问选中的回答 / 渲染选区 + 原回答 Markdown" : Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
 			this.Session.Messages.push(Message);
 			if(this.Session.Title === "新会话")
 			{
@@ -925,6 +994,7 @@ export default class CodexSidebarPlugin extends Plugin
 				this.TurnId = Result.turn.id;
 			}
 			await this.persist();
+			this.refresh();
 			return true;
 		}
 		catch(ErrorValue)
@@ -1053,7 +1123,14 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			await this.persist();
 			this.Busy = false;
-			return this.send_message(Text ?? Message.Text, Message.Context ?? null, Message.Quote ?? null);
+			const OriginalTask = this.Study?.Store.Data.Tasks.find(Value => Value.Spec.Id === Message.Task?.Id)?.Spec ?? Message.Task;
+			const Task = OriginalTask ? this.Study?.replay_task(OriginalTask, Text) ?? { ...structuredClone(OriginalTask), Id: crypto.randomUUID(), Request: Text ?? OriginalTask.Request } : null;
+			if(Task?.Target && !this.Study?.Store.Data.Tasks.some(Value => Value.Spec.Id === Message.Task?.Id))
+			{
+				new Notice("本设备没有原写回基线, 保留原任务仅作只读建议");
+				delete Task.Target;
+			}
+			return this.send_message(Text ?? Message.Text, Message.Context ?? null, Message.Quote ?? null, Task);
 		}
 		catch(ErrorValue)
 		{
@@ -1125,6 +1202,10 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			case "turn/started":
 				this.TurnId = Params.turn.id;
+				{
+					const User = this.Session.Messages.filter(Value => Value.Role === "user").at(-1);
+					if(User && !User.TurnId) { User.TurnId = Params.turn.id; }
+				}
 				this.Busy = true;
 				this.Activity = "思考中";
 				this.StartedAt = this.StartedAt || Date.now();
@@ -1162,6 +1243,7 @@ export default class CodexSidebarPlugin extends Plugin
 				if(Params.item.type === "agentMessage")
 				{
 					this.assistant_message(Params.item.id, Params.turnId).Text = Params.item.text;
+					this.assistant_message(Params.item.id, Params.turnId).Phase = ["commentary", "final_answer"].includes(Params.item.phase) ? Params.item.phase : null;
 				}
 				if(Params.item.type === "reasoning" && Params.item.summary?.length)
 				{
@@ -1193,6 +1275,10 @@ export default class CodexSidebarPlugin extends Plugin
 				}
 				break;
 			case "turn/completed":
+				for(const Reply of this.Session.Messages.filter(Value => Value.Role === "assistant" && Value.TurnId === Params.turn.id))
+				{
+					Reply.CompletionStatus = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "interrupted" : "failed";
+				}
 				this.CompletedTurns.add(Params.turn.id);
 				this.ApprovalItems.clear();
 				this.Busy = false;
@@ -1316,6 +1402,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			clearTimeout(this.CaptureTimer);
 		}
+		if(this.StudyVersionTimer) { clearTimeout(this.StudyVersionTimer); }
 		for(const ModalValue of this.Modals)
 		{
 			ModalValue.close();
@@ -1327,6 +1414,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 class CodexView extends ItemView
 {
+	private StudyPanel: StudyPanel | null = null;
 	private StatusElement!: HTMLElement;
 	private ContextElement!: HTMLElement;
 	private CompletionElement!: HTMLElement;
@@ -1396,6 +1484,24 @@ class CodexView extends ItemView
 		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
 		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
 		this.ContextElement = Root.createDiv({ cls: "codex-context" });
+		const StudyContainer = Root.createEl("details", { cls: "codex-study-container" });
+		StudyContainer.createEl("summary", { text: "数学学习工作台" });
+		if(this.Owner.Study)
+		{
+			this.StudyPanel = new StudyPanel(StudyContainer.createDiv(), {
+				App: this.app, Study: this.Owner.Study, busy: () => this.Owner.Busy,
+				current: () => this.Owner.Capture.Snapshot,
+				capture: async () =>
+				{
+					this.Owner.Capture.track_view();
+					return await this.Owner.Capture.capture("选区") ?? await this.Owner.Capture.capture("当前位置");
+				},
+				return_source: async Path =>
+				{
+					await this.app.workspace.openLinkText(Path, "", false);
+				}
+			});
+		}
 		this.CompletionElement = Root.createDiv({ cls: "codex-completion-proposal" });
 		this.MessagesElement = Root.createDiv({ cls: "codex-messages", attr: { role: "log" } });
 		accessible_name(this.MessagesElement, "Codex 对话");
@@ -1469,9 +1575,10 @@ class CodexView extends ItemView
 		const Body = ElementValue?.closest<HTMLElement>(".codex-assistant .codex-message-body");
 		const Card = Body?.closest<HTMLElement>(".codex-message");
 		const Message = this.Owner.Session.Messages.find(Value => Value.Id === Card?.dataset.messageId && Value.Role === "assistant");
-		this.SelectedAnswer = RangeValue && !RangeValue.collapsed && Body && this.MessagesElement.contains(Body) && Message && SelectionValue!.toString().trim()
+		this.SelectedAnswer = RangeValue && !RangeValue.collapsed && Body && !Body.dataset.studyStructured && this.MessagesElement.contains(Body) && Message && SelectionValue!.toString().trim()
 			? answer_quote(this.Owner.Session.Id, Message.Id, SelectionValue!.toString(), Message.Text) : null;
 		this.refresh_quote();
+		this.StudyPanel?.refresh();
 	}
 
 	private refresh_quote(): void
@@ -1633,6 +1740,7 @@ class CodexView extends ItemView
 		this.refresh_controls();
 		this.refresh_completion();
 		this.refresh_quote();
+		this.StudyPanel?.refresh();
 		this.SendButton.disabled = this.Owner.Busy;
 		this.StopButton.disabled = !this.Owner.Busy || !this.Owner.TurnId;
 		const Options = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
@@ -1726,19 +1834,20 @@ class CodexView extends ItemView
 					return;
 				}
 				const Card = this.MessagesElement.createDiv({ cls: `codex-message codex-${Message.Role}` });
+				const Structured = structured_task(Messages, Message);
 				Card.dataset.messageId = Message.Id;
 				const Header = Card.createDiv({ cls: "codex-message-label" });
 				Header.createSpan({ text: Message.Role === "user" ? "你" : Message.Role === "assistant" ? "Codex" : Message.Role === "reasoning" ? "思考摘要" : "状态" });
 				if(Message.Role === "assistant")
 				{
-					this.button(Header, "复制", () =>
+					this.button(Header, Structured ? "复制原始输出 (可能含答案)" : "复制", () =>
 					{
 						if(!navigator.clipboard?.writeText)
 						{
 							new Notice("当前环境无法访问剪贴板, 请选中文字后使用系统复制");
 							return;
 						}
-						void navigator.clipboard.writeText(Message.Text).catch(() => new Notice("复制失败, 请使用系统复制"));
+						void navigator.clipboard.writeText(Message.Text).then(() => { if(Structured) { this.Owner.Study?.reveal_raw(Structured); this.Owner.refresh(); } }).catch(() => new Notice("复制失败, 请使用系统复制"));
 					});
 				}
 				if(Message.Role === "user")
@@ -1786,13 +1895,23 @@ class CodexView extends ItemView
 					this.button(Actions, "取消", () => { this.EditingId = ""; this.refresh(); });
 					Body.createDiv({ cls: "codex-message-context", text: "将使用原消息上下文创建分支, 原会话保留." });
 				}
+				else if(Structured)
+				{
+					Body.dataset.studyStructured = "true";
+					Body.createEl("p", { text: Message.CompletionStatus === "completed" ? "工作台任务已回复. 练习、反馈或稿件在上方工作台中查看; 格式未通过时显示具体原因." : "正在生成工作台内容..." });
+					const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始输出 (可能包含全部提示和答案)" });
+					Raw.createEl("pre", { text: Message.Text });
+					Raw.addEventListener("toggle", () => { if(Raw.open) { this.Owner.Study?.reveal_raw(Structured); this.Owner.refresh(); } });
+				}
 				else if(Message.Role === "assistant" || Message.Role === "reasoning")
 				{
-					await MarkdownRenderer.render(this.app, Message.Text || "...", Body, this.Owner.Capture.LastView?.file?.path ?? "", RenderComponent);
+					const WorkTask = Messages.find(Value => Value.Role === "user" && Value.TurnId === Message.TurnId)?.Task;
+					if(WorkTask && !safe_math_markdown(Message.Text)) { Body.createEl("pre", { text: Message.Text }); }
+					else { await MarkdownRenderer.render(this.app, Message.Text || "...", Body, this.Owner.Capture.LastView?.file?.path ?? "", RenderComponent); }
 				}
 				else
 				{
-					Body.setText(Message.Text);
+					Body.setText(Message.Task ? question_label(Message.Task) : Message.Text);
 				}
 			}
 			this.LastRendered = Signature;
@@ -1840,6 +1959,7 @@ class CodexView extends ItemView
 
 	async onClose(): Promise<void>
 	{
+		this.StudyPanel?.close(); this.StudyPanel = null;
 		this.Opened = false;
 		this.Version++;
 		if(this.RenderTimer)

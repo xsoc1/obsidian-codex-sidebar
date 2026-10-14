@@ -76,6 +76,8 @@ export interface ContextSnapshot
 	Mapping: "源文本" | "源块" | "渲染文本";
 	CapturedAt: string;
 	Truncated: boolean;
+	Version?: string;
+	FocusLine?: number;
 }
 
 export interface AnswerQuote

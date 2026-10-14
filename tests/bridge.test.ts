@@ -69,7 +69,7 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 		assert.deepEqual(Catalog.data[0], { model: "model-a", displayName: "A", defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low", description: "" }], serviceTiers: [{ id: "priority", name: "Fast", description: "" }], additionalSpeedTiers: ["fast"], isDefault: true });
 		assert.equal(Catalog.nextCursor, null);
 		assert.ok(JSON.stringify(Catalog).length < 512);
-		const State = { Settings: { Model: "model-a" }, Sessions: [{ Id: "session-a", Messages: [{ Id: "q", Role: "user", Text: "private" }] }], ActiveId: "session-a" };
+		const State = { Settings: { Model: "model-a" }, Sessions: [{ Id: "session-a", Messages: [{ Id: "q", Role: "user", Text: "private", Prompt: "question", Task: { Id: "task-source", Source: { Path: "client-only.md", Text: "$x$", Mapping: "源块", CapturedAt: "original" } } }] }], ActiveId: "session-a" };
 		const Saved = await Http(0, "/state", { state: State, cursor: 0 });
 		assert.equal(Saved.status, 200);
 		assert.deepEqual(Saved.body, { cursor: 0 });
@@ -88,6 +88,7 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 		await Rpc(0, "turn/start", Params, Id); await Rpc(0, "turn/start", Params, Id);
 		const Turns = Peers[0].calls.filter(Value => Value.Method === "turn/start");
 		assert.equal(Turns.length, 1); assert.equal(Turns[0].Params.input[1].path, Skill);
+		assert.equal((await Http(0, "/state")).body.state.Sessions[0].Messages[0].TurnId, "turn-1");
 		const Resumed = await Rpc(0, "bridge/resume", { threadId: Thread.body.thread.id });
 		assert.equal(Resumed.body.thread.turns[0].status, "inProgress");
 		assert.ok(!Peers[0].calls.some(Value => Value.Method === "thread/read"));
@@ -99,12 +100,16 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 		await Rpc(0, "bridge/completion/cancel", { job: "cancel-before-arrival" });
 		assert.equal((await Rpc(0, "bridge/completion", { job: "cancel-before-arrival" })).status, 400);
 		Peers[0].emit({ method: "item/agentMessage/delta", params: { threadId: Thread.body.thread.id, turnId: "turn-1", itemId: "reply", delta: "partial" } });
-		Peers[0].emit({ method: "item/completed", params: { threadId: Thread.body.thread.id, turnId: "turn-1", item: { id: "reply", type: "agentMessage", text: "completed while offline" } } });
+		Peers[0].emit({ method: "item/completed", params: { threadId: Thread.body.thread.id, turnId: "turn-1", item: { id: "reply", type: "agentMessage", phase: "final_answer", text: "completed while offline" } } });
 		Peers[0].emit({ method: "item/reasoning/summaryTextDelta", params: { threadId: Thread.body.thread.id, turnId: "turn-1", itemId: "summary", summaryIndex: 0, delta: "actual summary" } });
 		Peers[0].emit({ method: "turn/completed", params: { threadId: Thread.body.thread.id, turn: { id: "turn-1", status: "completed" } } });
 		await Http(0, "/state", { state: State, cursor: 0 });
 		const Restored = (await Http(0, "/state")).body.state.Sessions[0].Messages;
 		assert.equal(Restored.find((Value: any) => Value.Id === "reply").Text, "completed while offline");
+		assert.equal(Restored.find((Value: any) => Value.Id === "reply").Phase, "final_answer");
+		assert.equal(Restored.find((Value: any) => Value.Id === "reply").CompletionStatus, "completed");
+		assert.equal(Restored.find((Value: any) => Value.Id === "q").TurnId, "turn-1");
+		assert.equal(Restored.find((Value: any) => Value.Id === "q").Task.Source.Path, "client-only.md");
 		assert.equal(Restored.find((Value: any) => Value.Id === "summary").Text, "actual summary");
 		assert.equal((await Rpc(0, "bridge/resume", { threadId: Thread.body.thread.id })).body.thread.turns[0].status, "completed");
 		assert.equal((await Http(1, "/events?after=0")).body.events.length, 0);

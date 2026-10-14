@@ -9,6 +9,7 @@ import { run_options, type ModelInfo } from "./controls";
 import { editing_instructions, environment_instructions } from "./prompt";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcConnection } from "./remote";
+import { skill_version } from "./desktop";
 
 export interface BridgeConfig
 {
@@ -155,6 +156,23 @@ class DeviceAgent
 			if(Value.method === "turn/started" || Value.method === "turn/completed")
 			{
 				Thread.Turn = { id: Params.turn.id, status: Params.turn.status, items: [] };
+				if(Value.method === "turn/completed")
+				{
+					for(const Stored of this.Messages.values())
+					{
+						if(Stored.Session === Thread.Session && Stored.Message.TurnId === Params.turn.id)
+						{
+							Stored.Message.CompletionStatus = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "interrupted" : "failed";
+							Stored.Seq = this.Seq;
+							const Session = this.State?.Sessions?.find((Entry: any) => Entry.Id === Thread.Session);
+							const Message = Session?.Messages.find((Entry: any) => Entry.Id === Stored.Message.Id);
+							if(Message)
+							{
+								Message.CompletionStatus = Stored.Message.CompletionStatus;
+							}
+						}
+					}
+				}
 			}
 			if(Value.method === "thread/settings/updated")
 			{
@@ -167,10 +185,11 @@ class DeviceAgent
 				const Id = Params.itemId ?? Params.item.id;
 				const Previous = this.Messages.get(Id)?.Message;
 				const Reasoning = Value.method === "item/reasoning/summaryTextDelta" || Params.item?.type === "reasoning";
-				const Message = { Id, TurnId: Params.turnId, Role: Reasoning ? "reasoning" : "assistant", Text: Previous?.Text ?? "", SummaryParts: Previous?.SummaryParts as string[] | undefined };
+				const Message = { Id, TurnId: Params.turnId, Role: Reasoning ? "reasoning" : "assistant", Text: Previous?.Text ?? "", SummaryParts: Previous?.SummaryParts as string[] | undefined, Phase: Previous?.Phase ?? null };
 				if(Value.method === "item/completed")
 				{
 					Message.Text = Reasoning ? (Params.item.summary ?? []).join("\n\n") : Params.item.text;
+					if(!Reasoning) { Message.Phase = ["commentary", "final_answer"].includes(Params.item.phase) ? Params.item.phase : null; }
 				}
 				else if(Reasoning)
 				{
@@ -266,7 +285,7 @@ class DeviceAgent
 	async info(): Promise<any>
 	{
 		await this.ready();
-		return { client: this.Id, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true };
+		return { client: this.Id, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
 	}
 
 	events(After: number): any
@@ -417,6 +436,14 @@ class DeviceAgent
 			const Options = run_options({ Model: Params.model, Effort: Params.effort, Fast: Params.serviceTier === "priority" }, this.Models);
 			const Result = await Connection.request(Method, { threadId: Id, input: skill_input(Text, await this.skill()), ...Options });
 			const Thread = this.Threads.get(Id)!;
+			const Session = this.State?.Sessions?.find((Entry: any) => Entry.Id === Thread.Session);
+			const User = Session?.Messages.filter((Entry: any) => Entry.Role === "user").at(-1);
+			if(User && !User.TurnId && User.Prompt === Text)
+			{
+				User.TurnId = Result.turn.id;
+				this.Messages.set(User.Id, { Session: Thread.Session, Message: structuredClone(User), Seq: this.Seq + 1 });
+				this.save();
+			}
 			Thread.Options.model = Options.model;
 			Thread.Options.reasoningEffort = Options.effort;
 			Thread.Options.serviceTier = Options.serviceTier;

@@ -4,6 +4,8 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
+当前 `codex/study-workbench` 为 **0.7.0 未发布开发版**: 在原侧栏中新增伴读、固定快照、一题一练/提示/反馈、设备本地学习记录、样章审核与确认式单文件写回, 以及主动复习和 Markdown/LaTeX 源码导出. 复用原聊天与远程桥, Codex 仍只读. 使用 [原创示范课程](examples/study/demo.study.json), 详见 [使用/迁移/回退](docs/study-workbench.md)、[协议与技能](docs/study-protocol.md)、[真实验证记录](docs/study-validation.md). 本轮未推送、发布、更新日常安装或真实课程笔记; 下面的 0.6.2 是此前发布状态.
+
 0.6.2 包含移动入口与私有 HTTPS 远程桥. 每个配对设备使用独立隐藏进程、临时线程和会话记录, 与桌面本地聊天分开. 用户已确认 iPad 模型列表显示并收到实际短问题的完整回答, 前台基础对话通过真机验收. Windows 原生插件的远程对话、math-writing、补全、重连续聊与断线恢复另有验证; iPad 触控选区、补全、中文输入和后台恢复等仍待实测. 安装及连接步骤见 [iPad 初版使用指南](docs/ipad-setup.md), 迁移依据见 [可行性调研](docs/ipad-support-research.md).
 
 ## 使用

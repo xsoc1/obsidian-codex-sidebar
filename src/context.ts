@@ -1,5 +1,6 @@
 import { MarkdownView, type MarkdownPostProcessorContext, type App } from "obsidian";
 import { bound_text, heading_at, source_excerpt, type ContextSnapshot } from "./prompt";
+import { version_of } from "./study/document";
 
 export class ContextCapture
 {
@@ -40,10 +41,12 @@ export class ContextCapture
 		}
 		const Path = View.file.path;
 		const Source = View.getViewData();
+		let VersionSource = Source;
 		let Text = "";
 		let SelectedText = "";
 		let Start: number | null = null;
 		let End: number | null = null;
+		let FocusLine: number | undefined;
 		let Mapping: ContextSnapshot["Mapping"] = "源文本";
 		const Mode = View.getMode() === "preview" ? "阅读" : "编辑";
 		let ContextPath = Path;
@@ -57,6 +60,7 @@ export class ContextCapture
 			}
 			const From = Editor.getCursor(Kind === "选区" ? "from" : "head");
 			const To = Editor.getCursor(Kind === "选区" ? "to" : "head");
+			FocusLine = From.line;
 			Start = Math.max(0, From.line - 5);
 			End = Math.min(Editor.lineCount() - 1, To.line + 5);
 			Text = source_excerpt(Source, Start, End);
@@ -100,6 +104,7 @@ export class ContextCapture
 				const ContextSource = ContextPath === Path ? Source : ContextFile ? await this.App.vault.cachedRead(ContextFile) : null;
 				if(ContextSource !== null)
 				{
+					VersionSource = ContextSource;
 					Text = source_excerpt(ContextSource, Start, End);
 					Mapping = "源块";
 				}
@@ -134,7 +139,9 @@ export class ContextCapture
 			Heading: Start === null ? "" : heading_at(Headings, Start),
 			Mapping,
 			CapturedAt: new Date().toISOString(),
-			Truncated: Bounded.Truncated || SelectedText.length > 12000
+			Truncated: Bounded.Truncated || SelectedText.length > 12000,
+			Version: await version_of(VersionSource),
+			FocusLine: FocusLine ?? Start ?? undefined
 		};
 		return this.Snapshot;
 	}
