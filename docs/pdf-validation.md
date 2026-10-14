@@ -15,4 +15,10 @@
 
 原生 PDF.js/canvas/cache是真实运行; 页码 DOM定位使用 fixture, 显式文件/页码是兼容入口. 未在原生 PDF 阅读器实际点击侧栏完成整条流程; 未做 iPad PDF 真机、中文 PDF 字形/识别、触控跨页选区、实时批注、多阅读器插件、所有字体/加密文件的全覆盖验收. 既有 iPad 热点短问答不能代替新增 PDF 验收. 模型和格式验证不认证数学证明、OCR 精度或学习效果.
 
-发布资产及正常服务部署结果在完成后补记, 不能从本地构建推定已上线.
+## 发布与部署回读
+
+代码/tag 0.8.0 固定在 6eec9f84d13ba3aa3b9de0ff12ad48739a06291a, 与 codex/initial 原子推送. [Actions 38587559640](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38587559640) 的 install/build/test/package/publish 步骤全部 success. 公共 API 回读仓库仍公开、默认分支 codex/initial, [release 0.8.0](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.8.0) 非 draft、prerelease=true, manifest 0.8.0 且移动安全.
+
+六个实际下载资产 SHA-256 都与 GitHub digest 相同. main.js/map/manifest/styles 与当前本地构建逐字节一致. 插件 ZIP 只有这四个文件且各自一致, SHA-256 为 04cea1c09f9cbe776c8e448e734fb53ed3a689b8d8c7ff50d1fb5b67ebca3fc8. 桥 ZIP 只有 bridge.cjs、两份管理脚本和公共 README, 均与本地一致; SHA-256 为 b9ccaf6c688e2be9484c8d66226b141b8175a72839b3978782543f9adc4c77c6. Windows 两种下载客户端出现 TLS/EOF, 改用 Node 的正常证书校验 fetch 完成回读, 未修改全局网络/证书设置.
+
+核对原正常桥的 executable/argv/归属和会话文件未新增改动后, 用现有 helpers 隐藏重启为 0.8.0. loopback 无密钥 /info 仍 401, 没有放宽认证; 不改配对/Tailscale 路由, 会话文件启动前后哈希相同, 日常旧 sidebar 主文件哈希仍相同. CLI 在下次已配对客户端连接时按原方式独立启动. 升级正常桥后的真实配对请求/iPad PDF 仍待用户重连, 不能用临时桥测试代替.

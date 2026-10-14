@@ -4,7 +4,7 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-[下载 0.8.0 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.8.0).
+[下载 0.8.0 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.8.0), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38587559640).
 
 **0.8.0** 支持文字 PDF 和扫描/照片 PDF. 使用“捕获当前位置”“解释选区”或“PDF 页...”指定一到两页, 在原侧栏提问与派生练习. 文字层与页图快照保留原页码/时间, 图像单独缓存, 重发和重连不换页; PDF 始终只读. iPad 需要 Windows 桥同升 0.8.0. 详见 [使用与迁移](docs/pdf-support.md)、[验证记录](docs/pdf-validation.md) 和 [发布说明](docs/releases/0.8.0.md). 原生 Windows 离屏捕获与真实 Codex 图像请求分别验证; iPad PDF 真机验收仍待进行.
 
