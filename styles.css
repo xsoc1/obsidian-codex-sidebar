@@ -83,6 +83,32 @@
 .is-mobile .codex-sidebar { padding-bottom: max(16px, env(safe-area-inset-bottom)) !important; }
 .is-mobile .codex-sidebar button { min-height: 36px; }
 .is-mobile .codex-composer textarea { min-height: 72px; }
+.is-mobile .codex-sidebar
+{
+	gap: 6px;
+	overflow-y: auto;
+	overscroll-behavior-y: contain;
+}
+.is-mobile .codex-sidebar > :not(.codex-messages) { flex-shrink: 0; }
+.is-mobile .codex-messages { min-height: 160px; }
+.codex-context-tools, .codex-options { flex: 0 0 auto; }
+.codex-context-tools > summary, .codex-options > summary
+{
+	cursor: pointer;
+	padding: 6px 0;
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.codex-context-tools .codex-context { margin-top: 6px; }
+.is-mobile .codex-context-tools[open] { max-height: 45%; overflow-y: auto; }
+.codex-options .codex-panel-body { padding: 6px 0; }
+@media (max-height: 600px)
+{
+	.is-mobile .codex-messages { min-height: 96px; }
+	.is-mobile .codex-composer textarea { min-height: 64px; }
+}
 .codex-activity {
 	display: flex;
 	align-items: center;

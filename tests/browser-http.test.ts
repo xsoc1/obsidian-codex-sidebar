@@ -28,7 +28,7 @@ test("a stalled upload is aborted once and never retried", async () =>
 		{
 			Params!.signal!.addEventListener("abort", () => { Aborted = true; Reject(new Error("aborted")); }, { once: true });
 		});
-	}), /请求超时.*不会自动重发/);
+	}), /请求超时.*等待响应头.*不会自动重发/);
 	assert.equal(Calls, 1);
 	assert.equal(Aborted, true);
 });
@@ -43,5 +43,22 @@ test("the timeout covers response-body reading as well as response headers", asy
 			Params!.signal!.addEventListener("abort", () => Reject(new Error("aborted body")), { once: true });
 		});
 		return ResponseValue;
-	}), /请求超时/);
+	}), /请求超时.*读取响应正文/);
+});
+
+test("a webview that ignores AbortSignal still reaches the deadline and late body data cannot become a successful reply", async () =>
+{
+	let ResolveBody!: (Value: unknown) => void;
+	let Calls = 0;
+	const Pending = browser_http({ url: "https://example.test/info", method: "GET", headers: {}, timeout: 10 }, async () =>
+	{
+		Calls++;
+		const ResponseValue = new Response("{}");
+		ResponseValue.json = () => new Promise(Resolve => { ResolveBody = Resolve; });
+		return ResponseValue;
+	});
+	await assert.rejects(Pending, /请求超时.*读取响应正文/);
+	ResolveBody({ late: true });
+	await assert.rejects(Pending, /请求超时/);
+	assert.equal(Calls, 1);
 });

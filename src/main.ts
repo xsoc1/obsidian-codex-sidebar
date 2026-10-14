@@ -8,10 +8,12 @@ import { answer_quote } from "./quote";
 import { branch_prefix, history_items, type ChatMessage } from "./history";
 import type { CompletionService, CompletionInput } from "./completion";
 import { InlineCompletions } from "./inline";
+import { sidebar_panel } from "./sidebar-layout";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcMessage } from "./rpc";
 import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } from "./remote";
 import { browser_http } from "./browser-http";
+import { native_http } from "./native-http";
 import { math_writing_skill, skill_input, type SkillInput } from "./skills";
 import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo, type TokenUsage } from "./controls";
 import { StudyStore } from "./study/store";
@@ -345,8 +347,11 @@ export default class CodexSidebarPlugin extends Plugin
 		try
 		{
 			const Params = { url: Url + Path, method: Method, headers: { Authorization: `Bearer ${this.Remote.Token.trim()}`, "Content-Type": "application/json" }, ...(Body === undefined ? {} : { body: JSON.stringify(Body) }) };
+			const Timeout = Operation === "bridge/completion" ? 120000 : 30000;
 			const Response = Platform.isMobileApp
-				? await browser_http({ ...Params, timeout: Operation === "bridge/completion" ? 120000 : 30000 })
+				? this.Remote.Transport === "native"
+					? await native_http(Params, Value => requestUrl({ ...Value, throw: false }), Timeout)
+					: await browser_http({ ...Params, timeout: Timeout })
 				: await requestUrl({ ...Params, throw: false });
 			const Value = Response.json;
 			if(Response.status !== 200)
@@ -621,8 +626,9 @@ export default class CodexSidebarPlugin extends Plugin
 		await this.persist();
 	}
 
-	async configure_remote(Url: string, Token: string): Promise<void>
+	async configure_remote(Url: string, Token: string, Transport = this.Remote.Transport ?? "browser"): Promise<void>
 	{
+		if(Transport !== "browser" && Transport !== "native") { throw new Error("未知网络传输方式"); }
 		remote_url(Url);
 		if(this.Busy)
 		{
@@ -638,6 +644,7 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		this.Remote.Url = Url;
 		this.Remote.Token = Token;
+		this.Remote.Transport = Transport;
 		this.save_remote_config();
 		await this.set_remote_mode(true);
 		await this.ensure_thread();
@@ -1414,6 +1421,8 @@ export default class CodexSidebarPlugin extends Plugin
 
 class CodexView extends ItemView
 {
+	private ContextSummary: HTMLElement | null = null;
+	private OptionsSummary: HTMLElement | null = null;
 	private StudyPanel: StudyPanel | null = null;
 	private StatusElement!: HTMLElement;
 	private ContextElement!: HTMLElement;
@@ -1471,6 +1480,7 @@ class CodexView extends ItemView
 		const Root = this.contentEl;
 		Root.empty();
 		Root.addClass("codex-sidebar");
+		const Mobile = Platform.isMobile || Root.ownerDocument.body.classList.contains("is-mobile");
 		const Header = Root.createDiv({ cls: "codex-header" });
 		Header.createEl("strong", { text: "Codex" });
 		this.button(Header, "新会话", () => void this.Owner.choose_session());
@@ -1479,12 +1489,14 @@ class CodexView extends ItemView
 		accessible_name(this.SessionsElement, "Codex 会话");
 		this.SessionsElement.addEventListener("change", () => void this.Owner.choose_session(this.SessionsElement.value));
 		this.StatusElement = Root.createDiv({ cls: "codex-status" });
-		const ContextBar = Root.createDiv({ cls: "codex-context-actions" });
+		const ContextPanel = sidebar_panel(Root, "codex-context-tools", "上下文与学习", Mobile);
+		this.ContextSummary = ContextPanel.Summary;
+		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
 		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
 		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
 		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
-		this.ContextElement = Root.createDiv({ cls: "codex-context" });
-		const StudyContainer = Root.createEl("details", { cls: "codex-study-container" });
+		this.ContextElement = ContextPanel.Body.createDiv({ cls: "codex-context" });
+		const StudyContainer = ContextPanel.Body.createEl("details", { cls: "codex-study-container" });
 		StudyContainer.createEl("summary", { text: "数学学习工作台" });
 		if(this.Owner.Study)
 		{
@@ -1510,14 +1522,16 @@ class CodexView extends ItemView
 		this.ActivityLabel = this.ActivityElement.createSpan();
 		const Composer = Root.createDiv({ cls: "codex-composer" });
 		this.QuoteElement = Composer.createDiv({ cls: "codex-answer-quote" });
-		const Controls = Composer.createDiv({ cls: "codex-controls" });
+		const OptionsPanel = sidebar_panel(Composer, "codex-options", "模型与选项", Mobile);
+		this.OptionsSummary = OptionsPanel.Summary;
+		const Controls = OptionsPanel.Body.createDiv({ cls: "codex-controls" });
 		const ModelLabel = Controls.createEl("label");
 		ModelLabel.createSpan({ text: "模型" });
 		this.ModelElement = ModelLabel.createEl("select");
 		const EffortLabel = Controls.createEl("label");
 		EffortLabel.createSpan({ text: "思考档次" });
 		this.EffortElement = EffortLabel.createEl("select");
-		const Toggles = Composer.createDiv({ cls: "codex-run-toggles" });
+		const Toggles = OptionsPanel.Body.createDiv({ cls: "codex-run-toggles" });
 		const FastLabel = Toggles.createEl("label");
 		this.FastElement = FastLabel.createEl("input", { type: "checkbox" });
 		FastLabel.createSpan({ text: "Fast" });
@@ -1539,7 +1553,7 @@ class CodexView extends ItemView
 			void this.Owner.persist();
 		});
 		this.CatalogElement = Composer.createDiv({ cls: "codex-catalog-status" });
-		this.UsageElement = Composer.createDiv({ cls: "codex-usage" });
+		this.UsageElement = OptionsPanel.Body.createDiv({ cls: "codex-usage" });
 		this.Input = Composer.createEl("textarea", { attr: { placeholder: "随时提问... Enter 发送, Shift+Enter 换行" } });
 		accessible_name(this.Input, "向 Codex 提问");
 		this.Input.addEventListener("keydown", Event =>
@@ -1653,6 +1667,7 @@ class CodexView extends ItemView
 	{
 		const Settings = this.Owner.State.Settings;
 		const Selected = selected_model(Settings, this.Owner.Models);
+		this.OptionsSummary?.setText(`模型与选项 · ${[Settings.Model || "加载中", Settings.Effort, Settings.Fast ? "Fast" : ""].filter(Boolean).join(" / ")}`);
 		const ModelOptions = this.Owner.Models.map(Value => ({ Value: Value.model, Label: Value.displayName }));
 		if(Settings.Model && !ModelOptions.some(Value => Value.Value === Settings.Model))
 		{
@@ -1757,6 +1772,7 @@ class CodexView extends ItemView
 		this.SessionsElement.disabled = this.Owner.Busy;
 		this.ContextElement.empty();
 		const Snapshot = this.Owner.Capture.Snapshot;
+		this.ContextSummary?.setText(Snapshot ? `上下文与学习 · ${Snapshot.Kind}${Snapshot.Truncated ? " (已截断)" : ""}` : "上下文与学习");
 		if(Snapshot)
 		{
 			const Label = this.ContextElement.createEl("label", { cls: "codex-context-label" });
@@ -2006,18 +2022,23 @@ class CodexSettings extends PluginSettingTab
 		}));
 		let RemoteUrl = this.Owner.Remote.Url;
 		let RemoteToken = this.Owner.Remote.Token;
+		let RemoteTransport = this.Owner.Remote.Transport ?? "browser";
 		new Setting(this.containerEl).setName("远程服务地址").setDesc("填写电脑私有 HTTPS 地址. 地址与密钥只保存在此设备, 不写入同步的桌面设置.").addText(Value => Value.setValue(RemoteUrl).setPlaceholder("https://电脑地址:8445").onChange(Text => { RemoteUrl = Text.trim(); }));
 		new Setting(this.containerEl).setName("配对密钥").addText(Value =>
 		{
 			Value.inputEl.type = "password";
 			Value.setValue(RemoteToken).onChange(Text => { RemoteToken = Text.trim(); });
 		});
+		if(Platform.isMobileApp)
+		{
+			new Setting(this.containerEl).setName("移动网络传输").setDesc("浏览器请求超时时可手动切换原生请求, 绕过网页 CORS 预检. 两种方式都不自动重发; 原生请求超时后可能仍在服务端进行.").addDropdown(Value => Value.addOption("browser", "浏览器 Fetch").addOption("native", "Obsidian 原生请求").setValue(RemoteTransport).onChange(Text => { RemoteTransport = Text as "browser" | "native"; }));
+		}
 		new Setting(this.containerEl).setName("连接独立远程 Agent").addButton(Button => Button.setButtonText("保存并连接").onClick(async () =>
 		{
 			Button.setDisabled(true).setButtonText("连接中...");
 			try
 			{
-				await this.Owner.configure_remote(RemoteUrl, RemoteToken);
+				await this.Owner.configure_remote(RemoteUrl, RemoteToken, RemoteTransport);
 				new Notice("独立远程会话已连接");
 				this.display();
 			}

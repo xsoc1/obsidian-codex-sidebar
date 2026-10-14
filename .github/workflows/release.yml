@@ -1,0 +1,51 @@
+name: Build and publish plugin
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: Package only public build files
+        shell: bash
+        run: |
+          VERSION=$(node -p 'require("./manifest.json").version')
+          test "$VERSION" = "$GITHUB_REF_NAME"
+          test "$VERSION" = "$(node -p 'require("./package.json").version')"
+          mkdir -p dist/plugin dist/bridge/scripts
+          cp manifest.json main.js main.js.map styles.css dist/plugin/
+          cp bridge.cjs dist/bridge/
+          cp scripts/start-bridge.ps1 scripts/stop-bridge.ps1 dist/bridge/scripts/
+          cp docs/ipad-setup.md dist/bridge/README.md
+          (cd dist/plugin && zip -q "../codex-sidebar-${VERSION}.zip" *)
+          (cd dist/bridge && zip -qr "../codex-sidebar-windows-bridge-${VERSION}.zip" .)
+      - name: Publish complete prerelease assets for BRAT
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          VERSION="$GITHUB_REF_NAME"
+          gh release create "$VERSION" manifest.json main.js main.js.map styles.css \
+            "dist/codex-sidebar-${VERSION}.zip" "dist/codex-sidebar-windows-bridge-${VERSION}.zip" \
+            --verify-tag --draft --prerelease --title "$VERSION - Math study workbench and compact iPad chat" \
+            --notes-file "docs/releases/${VERSION}.md"
+          gh release edit "$VERSION" --draft=false

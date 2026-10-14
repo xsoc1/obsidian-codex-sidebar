@@ -68,10 +68,12 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 	}
 	const Export = { exports: {} as any };
 	const Define = () => ({});
+	let BrowserRequests = 0;
 	runInNewContext(readFileSync(process.env.CODEX_SIDEBAR_TEST_BUNDLE ?? "main.js", "utf8"), {
 		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
 		fetch: async (Url: string, Params: any) =>
 		{
+			BrowserRequests++;
 			const Response = await Http?.({ ...Params, url: Url });
 			return { status: Response.status, json: async () => Response.json };
 		},
@@ -95,7 +97,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 		}
 	});
 	const Instance = new Export.exports.default(); await Instance.onload();
-	return { Instance, Files, Required };
+	return { Instance, Files, Required, Local, browser_requests: () => BrowserRequests };
 }
 
 function bootstrap_http(Before?: (Params: any) => Promise<void>)
@@ -141,6 +143,21 @@ function bootstrap_http(Before?: (Params: any) => Promise<void>)
 		return { status: 200, json: Value };
 	};
 }
+
+test("mobile native transport selection is device-local and reaches the same remote bootstrap without browser fetch", async () =>
+{
+	const Fixture = await mobile_fixture(bootstrap_http());
+	const { Instance, Local, Required } = Fixture;
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture"; Instance.Remote.Transport = "native";
+	Instance.save_remote_config();
+	await Instance.ensure_connection();
+	assert.equal(Instance.Models.length, 1);
+	assert.equal(Fixture.browser_requests(), 0);
+	assert.equal(JSON.parse(Local.get("codex-sidebar-remote:test")!).Transport, "native");
+	assert.equal("Transport" in Instance.State.Settings, false);
+	assert.ok(!Required.some(Value => Value.startsWith("node:") || Value === "electron"));
+	Instance.onunload();
+});
 
 test("built mobile entry loads and initializes without Node, Electron or desktop adapter calls", async () =>
 {

@@ -8,6 +8,7 @@ export interface RemoteConfig
 	Cursor: number;
 	Server: string;
 	CacheId?: string;
+	Transport?: "browser" | "native";
 }
 
 export interface RpcConnection
