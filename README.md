@@ -4,11 +4,13 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-[下载 0.7.0 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.7.0), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38516859898).
+[下载 0.7.1 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.7.1), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions).
+
+**0.7.1** 增加“会话与连接”和“提问与发送”折叠区. 移动端的四个控制区都默认收起, 会话导航、新会话/重连、输入框及发送/停止按钮按需展开. 收起保留当前草稿和选择; 标签标出“有草稿”, 点击回答的“追问这段”自动展开输入框. 状态、思考提示、网络错误与按需出现的引用卡保持可见. 桌面布局继续展开, 原生 Tab 与输入法处理保留. 这是布局更新, 可继续连接现有 0.7.0 Windows 桥. 详见 [发布说明](docs/releases/0.7.1.md); 新布局仍待 iPad 真机验收.
 
 **0.7.0 整合实验版**在原侧栏中新增伴读、固定快照、一题一练/提示/反馈、设备本地学习记录、样章审核与确认式单文件写回, 以及主动复习和 Markdown/LaTeX 源码导出. 复用原聊天与远程桥, Codex 仍只读. 使用 [原创示范课程](examples/study/demo.study.json), 详见 [使用/迁移/回退](docs/study-workbench.md)、[协议与技能](docs/study-protocol.md)、[真实验证记录](docs/study-validation.md) 和 [发布说明](docs/releases/0.7.0.md). 通过 GitHub prerelease 提供给 BRAT; 新版 iPad 工作台和布局尚待真机验收. 下文 0.6.2 是此前基础对话的验收记录.
 
-iPad 默认收起“上下文与学习”和“模型与选项”, 为回答留出更多高度; 点开后保留原控件及选择. 学习工作台位于“上下文与学习”内. 若浏览器 Fetch 继续超时, 可在插件设置将“移动网络传输”改为“Obsidian 原生请求”, 然后保存并连接. 方式仅保存在当前设备, 不自动切换或重发. 原生请求超时后底层可能仍在进行, 先重连确认状态再决定后续操作.
+iPad 默认收起“会话与连接”“上下文与学习”“模型与选项”和“提问与发送”, 为回答留出更多高度; 点开后保留原控件及选择. 学习工作台位于“上下文与学习”内, 写问题或停止回答请展开“提问与发送”. 若浏览器 Fetch 继续超时, 可在插件设置将“移动网络传输”改为“Obsidian 原生请求”, 然后保存并连接. 方式仅保存在当前设备, 不自动切换或重发. 原生请求超时后底层可能仍在进行, 先重连确认状态再决定后续操作.
 
 0.6.2 包含移动入口与私有 HTTPS 远程桥. 每个配对设备使用独立隐藏进程、临时线程和会话记录, 与桌面本地聊天分开. 用户已确认 iPad 模型列表显示并收到实际短问题的完整回答, 前台基础对话通过真机验收. Windows 原生插件的远程对话、math-writing、补全、重连续聊与断线恢复另有验证; iPad 触控选区、补全、中文输入和后台恢复等仍待实测. 安装及连接步骤见 [iPad 使用指南](docs/ipad-setup.md), 迁移依据见 [可行性调研](docs/ipad-support-research.md). 新一次连接失败应按指南检查当前 iPad 路径; Safari 同样很慢时, 不能仅凭电脑端接口快速返回就认定已恢复.
 

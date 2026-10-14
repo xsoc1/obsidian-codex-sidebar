@@ -88,7 +88,7 @@ class DeviceAgent
 				this.Connection = null; this.Ready = null; this.Threads.clear();
 				this.event({ method: "bridge/disconnected", params: { message: ErrorValue.message } });
 			});
-			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: "0.7.0" }, capabilities: { experimentalApi: true } });
+			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: "0.7.1" }, capabilities: { experimentalApi: true } });
 			this.Connection.send({ method: "initialized", params: {} });
 			let Cursor: string | null = null;
 			this.Models = [];
@@ -285,7 +285,7 @@ class DeviceAgent
 	async info(): Promise<any>
 	{
 		await this.ready();
-		return { client: this.Id, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, bridgeVersion: "0.7.0", mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
+		return { client: this.Id, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, bridgeVersion: "0.7.1", mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
 	}
 
 	events(After: number): any

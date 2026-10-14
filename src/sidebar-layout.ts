@@ -2,11 +2,12 @@ export interface SidebarPanel
 {
 	Body: HTMLElement;
 	Summary: HTMLElement | null;
+	Details: HTMLDetailsElement | null;
 }
 
 export function sidebar_panel(Parent: HTMLElement, ClassName: string, Label: string, Mobile: boolean): SidebarPanel
 {
-	if(!Mobile) { return { Body: Parent, Summary: null }; }
+	if(!Mobile) { return { Body: Parent, Summary: null, Details: null }; }
 	const Details = Parent.ownerDocument.createElement("details");
 	Details.className = ClassName;
 	const Summary = Parent.ownerDocument.createElement("summary");
@@ -16,5 +17,10 @@ export function sidebar_panel(Parent: HTMLElement, ClassName: string, Label: str
 	Body.className = "codex-panel-body";
 	Details.appendChild(Body);
 	Parent.appendChild(Details);
-	return { Body, Summary };
+	return { Body, Summary, Details };
+}
+
+export function reveal_sidebar_panel(Panel: SidebarPanel | null): void
+{
+	if(Panel?.Details) { Panel.Details.open = true; }
 }

@@ -91,8 +91,8 @@
 }
 .is-mobile .codex-sidebar > :not(.codex-messages) { flex-shrink: 0; }
 .is-mobile .codex-messages { min-height: 160px; }
-.codex-context-tools, .codex-options { flex: 0 0 auto; }
-.codex-context-tools > summary, .codex-options > summary
+.codex-navigation, .codex-context-tools, .codex-options, .codex-send-tools { flex: 0 0 auto; }
+.codex-navigation > summary, .codex-context-tools > summary, .codex-options > summary, .codex-send-tools > summary
 {
 	cursor: pointer;
 	padding: 6px 0;
@@ -103,7 +103,8 @@
 }
 .codex-context-tools .codex-context { margin-top: 6px; }
 .is-mobile .codex-context-tools[open] { max-height: 45%; overflow-y: auto; }
-.codex-options .codex-panel-body { padding: 6px 0; }
+.codex-navigation > .codex-panel-body, .codex-options > .codex-panel-body, .codex-send-tools > .codex-panel-body { padding: 6px 0; }
+.codex-navigation .codex-sessions { margin-top: 6px; }
 @media (max-height: 600px)
 {
 	.is-mobile .codex-messages { min-height: 96px; }

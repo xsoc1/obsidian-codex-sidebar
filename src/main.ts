@@ -8,7 +8,7 @@ import { answer_quote } from "./quote";
 import { branch_prefix, history_items, type ChatMessage } from "./history";
 import type { CompletionService, CompletionInput } from "./completion";
 import { InlineCompletions } from "./inline";
-import { sidebar_panel } from "./sidebar-layout";
+import { sidebar_panel, reveal_sidebar_panel, type SidebarPanel } from "./sidebar-layout";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcMessage } from "./rpc";
 import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } from "./remote";
@@ -1421,6 +1421,8 @@ export default class CodexSidebarPlugin extends Plugin
 
 class CodexView extends ItemView
 {
+	private NavigationSummary: HTMLElement | null = null;
+	private ComposePanel: SidebarPanel | null = null;
 	private ContextSummary: HTMLElement | null = null;
 	private OptionsSummary: HTMLElement | null = null;
 	private StudyPanel: StudyPanel | null = null;
@@ -1481,11 +1483,13 @@ class CodexView extends ItemView
 		Root.empty();
 		Root.addClass("codex-sidebar");
 		const Mobile = Platform.isMobile || Root.ownerDocument.body.classList.contains("is-mobile");
-		const Header = Root.createDiv({ cls: "codex-header" });
+		const Navigation = sidebar_panel(Root, "codex-navigation", "会话与连接", Mobile);
+		this.NavigationSummary = Navigation.Summary;
+		const Header = Navigation.Body.createDiv({ cls: "codex-header" });
 		Header.createEl("strong", { text: "Codex" });
 		this.button(Header, "新会话", () => void this.Owner.choose_session());
 		this.button(Header, "重连", () => void this.Owner.reconnect());
-		this.SessionsElement = Root.createEl("select", { cls: "codex-sessions" });
+		this.SessionsElement = Navigation.Body.createEl("select", { cls: "codex-sessions" });
 		accessible_name(this.SessionsElement, "Codex 会话");
 		this.SessionsElement.addEventListener("change", () => void this.Owner.choose_session(this.SessionsElement.value));
 		this.StatusElement = Root.createDiv({ cls: "codex-status" });
@@ -1554,8 +1558,10 @@ class CodexView extends ItemView
 		});
 		this.CatalogElement = Composer.createDiv({ cls: "codex-catalog-status" });
 		this.UsageElement = OptionsPanel.Body.createDiv({ cls: "codex-usage" });
-		this.Input = Composer.createEl("textarea", { attr: { placeholder: "随时提问... Enter 发送, Shift+Enter 换行" } });
+		this.ComposePanel = sidebar_panel(Composer, "codex-send-tools", "提问与发送", Mobile);
+		this.Input = this.ComposePanel.Body.createEl("textarea", { attr: { placeholder: "随时提问... Enter 发送, Shift+Enter 换行" } });
 		accessible_name(this.Input, "向 Codex 提问");
+		this.Input.addEventListener("input", () => this.refresh_compose_summary());
 		this.Input.addEventListener("keydown", Event =>
 		{
 			if(Event.key === "Enter" && !Event.shiftKey && !Event.isComposing)
@@ -1564,7 +1570,7 @@ class CodexView extends ItemView
 				void this.send_input();
 			}
 		});
-		const Actions = Composer.createDiv({ cls: "codex-compose-actions" });
+		const Actions = this.ComposePanel.Body.createDiv({ cls: "codex-compose-actions" });
 		this.SendButton = this.button(Actions, "发送", () => void this.send_input());
 		this.SendButton.addClass("mod-cta");
 		this.StopButton = this.button(Actions, "停止", () => void this.Owner.stop_turn());
@@ -1606,6 +1612,7 @@ class CodexView extends ItemView
 			this.SelectedAnswer = null;
 		}
 		const Quote = this.Owner.AnswerQuote ?? this.SelectedAnswer;
+		this.refresh_compose_summary();
 		this.QuoteElement.hidden = !Quote;
 		this.Input.placeholder = this.Owner.AnswerQuote ? "针对选中的回答继续提问..." : "随时提问... Enter 发送, Shift+Enter 换行";
 		this.QuoteElement.empty();
@@ -1623,6 +1630,7 @@ class CodexView extends ItemView
 				this.SelectedAnswer = null;
 				this.contentEl.ownerDocument.defaultView?.getSelection()?.removeAllRanges();
 				this.refresh_quote();
+				reveal_sidebar_panel(this.ComposePanel);
 				this.Input.focus();
 			});
 			Button.addEventListener("pointerdown", Event => Event.preventDefault());
@@ -1636,6 +1644,11 @@ class CodexView extends ItemView
 		{
 			this.QuoteElement.createDiv({ text: "引用已按长度限制截断", cls: "codex-message-context" });
 		}
+	}
+
+	private refresh_compose_summary(): void
+	{
+		this.ComposePanel?.Summary?.setText(this.Input.value.trim() ? "提问与发送 · 有草稿" : this.Owner.AnswerQuote ? "提问与发送 · 已引用" : "提问与发送");
 	}
 
 	private refresh_activity(): void
@@ -1749,6 +1762,7 @@ class CodexView extends ItemView
 			return;
 		}
 		const Session = this.Owner.Session;
+		this.NavigationSummary?.setText(`会话与连接 · ${Session.Title}`);
 		const Effective = [Session.EffectiveModel, Session.EffectiveEffort, Session.EffectiveTier === "priority" || Session.EffectiveTier === "fast" ? "Fast" : ""].filter(Boolean).join(" / ");
 		this.StatusElement.setText(`${this.Owner.Status}${Effective ? ` | 最近请求: ${Effective}` : ""} | ${this.Owner.SkillStatus}`);
 		this.refresh_activity();

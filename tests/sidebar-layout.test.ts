@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sidebar_panel } from "../src/sidebar-layout";
+import { sidebar_panel, reveal_sidebar_panel } from "../src/sidebar-layout";
 
 function dom_fixture()
 {
@@ -42,4 +42,26 @@ test("desktop panels keep their original parent and do not fold or move existing
 	assert.equal(Panel.Body, Root);
 	assert.equal(Panel.Summary, null);
 	assert.equal(Root.children.length, 0);
+	reveal_sidebar_panel(Panel);
+	assert.equal(Root.children.length, 0);
+});
+
+test("revealing a follow-up composer preserves the draft and keeps navigation and options independently folded", () =>
+{
+	const Root = dom_fixture();
+	const Navigation = sidebar_panel(Root as unknown as HTMLElement, "codex-navigation", "会话与连接", true);
+	const Options = sidebar_panel(Root as unknown as HTMLElement, "codex-options", "模型与选项", true);
+	const Composer = sidebar_panel(Root as unknown as HTMLElement, "codex-send-tools", "提问与发送", true);
+	const Input = Root.ownerDocument.createElement("textarea");
+	Input.textContent = "中文草稿 $[X,Y]$";
+	Composer.Body.appendChild(Input as unknown as HTMLElement);
+	reveal_sidebar_panel(Composer);
+	assert.equal(Composer.Details?.open, true);
+	assert.equal(Navigation.Details?.open, false);
+	assert.equal(Options.Details?.open, false);
+	Composer.Details!.open = false;
+	reveal_sidebar_panel(Composer);
+	assert.equal((Composer.Body as unknown as { children: unknown[] }).children[0], Input);
+	assert.equal(Input.textContent, "中文草稿 $[X,Y]$");
+	reveal_sidebar_panel(null);
 });
