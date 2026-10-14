@@ -4,6 +4,8 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
+[下载 0.7.0 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.7.0), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38516859898).
+
 **0.7.0 整合实验版**在原侧栏中新增伴读、固定快照、一题一练/提示/反馈、设备本地学习记录、样章审核与确认式单文件写回, 以及主动复习和 Markdown/LaTeX 源码导出. 复用原聊天与远程桥, Codex 仍只读. 使用 [原创示范课程](examples/study/demo.study.json), 详见 [使用/迁移/回退](docs/study-workbench.md)、[协议与技能](docs/study-protocol.md)、[真实验证记录](docs/study-validation.md) 和 [发布说明](docs/releases/0.7.0.md). 通过 GitHub prerelease 提供给 BRAT; 新版 iPad 工作台和布局尚待真机验收. 下文 0.6.2 是此前基础对话的验收记录.
 
 iPad 默认收起“上下文与学习”和“模型与选项”, 为回答留出更多高度; 点开后保留原控件及选择. 学习工作台位于“上下文与学习”内. 若浏览器 Fetch 继续超时, 可在插件设置将“移动网络传输”改为“Obsidian 原生请求”, 然后保存并连接. 方式仅保存在当前设备, 不自动切换或重发. 原生请求超时后底层可能仍在进行, 先重连确认状态再决定后续操作.
