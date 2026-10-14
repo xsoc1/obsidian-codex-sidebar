@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { RemoteBridge, token_hash } from "../src/bridge";
@@ -114,6 +115,26 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 		assert.equal((await Rpc(0, "bridge/resume", { threadId: Thread.body.thread.id })).body.thread.turns[0].status, "completed");
 		assert.equal((await Http(1, "/events?after=0")).body.events.length, 0);
 		assert.equal((await Http(0, "/events?after=0")).body.events.length, 4);
+		const Image = "data:image/jpeg;base64," + readFileSync("examples/pdf/scanned-page.jpg").toString("base64");
+		const ImageId = createHash("sha256").update(Image).digest("hex");
+		const Epoch = (await Rpc(0, "bridge/pdf-images", { action: "has", ids: [ImageId] })).body.epoch;
+		assert.equal((await Rpc(0, "bridge/pdf-images", { action: "put", id: ImageId, data: Image, epoch: Epoch })).body.Id, ImageId);
+		const PdfParams = { ...Params, input: [...Params.input, { type: "image", url: "obsidian-pdf:" + ImageId }] };
+		assert.equal((await Rpc(0, "turn/start", PdfParams)).status, 200);
+		assert.equal(Peers[0].calls.filter(Value => Value.Method === "turn/start").at(-1)!.Params.input[2].url, Image);
+		assert.equal((await Rpc(1, "bridge/pdf-images", { action: "has", ids: [ImageId] })).body.present.length, 0);
+		await Rpc(1, "thread/start", { clientSessionId: "own-b", model: "model-a", effort: "low" });
+		assert.equal((await Rpc(1, "turn/start", { ...PdfParams, threadId: "thread-2" })).status, 400);
+		for(const Url of ["https://external.example/img", "file:///private.jpg", Image])
+		{
+			assert.equal((await Rpc(0, "turn/start", { ...Params, input: [...Params.input, { type: "image", url: Url }] })).status, 400);
+		}
+		const Replay = [{ type: "message", role: "user", content: [{ type: "input_text", text: "original" }, { type: "input_image", image_url: "obsidian-pdf:" + ImageId }] }];
+		assert.equal((await Rpc(0, "thread/inject_items", { threadId: "thread-1", items: Replay })).status, 200);
+		assert.equal(Peers[0].calls.filter(Value => Value.Method === "thread/inject_items").at(-1)!.Params.items[0].content[1].image_url, Image);
+		await Rpc(0, "bridge/pdf-images", { action: "clear" });
+		assert.equal((await Rpc(0, "turn/start", PdfParams)).status, 400);
+		assert.equal((await Rpc(0, "bridge/pdf-images", { action: "put", id: ImageId, data: Image, epoch: Epoch })).status, 400);
 	}
 	finally
 	{

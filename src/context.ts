@@ -1,15 +1,23 @@
-import { MarkdownView, type MarkdownPostProcessorContext, type App } from "obsidian";
+import { MarkdownView, type FileView, type TFile, type MarkdownPostProcessorContext, type App } from "obsidian";
 import { bound_text, heading_at, source_excerpt, type ContextSnapshot } from "./prompt";
 import { version_of } from "./study/document";
+import { PdfReader, is_pdf_view, pdf_location } from "./pdf/reader";
+import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
 
 export class ContextCapture
 {
 	private Blocks = new WeakMap<Element, MarkdownPostProcessorContext>();
-	LastView: MarkdownView | null = null;
+	LastView: MarkdownView | FileView | null = null;
 	Snapshot: ContextSnapshot | null = null;
+	readonly Pdf: PdfReader;
+	PdfPending = 0;
+	Suspended = false;
+	private Generation = 0;
+	private LastPath = "";
 
-	constructor(private App: App)
+	constructor(private App: App, Images: PdfImages = new BrowserPdfImages(App.vault.getName()))
 	{
+		this.Pdf = new PdfReader(App, Images);
 	}
 
 	register_block(ElementValue: HTMLElement, Context: MarkdownPostProcessorContext): void
@@ -21,25 +29,37 @@ export class ContextCapture
 	track_view(): void
 	{
 		const ActiveFile = this.App.workspace.getActiveFile();
+		const Active = this.App.workspace.activeLeaf?.view;
 		const View = this.App.workspace.getActiveViewOfType(MarkdownView)
+			?? (is_pdf_view(Active) ? Active : null)
 			?? (this.LastView?.containerEl.isConnected ? this.LastView : null)
+			?? this.App.workspace.getLeavesOfType("pdf").map(Leaf => Leaf.view).find(Value => is_pdf_view(Value) && Value.file?.path === ActiveFile?.path)
 			?? this.App.workspace.getLeavesOfType("markdown").map(Leaf => Leaf.view)
 				.find(Value => Value instanceof MarkdownView && Value.file?.path === ActiveFile?.path)
 			?? this.App.workspace.getLeavesOfType("markdown").map(Leaf => Leaf.view)
 				.find(Value => Value instanceof MarkdownView);
 		if(View)
 		{
-			this.LastView = View as MarkdownView;
+			if(this.LastView !== View || this.LastPath !== (View as FileView).file?.path) { this.Generation++; }
+			this.LastView = View as MarkdownView | FileView;
+			this.LastPath = this.LastView.file?.path ?? "";
 		}
 	}
 
 	async capture(Kind: "选区" | "当前位置", View = this.LastView): Promise<ContextSnapshot | null>
 	{
-		if(!View?.file || !View.containerEl.isConnected)
+		if(this.Suspended || !View?.file || !View.containerEl.isConnected)
 		{
 			return null;
 		}
 		const Path = View.file.path;
+		if(is_pdf_view(View))
+		{
+			const Location = pdf_location(View.containerEl, Kind);
+			if(!Location) { return null; }
+			return this.capture_pdf(View.file!, Location.Pages, View.containerEl.ownerDocument, Kind, Location.SelectedText, Location.Truncated);
+		}
+		if(!(View instanceof MarkdownView)) { return null; }
 		const Source = View.getViewData();
 		let VersionSource = Source;
 		let Text = "";
@@ -144,5 +164,29 @@ export class ContextCapture
 			FocusLine: FocusLine ?? Start ?? undefined
 		};
 		return this.Snapshot;
+	}
+
+	async capture_pdf(File: TFile, Pages: number[], OwnerDocument: Document, Kind: "选区" | "当前位置" = "当前位置", SelectedText = "", Truncated = false): Promise<ContextSnapshot | null>
+	{
+		if(this.Suspended) { throw new Error("PDF 缓存正在清除, 请稍后重新捕获"); }
+		const Generation = ++this.Generation;
+		this.PdfPending++;
+		try
+		{
+			const Snapshot = await this.Pdf.capture(File, Pages, OwnerDocument, Kind, SelectedText, Truncated);
+			if(Generation !== this.Generation) { return null; }
+			this.Snapshot = Snapshot; return Snapshot;
+		}
+		catch(ErrorValue)
+		{
+			if(Generation !== this.Generation) { return null; }
+			this.Snapshot = null; throw ErrorValue;
+		}
+		finally { this.PdfPending--; }
+	}
+
+	close(): void
+	{
+		this.Generation++; this.Pdf.close();
 	}
 }

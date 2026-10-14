@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { webcrypto, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { jpeg_info } from "../src/pdf/types";
 import { make_task } from "../src/study/task";
 
 async function mobile_fixture(Http?: (Params: any) => Promise<any>)
@@ -70,7 +72,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 	const Define = () => ({});
 	let BrowserRequests = 0;
 	runInNewContext(readFileSync(process.env.CODEX_SIDEBAR_TEST_BUNDLE ?? "main.js", "utf8"), {
-		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
+		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, atob, setTimeout, clearTimeout, setInterval, clearInterval,
 		fetch: async (Url: string, Params: any) =>
 		{
 			BrowserRequests++;
@@ -110,7 +112,7 @@ function bootstrap_http(Before?: (Params: any) => Promise<void>)
 		let Value: any = {};
 		if(Path === "/info")
 		{
-			Value = { server: "test", vault: "test", cwd: "/vault", cli: "mock" };
+			Value = { server: "test", vault: "test", cwd: "/vault", cli: "mock", pdfPageImages: 1 };
 		}
 		else if(Path === "/state")
 		{
@@ -195,6 +197,81 @@ test("mobile study tasks use existing two-input transport, keep records outside 
 	Instance.State = { ...Instance.State, Sessions: [{ Id: "replacement", Title: "remote", Messages: [], ThreadId: null }], ActiveId: "replacement" };
 	assert.equal(Instance.Study.Store.export_records(), Records);
 	Instance.Connection?.close();
+});
+
+test("mobile PDF turns upload only owned page images, preserve source on resend and reconnect, and keep raw images outside state", async () =>
+{
+	const Data = "data:image/jpeg;base64," + readFileSync("examples/pdf/scanned-page.jpg").toString("base64");
+	const Id = createHash("sha256").update(Data).digest("hex"), Requests: any[] = [], Cached = new Set<string>();
+	const Ordinary = bootstrap_http();
+	const { Instance } = await mobile_fixture(async Params =>
+	{
+		const Body = Params.body ? JSON.parse(Params.body) : null;
+		if(Body) { Requests.push(Body); }
+		if(Body?.method === "bridge/pdf-images")
+		{
+			if(Body.params.action === "put") { Cached.add(Body.params.id); }
+			return { status: 200, json: Body.params.action === "has" ? { present: [...Cached], epoch: "fixture-epoch" } : {} };
+		}
+		if(Body?.method === "bridge/resume") { return { status: 200, json: null }; }
+		return Ordinary(Params);
+	});
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture"; Instance.Remote.Transport = "native";
+	Instance.PdfImages = { get: async () => Data, clear: async () => {} };
+	const Source: any = { Path: "original.pdf", Mode: "阅读", Kind: "当前位置", Text: "无文字层", SelectedText: "", Mapping: "PDF页图", Heading: "第 1 页", LineStart: null, LineEnd: null, Truncated: false, CapturedAt: "original-time", Version: "a".repeat(64), Pdf: { schemaVersion: 1, ReadOnly: true, PageCount: 3, Pages: [{ Number: 1, TextLayer: false, Image: { Id, ...jpeg_info(Data) } }] } };
+	try
+	{
+		assert.equal(await Instance.send_message("解释扫描页", Source), true);
+		const Turn = Requests.find(Value => Value.method === "turn/start");
+		assert.equal(Turn.params.input.length, 3); assert.equal(Turn.params.input[1].name, "math-writing");
+		assert.deepEqual(Turn.params.input[2], { type: "image", url: "obsidian-pdf:" + Id });
+		assert.equal(Requests.filter(Value => Value.method === "bridge/pdf-images" && Value.params.action === "put").length, 1);
+		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+		const Old = Instance.Session.Messages.find((Value: any) => Value.Role === "user");
+		Instance.Capture.Snapshot = { ...Source, Path: "different.pdf", CapturedAt: "later-time" };
+		await Instance.resend_message(Old.Id);
+		assert.equal(Instance.Session.Messages.at(-1).Context.Path, "original.pdf");
+		assert.equal(Instance.Session.Messages.at(-1).Context.CapturedAt, "original-time");
+		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+		await Instance.reconnect();
+		const Replay = Requests.filter(Value => Value.method === "thread/inject_items").find(Value => Value.params.items.some((Item: any) => Item.content.some((Part: any) => Part.type === "input_image")));
+		assert.ok(Replay); assert.ok(JSON.stringify(Replay).includes("original-time"));
+		assert.equal(JSON.stringify(Instance.State).includes("base64"), false);
+		assert.equal(Requests.filter(Value => Value.state).some(Value => JSON.stringify(Value).includes("base64")), false);
+		await Instance.persist();
+	}
+	finally { Instance.onunload(); }
+});
+
+test("PDF sends fail before turn submission when bridge capability, original page cache or image modality is absent", async () =>
+{
+	const Data = "data:image/jpeg;base64," + readFileSync("examples/pdf/scanned-page.jpg").toString("base64");
+	const Id = createHash("sha256").update(Data).digest("hex");
+	for(const Case of ["bridge", "cache", "model"])
+	{
+		const Requests: any[] = [], Ordinary = bootstrap_http();
+		const { Instance } = await mobile_fixture(async Params =>
+		{
+			const Body = Params.body ? JSON.parse(Params.body) : null;
+			if(Body) { Requests.push(Body); }
+			const Response = await Ordinary(Params);
+			if(new URL(Params.url).pathname === "/info" && Case === "bridge") { delete Response.json.pdfPageImages; }
+			if(Body?.method === "bridge/pdf-images") { Response.json = { present: [], epoch: "fixture" }; }
+			if(Body?.method === "model/list" && Case === "model") { Response.json.data[0].inputModalities = ["text"]; }
+			return Response;
+		});
+		Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
+		Instance.PdfImages = { get: async () => { throw new Error("原图缺失"); } };
+		const Source: any = { Path: "original.pdf", Mode: "阅读", Kind: "当前位置", Text: "无文字层", SelectedText: "", Mapping: "PDF页图", Heading: "页 1", LineStart: null, LineEnd: null, Truncated: false, CapturedAt: "original-time", Pdf: { schemaVersion: 1, ReadOnly: true, PageCount: 1, Pages: [{ Number: 1, TextLayer: false, Image: { Id, ...jpeg_info(Data) } }] } };
+		try
+		{
+			assert.equal(await Instance.send_message("解释", Source), false);
+			assert.equal(Requests.some(Value => Value.method === "turn/start"), false);
+			assert.match(Instance.Status, Case === "bridge" ? /更新桥/ : Case === "cache" ? /原图缺失/ : /不支持图像/);
+			assert.equal(Instance.Session.Messages.some((Value: any) => Value.Role === "user"), false);
+		}
+		finally { Instance.onunload(); }
+	}
 });
 
 test("mobile bootstrap displays received models while the following state save is pending", async () =>

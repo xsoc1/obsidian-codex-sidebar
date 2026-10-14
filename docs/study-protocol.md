@@ -12,7 +12,9 @@ TaskSpec SchemaVersion=1 保存任务 ID、动作、输入角色、范围、提�
 
 本机 generate-ts 核对 UserInput、TurnStartParams、ThreadItem/MessagePhase; [官方 app-server 文档](https://learn.chatgpt.com/docs/app-server) 核对初始化、技能输入、注入和完成事件. 继续沿用已核对的 model/effort/serviceTier、ephemeral、read-only 和 never, 不增加高权限 RPC.
 
-每次 turn/start 恰好 text + math-writing skill 两项. 结构化输出通过 text 的格式约定与运行时校验实现; 本版不新增 outputSchema 透传或其他技能. Task/Phase/CompletionStatus 是插件记录, 不作为未知 Codex 参数发送.
+普通 turn/start 保留 text + math-writing skill 两项. 0.8.0 PDF 扩展最多追加两个官方 image 输入, 不添加第三个技能、任意客户端路径或 outputSchema 透传. Task/Phase/CompletionStatus 仍是插件记录, 不作为未知 Codex 参数发送. PDF 元数据/任务进入 text, 原图单独缓存. 本机用受校验的 data:image/jpeg URL; 远程只接受本配对设备已上传的 obsidian-pdf:<sha256> 引用, 由桥换成实际 data URL. /info 的 pdfPageImages:1 是明确能力检查, 旧桥提交前报错. bridge/pdf-images 仅支持 has(ids)/put(id,data,epoch)/clear, 固定私有设备目录、尺寸/大小/哈希/schema 校验, 不提供任意文件操作. 清除旋转 epoch 并拒绝迟到上传.
+
+来源快照新增可选 Pdf (schemaVersion:1、ReadOnly:true、PageCount、Pages), 每页记录 Number、TextLayer、Image (Id/Width/Height/Bytes). 不保存可执行字段或内联 base64. 重发与新临时线程恢复沿原引用, 历史用已核对的 input_image/image_url, 不重捕获. PDF 练习记录继续设备本地存储, 版本比较使用实际 PDF 二进制哈希; Markdown 写入目标继续由独立 note_path 验证, PDF 不能成为目标. 详见 [PDF 协议/迁移边界](pdf-support.md).
 
 agentMessage.phase 区分 commentary 与 final_answer. 中途说明留在会话; 结构化结果只取最终回答. 无 phase 的已完成旧消息回退到最后回答; interrupted/failed 不接纳. 桥按原 Prompt 关联轮次 ID, 保存阶段和完成状态, 支持客户端未收到响应确认时恢复. 未知结果不自动重发.
 

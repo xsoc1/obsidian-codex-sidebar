@@ -1,7 +1,8 @@
 import type { StudyData } from "./store";
 import { parse_output } from "./schema";
 import { parse_manifest } from "./manifest";
-import { note_path } from "./document";
+import { note_path, source_path } from "./document";
+import { validate_pdf } from "../pdf/types";
 
 export function validate_store(Data: StudyData): void
 {
@@ -10,11 +11,13 @@ export function validate_store(Data: StudyData): void
 	const Roles = ["lecture", "problem", "complete-answer", "outline", "source-excerpt", "teacher-problem"];
 	const Source = (Value: any) =>
 	{
-		if(!Value || !Text(Value.Path, 240) || !Text(Value.Text, 24000) || !Text(Value.SelectedText, 12000) || !Text(Value.Heading, 4000) || !Text(Value.CapturedAt, 100) || !["编辑", "阅读"].includes(Value.Mode) || !["选区", "当前位置"].includes(Value.Kind) || !["源文本", "源块", "渲染文本"].includes(Value.Mapping) || typeof Value.Truncated !== "boolean")
+		if(!Value || !Text(Value.Path, 240) || !Text(Value.Text, 24000) || !Text(Value.SelectedText, 12000) || !Text(Value.Heading, 4000) || !Text(Value.CapturedAt, 100) || !["编辑", "阅读"].includes(Value.Mode) || !["选区", "当前位置"].includes(Value.Kind) || !["源文本", "源块", "渲染文本", "PDF文本层", "PDF页图"].includes(Value.Mapping) || typeof Value.Truncated !== "boolean")
 		{
 			throw new Error("学习来源快照损坏");
 		}
-		note_path(Value.Path);
+		source_path(Value.Path);
+		if(Value.Pdf) { validate_pdf(Value.Pdf); }
+		if(Value.Path.toLowerCase().endsWith(".pdf") !== !!Value.Pdf) { throw new Error("PDF 来源缺少有效页图快照"); }
 	};
 	const Target = (Value: any) =>
 	{

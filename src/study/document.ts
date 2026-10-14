@@ -6,6 +6,12 @@ export function note_path(Path: string): string
 	}
 	return Path;
 }
+export function source_path(Path: string): string
+{
+	note_path(Path.toLowerCase().endsWith(".pdf") ? Path.slice(0, -4) + ".md" : Path);
+	return Path;
+}
+
 export async function version_of(Text: string | null): Promise<string>
 {
 	if(Text === null)

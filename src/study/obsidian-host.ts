@@ -1,6 +1,7 @@
 import { MarkdownView, type App } from "obsidian";
 import type { WriteHost } from "./writer";
-import { note_path } from "./document";
+import { note_path, source_path, version_of } from "./document";
+import { pdf_hash } from "../pdf/types";
 
 export class ObsidianWriteHost implements WriteHost
 {
@@ -30,6 +31,13 @@ export class ObsidianWriteHost implements WriteHost
 		}
 		const File = this.App.vault.getFileByPath(Path);
 		return File ? this.App.vault.read(File) : null;
+	}
+	async source_version(Path: string): Promise<string>
+	{
+		source_path(Path);
+		if(!Path.toLowerCase().endsWith(".pdf")) { return version_of(await this.read_current(Path)); }
+		const File = this.App.vault.getFileByPath(Path);
+		return File ? pdf_hash(await this.App.vault.readBinary(File)) : "absent";
 	}
 	async compare_write(Path: string, Before: string | null, After: string): Promise<void>
 	{

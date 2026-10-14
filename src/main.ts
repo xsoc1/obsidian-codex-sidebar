@@ -1,6 +1,6 @@
 import {
 	Plugin, ItemView, WorkspaceLeaf, PluginSettingTab, Setting, Notice,
-	MarkdownRenderer, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, type App
+	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, type App
 } from "obsidian";
 import { ContextCapture } from "./context";
 import { build_prompt, DefaultInstructions, editing_instructions, migrate_instructions, environment_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
@@ -23,6 +23,10 @@ import { StudyPanel } from "./study/panel";
 import { task_prompt, type TaskSpec } from "./study/task";
 import { structured_task, question_label } from "./study/presentation";
 import { safe_math_markdown } from "./study/safe-markdown";
+import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
+import { image_inputs, message_pdf_refs, history_pdf_refs } from "./pdf/inputs";
+import { pdf_reference, jpeg_info, type PdfImageRef } from "./pdf/types";
+import { PdfPageModal, pdf_preview, PdfInstructions } from "./pdf/panel";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -96,6 +100,7 @@ export default class CodexSidebarPlugin extends Plugin
 {
 	State!: SavedState;
 	Capture!: ContextCapture;
+	PdfImages!: PdfImages;
 	Status = "尚未连接";
 	Model = "";
 	Models: ModelInfo[] = [];
@@ -113,7 +118,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private RemoteKey = "";
 	private RemoteStatePath = "";
 	private Desktop: typeof import("./desktop") | null = null;
-	private HostInfo: { cwd: string; vault: string; cli: string; client: string; mathWritingVersion?: string } | null = null;
+	private HostInfo: { cwd: string; vault: string; cli: string; client: string; mathWritingVersion?: string; pdfPageImages?: number } | null = null;
 	private Connecting: Promise<void> | null = null;
 	private LoadingSkill: Promise<SkillInput> | null = null;
 	private LoadedThread: string | null = null;
@@ -219,12 +224,14 @@ export default class CodexSidebarPlugin extends Plugin
 			Changed: () => this.refresh()
 		});
 		this.registerEditorExtension(this.Inline.Extension);
-		this.Capture = new ContextCapture(this.app);
+		this.PdfImages = new BrowserPdfImages(this.app.vault.getName());
+		this.Capture = new ContextCapture(this.app, this.PdfImages);
 		try
 		{
 			const Host = new ObsidianWriteHost(this.app);
 			this.Study = new StudyController(new StudyStore(localStorage, this.app.vault.getName()), {
 				read_current: Path => Host.read_current(Path),
+				source_version: Path => Host.source_version(Path),
 				compare_write: (Path, Before, After) => Host.compare_write(Path, Before, After),
 				send_task: Task => this.send_message(Task.Request, Task.Source, null, Task),
 				changed: () => this.refresh(),
@@ -250,6 +257,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.addCommand({ id: "explain-selection", name: "解释选区", callback: () => void this.ask_selection(ExplainPrompt) });
 		this.addCommand({ id: "check-proof", name: "检查选区证明", callback: () => void this.ask_selection(ProofPrompt) });
 		this.addCommand({ id: "capture-reading", name: "捕获当前阅读位置", callback: () => void this.capture_current() });
+		this.addCommand({ id: "capture-pdf-page", name: "捕获 PDF 页", callback: () => this.open_pdf() });
 		this.addCommand({ id: "toggle-completion", name: "开启/关闭行内补全", callback: () => void this.set_completion(!this.State.Settings.Completion) });
 		this.addSettingTab(new CodexSettings(this.app, this));
 		this.registerMarkdownPostProcessor((ElementValue, Context) => this.Capture.register_block(ElementValue, Context));
@@ -300,7 +308,7 @@ export default class CodexSidebarPlugin extends Plugin
 			if(this.Capture.LastView)
 			{
 				this.bind_document(this.Capture.LastView.containerEl.ownerDocument);
-				if(this.Capture.LastView.getMode() === "preview")
+				if(this.Capture.LastView instanceof MarkdownView && this.Capture.LastView.getMode() === "preview")
 				{
 					this.Capture.LastView.previewMode.rerender(true);
 				}
@@ -320,7 +328,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	private work_instructions(): string
 	{
-		return environment_instructions(editing_instructions(this.State.Settings.Instructions), {
+		return PdfInstructions + "\n\n" + environment_instructions(editing_instructions(this.State.Settings.Instructions), {
 			Vault: this.app.vault.getName(), Root: this.host_cwd(),
 			Cli: this.obsidian_cli()
 		}) + (this.Remote.Enabled ? "\n\n这是独立的 iPad/远程 Obsidian 会话. CLI 在 Windows, 用户界面在客户端. 当前笔记与选区以用户随问题提供的源快照为准, Windows vault 副本可能尚未同步. 只读 CLI 工具读到的是电脑副本, 不能声称看到了 iPad 屏幕、未同步文件或桌面其他会话. 不修改笔记, 补全只返回建议供客户端确认." : "");
@@ -480,15 +488,15 @@ export default class CodexSidebarPlugin extends Plugin
 		this.registerDomEvent(DocumentValue, "selectionchange", () => this.queue_capture());
 		this.registerDomEvent(DocumentValue, "pointerup", () => this.queue_capture());
 		this.registerDomEvent(DocumentValue, "keyup", () => this.queue_capture());
-		this.registerDomEvent(DocumentValue, "scroll", () =>
+		this.registerDomEvent(DocumentValue, "scroll", EventValue =>
 		{
-			if(this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading") { this.queue_capture(); }
+			if(EventValue.target instanceof DocumentValue.defaultView!.Node && this.Capture.LastView?.containerEl.contains(EventValue.target) && this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading") { this.queue_capture(); }
 		}, { capture: true });
 	}
 
 	private queue_capture(): void
 	{
-		if(!this.State.Settings.AutoCapture)
+		if(!this.State.Settings.AutoCapture || this.Capture.Suspended)
 		{
 			return;
 		}
@@ -499,6 +507,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.CaptureTimer = setTimeout(() =>
 		{
 			this.CaptureTimer = null;
+			if(this.Capture.PdfPending) { this.queue_capture(); return; }
 			void this.Capture.capture("选区").then(async Snapshot =>
 			{
 				if(!Snapshot && this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading")
@@ -591,6 +600,15 @@ export default class CodexSidebarPlugin extends Plugin
 		});
 		return RemoteMode && RemoteConnectionValue && SyncRemote
 			? this.SaveQueue.then(() => RemoteConnectionValue.sync_state(Data, RemoteCursor)) : this.SaveQueue;
+	}
+
+	private persist_background(): void
+	{
+		const Generation = this.Generation;
+		void this.persist().catch(ErrorValue =>
+		{
+			if(!this.Unloaded && Generation === this.Generation) { this.Status = error_text(ErrorValue); this.refresh(); }
+		});
 	}
 
 	async set_remote_mode(Enabled: boolean): Promise<void>
@@ -722,7 +740,7 @@ export default class CodexSidebarPlugin extends Plugin
 						this.Activity = "";
 						this.Status = `${error_text(ErrorValue)}; 重连后核对会话`;
 						this.refresh();
-						void this.persist();
+						this.persist_background();
 					}
 				};
 			const Connection: RpcConnection = this.Remote.Enabled
@@ -873,6 +891,7 @@ export default class CodexSidebarPlugin extends Plugin
 			serviceTier: Options.serviceTier,
 			config: { model_reasoning_summary: "auto", ...(Options.effort ? { model_reasoning_effort: Options.effort } : {}) }
 		};
+		const History = !Existing ? history_items(this.Session.Messages, await this.prepare_pdf(history_pdf_refs(this.Session.Messages))) : [];
 		const Result = Existing ?? await this.Connection!.request("thread/start", Params);
 		if(Result.thread.ephemeral !== true || Result.thread.path)
 		{
@@ -881,16 +900,15 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Session.ThreadId = Result.thread.id;
 		this.Session.Private = true;
 		this.LoadedThread = Result.thread.id;
-		this.LiveThreads.set(this.Session.Id, Result.thread.id);
 		if(!Existing)
 		{
 			this.Session.InstructionsHash = "";
 		}
-		const History = history_items(this.Session.Messages);
 		if(History.length && !Existing)
 		{
 			await this.Connection!.request("thread/inject_items", { threadId: Result.thread.id, items: History });
 		}
+		this.LiveThreads.set(this.Session.Id, Result.thread.id);
 		this.Model = Result.model ?? Result.thread.model ?? "";
 		this.Session.EffectiveModel = this.Model;
 		this.Session.EffectiveEffort = Result.reasoningEffort ?? Options.effort;
@@ -924,9 +942,37 @@ export default class CodexSidebarPlugin extends Plugin
 		await this.persist();
 	}
 
+	private async prepare_pdf(Refs: PdfImageRef[]): Promise<Map<string, string>>
+	{
+		const Urls = new Map<string, string>();
+		if(!Refs.length) { return Urls; }
+		const Model = selected_model(this.State.Settings, this.Models);
+		if(Model?.inputModalities && !Model.inputModalities.includes("image")) { throw new Error("当前模型不支持图像, 请明确选择支持图片的模型再提问 PDF"); }
+		this.Activity = "准备 PDF 页图快照"; this.refresh();
+		let Remote: { present: string[]; epoch: string } | null = null;
+		if(this.Remote.Enabled)
+		{
+			if(this.HostInfo?.pdfPageImages !== 1) { throw new Error("Windows 远程桥尚不支持 PDF 页图, 请更新桥到 0.8.0 后重连; 本轮未提交"); }
+			Remote = await this.Connection!.request("bridge/pdf-images", { action: "has", ids: Refs.map(Ref => Ref.Id) });
+		}
+		for(const Ref of Refs)
+		{
+			if(!Remote?.present.includes(Ref.Id))
+			{
+				const Data = await this.PdfImages.get(Ref.Id);
+				const Info = jpeg_info(Data);
+				if(Info.Width !== Ref.Width || Info.Height !== Ref.Height || Info.Bytes !== Ref.Bytes) { throw new Error("PDF 页图与保存快照不一致"); }
+				if(Remote) { await this.Connection!.request("bridge/pdf-images", { action: "put", id: Ref.Id, data: Data, epoch: Remote.epoch }); }
+				else { Urls.set(Ref.Id, Data); }
+			}
+			if(Remote) { Urls.set(Ref.Id, pdf_reference(Ref.Id)); }
+		}
+		return Urls;
+	}
+
 	async send_message(Question: string, Context = this.State.Settings.AttachContext ? this.Capture.Snapshot : null, Quote: AnswerQuote | null = null, Task: TaskSpec | null = null): Promise<boolean>
 	{
-		if(this.Busy || !Question.trim())
+		if(this.Busy || this.Capture.Suspended || !Question.trim())
 		{
 			return false;
 		}
@@ -977,6 +1023,9 @@ export default class CodexSidebarPlugin extends Plugin
 				PublicTask.Target.Before = null;
 			}
 			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Task ? question_label(Task) : Question.trim(), Context: Context ? structuredClone(Context) : null, Quote: Quote ? structuredClone(Quote) : null, Prompt, Task: PublicTask, ContextLabel: Quote ? "追问选中的回答 / 渲染选区 + 原回答 Markdown" : Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
+			const Refs = message_pdf_refs(Message);
+			if(Refs.length > 2) { throw new Error("每轮最多两张 PDF 页图, 请减少来源后明确重试"); }
+			const Images = image_inputs(Refs, await this.prepare_pdf(Refs));
 			this.Session.Messages.push(Message);
 			if(this.Session.Title === "新会话")
 			{
@@ -990,7 +1039,7 @@ export default class CodexSidebarPlugin extends Plugin
 			this.refresh();
 			Submitted = true;
 			const Options = run_options(this.State.Settings, this.Models);
-			const Result = await this.Connection!.request("turn/start", { threadId: this.Session.ThreadId, input: skill_input(Message.Prompt!, Skill), ...Options });
+			const Result = await this.Connection!.request("turn/start", { threadId: this.Session.ThreadId, input: [...skill_input(Message.Prompt!, Skill), ...Images], ...Options });
 			this.Session.EffectiveModel = Options.model;
 			this.Session.EffectiveEffort = Options.effort;
 			this.Session.EffectiveTier = Options.serviceTier;
@@ -1150,29 +1199,63 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async capture_current(): Promise<void>
 	{
-		this.Capture.track_view();
-		const Snapshot = await this.Capture.capture("当前位置");
-		if(!Snapshot)
+		try
 		{
-			new Notice("请先打开 Markdown 笔记. 阅读视图可切换后重试以建立源块映射");
-			return;
+			this.Capture.track_view();
+			const Snapshot = await this.Capture.capture("当前位置");
+			if(!Snapshot)
+			{
+				new Notice("请先打开 Markdown 或 PDF. 无法定位 PDF 页时可点击 PDF 页...");
+				return;
+			}
+			this.State.Settings.AttachContext = true;
+			this.refresh();
+			await this.persist();
 		}
-		this.State.Settings.AttachContext = true;
-		this.refresh();
-		await this.persist();
+		catch(ErrorValue) { this.show_error(ErrorValue); }
+	}
+
+	open_pdf(): void
+	{
+		new PdfPageModal(this.app, this.Capture, async () =>
+		{
+			this.State.Settings.AttachContext = true; this.refresh(); await this.persist(); await this.open_sidebar();
+		}).open();
+	}
+
+	async clear_pdf_images(): Promise<void>
+	{
+		if(this.Busy || this.Capture.PdfPending || this.Capture.Suspended) { throw new Error("请等待当前提问或 PDF 捕获结束后清除"); }
+		if(this.CaptureTimer) { clearTimeout(this.CaptureTimer); this.CaptureTimer = null; }
+		this.Capture.Suspended = true;
+		try
+		{
+			if(this.Remote.Enabled)
+			{
+				await this.ensure_connection();
+				if(this.HostInfo?.pdfPageImages === 1) { await this.Connection!.request("bridge/pdf-images", { action: "clear" }); }
+			}
+			await this.PdfImages.clear();
+			this.Status = "PDF 页图缓存已清除, 聊天与学习记录保留; 原页图缺失的请求不能换图重发"; this.refresh();
+		}
+		finally { this.Capture.Suspended = false; }
 	}
 
 	async ask_selection(Prompt: string): Promise<void>
 	{
-		this.Capture.track_view();
-		const Snapshot = await this.Capture.capture("选区") ?? (this.Capture.Snapshot?.Kind === "选区" ? this.Capture.Snapshot : null);
-		if(!Snapshot)
+		try
 		{
-			new Notice("请先在笔记中选中文字或公式");
-			return;
+			this.Capture.track_view();
+			const Snapshot = await this.Capture.capture("选区") ?? (this.Capture.Snapshot?.Kind === "选区" ? this.Capture.Snapshot : null);
+			if(!Snapshot)
+			{
+				new Notice("请先在笔记中选中文字或公式");
+				return;
+			}
+			await this.open_sidebar();
+			await this.send_message(Prompt, Snapshot);
 		}
-		await this.open_sidebar();
-		await this.send_message(Prompt, Snapshot);
+		catch(ErrorValue) { this.show_error(ErrorValue); }
 	}
 
 	private assistant_message(Id: string, TurnId: string, Role: "assistant" | "reasoning" = "assistant"): ChatMessage
@@ -1228,18 +1311,18 @@ export default class CodexSidebarPlugin extends Plugin
 				}
 			case "thread/tokenUsage/updated":
 				this.Session.Usage = Params.tokenUsage;
-				void this.persist();
+				this.persist_background();
 				break;
 			case "thread/settings/updated":
 				this.Model = Params.threadSettings.model;
 				this.Session.EffectiveModel = Params.threadSettings.model;
 				this.Session.EffectiveEffort = Params.threadSettings.effort;
 				this.Session.EffectiveTier = Params.threadSettings.serviceTier ?? "default";
-				void this.persist();
+				this.persist_background();
 				break;
 			case "thread/compacted":
 				this.Session.InstructionsHash = "";
-				void this.persist();
+				this.persist_background();
 				break;
 			case "item/agentMessage/delta":
 				this.assistant_message(Params.itemId, Params.turnId).Text += Params.delta;
@@ -1264,7 +1347,7 @@ export default class CodexSidebarPlugin extends Plugin
 				{
 					this.Session.InstructionsHash = "";
 				}
-				void this.persist();
+				this.persist_background();
 				break;
 			case "item/started":
 				if(Params.item.type === "fileChange")
@@ -1293,7 +1376,7 @@ export default class CodexSidebarPlugin extends Plugin
 				this.Activity = "";
 				this.StartedAt = 0;
 				this.Status = Params.turn.status === "completed" ? "回复完成" : Params.turn.status === "interrupted" ? "已停止" : `回复失败: ${Params.turn.error?.message ?? Params.turn.status}`;
-				void this.persist();
+				this.persist_background();
 				break;
 			case "error":
 				this.Status = Params.error?.message ?? "Codex 错误";
@@ -1405,6 +1488,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Generation++;
 		this.Inline?.clear();
 		this.CompletionWorker?.close();
+		this.Capture?.close();
 		if(this.CaptureTimer)
 		{
 			clearTimeout(this.CaptureTimer);
@@ -1497,6 +1581,7 @@ class CodexView extends ItemView
 		this.ContextSummary = ContextPanel.Summary;
 		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
 		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
+		this.button(ContextBar, "PDF 页...", () => this.Owner.open_pdf());
 		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
 		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
 		this.ContextElement = ContextPanel.Body.createDiv({ cls: "codex-context" });
@@ -1514,7 +1599,9 @@ class CodexView extends ItemView
 				},
 				return_source: async Path =>
 				{
-					await this.app.workspace.openLinkText(Path, "", false);
+					const Source = this.Owner.Study!.Store.Data.Pinned ?? this.Owner.Capture.Snapshot;
+					const Page = Source?.Path === Path ? Source.Pdf?.Pages[0].Number : undefined;
+					await this.app.workspace.openLinkText(Page ? `${Path}#page=${Page}` : Path, "", false);
 				}
 			});
 		}
@@ -1802,6 +1889,7 @@ class CodexView extends ItemView
 			Details.createEl("summary", { text: `${Snapshot.Path}${Snapshot.LineStart !== null ? `:${Snapshot.LineStart + 1}` : ""}` });
 			Details.createDiv({ text: Snapshot.Heading || "未定位标题", cls: "codex-context-heading" });
 			Details.createEl("pre", { text: Snapshot.Text });
+			pdf_preview(Details, Snapshot, this.Owner.PdfImages);
 			if(Snapshot.Truncated)
 			{
 				Details.createDiv({ text: "内容已截断到上下文长度限制" });
@@ -2082,6 +2170,15 @@ class CodexSettings extends PluginSettingTab
 			this.display();
 		}));
 		new Setting(this.containerEl).setName("数学内容修改准则").setDesc("题目可判断并标注补充条件; 完整答案最小修补, 需推倒重来时先由你决定; 解题思路严格沿原路线证明; 模仿原稿语言. 固定随请求注入, 自定义工作提示词仍保留.");
+		let ConfirmClear = false;
+		new Setting(this.containerEl).setName("PDF 页图缓存").setDesc("页图在当前设备单独保存, 远程桥按配对设备隔离. 清除会保留聊天和学习记录, 但缺少原图的请求不能重发. 不会删除 PDF 或撤回模型已收到的图片.").addButton(Button => Button.setButtonText("清除页图缓存...").onClick(async () =>
+		{
+			if(!ConfirmClear) { ConfirmClear = true; Button.setButtonText("确认清除本设备页图"); return; }
+			Button.setDisabled(true);
+			try { await this.Owner.clear_pdf_images(); new Notice(this.Owner.Status); }
+			catch(ErrorValue) { new Notice(error_text(ErrorValue)); }
+			finally { this.display(); }
+		}));
 		new Setting(this.containerEl).setName("行内补全").setDesc("编辑停顿后显示灰色建议. 在侧栏确认插入, Esc 取消, Ctrl+Alt+Space 手动请求. 保留 Obsidian 原生 Tab. 自动请求会消耗 Codex 用量, 使用当前模型的 low 档次.").addToggle(Toggle => Toggle.setValue(this.Owner.State.Settings.Completion).onChange(Value => this.Owner.set_completion(Value)));
 		new Setting(this.containerEl).setName("补全等待时间 (毫秒)").setDesc("默认 1200, 最小 500. 继续输入或移动光标会取消旧请求.").addText(TextValue => TextValue.setValue(String(this.Owner.State.Settings.CompletionDelay)).onChange(async Value =>
 		{

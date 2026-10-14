@@ -150,7 +150,7 @@ export class StudyController
 			throw new Error("工作台数学解释含不支持的可执行或嵌入结构, 保留原始文本但不执行");
 		}
 		const Output = Structured ? parse_output(Task.Action, Text) : null;
-		const SourceVersion = Task.Source ? await version_of(await this.Host.read_current(Task.Source.Path)) : "absent";
+		const SourceVersion = Task.Source ? await this.source_version(Task.Source.Path) : "absent";
 		const Plan = ["sample", "chapter", "proposal"].includes(Task.Action) ? plan_write(Task, Output as DraftOutput) : null;
 		this.Store.change(Data =>
 		{
@@ -236,13 +236,17 @@ export class StudyController
 		this.Store.change(Data => Data.Exercises.find(Value => Value.Id === Exercise.Id)!.Attempts.push({ Id: AttemptId, Text, At: new Date().toISOString(), TaskId: Task.Id }));
 		return this.send(Task);
 	}
+	private source_version(Path: string): Promise<string>
+	{
+		return /\.pdf$/i.test(Path) && this.Host.source_version ? this.Host.source_version(Path) : this.Host.read_current(Path).then(version_of);
+	}
 	async check_versions(): Promise<void>
 	{
 		const Paths = [...new Set(this.Store.Data.Exercises.map(Value => Value.Source.Path))];
 		const Versions = new Map<string, string>();
 		for(const Path of Paths)
 		{
-			Versions.set(Path, await version_of(await this.Host.read_current(Path)));
+			Versions.set(Path, await this.source_version(Path));
 		}
 		if(this.Store.Data.Exercises.some(Value => Value.Stale !== (!!Value.ManifestVersionChanged || Versions.get(Value.Source.Path) !== Value.SourceVersion)))
 		{

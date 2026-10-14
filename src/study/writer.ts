@@ -6,6 +6,7 @@ import { StudyStore, type WritePlan } from "./store";
 export interface WriteHost
 {
 	read_current(Path: string): Promise<string | null>;
+	source_version?(Path: string): Promise<string>;
 	compare_write(Path: string, Before: string | null, After: string): Promise<void>;
 }
 export async function bind_target(Host: WriteHost, Path: string, Operation: WriteTarget["Operation"], BlockId: string | null): Promise<WriteTarget>

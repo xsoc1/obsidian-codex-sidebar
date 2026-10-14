@@ -73,11 +73,12 @@ export interface ContextSnapshot
 	LineStart: number | null;
 	LineEnd: number | null;
 	Heading: string;
-	Mapping: "源文本" | "源块" | "渲染文本";
+	Mapping: "源文本" | "源块" | "渲染文本" | "PDF文本层" | "PDF页图";
 	CapturedAt: string;
 	Truncated: boolean;
 	Version?: string;
 	FocusLine?: number;
+	Pdf?: import("./pdf/types").PdfSnapshot;
 }
 
 export interface AnswerQuote
@@ -100,7 +101,7 @@ export function build_prompt(Question: string, Context: ContextSnapshot | null, 
 	let Prompt = Question;
 	if(Context)
 	{
-		const Location = Context.LineStart === null ? "源行未知" : `第 ${Context.LineStart + 1}-${(Context.LineEnd ?? Context.LineStart) + 1} 行`;
+		const Location = Context.Pdf ? `PDF 第 ${Context.Pdf.Pages.map(Page => Page.Number).join(", ")} 页 / 共 ${Context.Pdf.PageCount} 页` : Context.LineStart === null ? "源行未知" : `第 ${Context.LineStart + 1}-${(Context.LineEnd ?? Context.LineStart) + 1} 行`;
 		Prompt = [
 			Question,
 			"",
@@ -110,6 +111,7 @@ export function build_prompt(Question: string, Context: ContextSnapshot | null, 
 			`标题: ${Context.Heading || "未定位"}; 捕获时间: ${Context.CapturedAt}`,
 			Context.Truncated ? "材料因长度限制已截断." : "",
 			Context.SelectedText ? `用户选中的渲染文本或精确源文本:\n${Context.SelectedText}` : "",
+			Context.Pdf ? "PDF 是只读参考来源. 文字层不是原始 LaTeX, 顺序与数学符号可能丢失; 附带的是本次页面的渲染图, 不是精确选区裁图. 无文字层时依据页图识读, 不清楚的符号明确说明, 不编造全文或补充为原文. 引用实际 PDF 页码, 不把它冒充书内页码. 页图引用: " + Context.Pdf.Pages.map(Page => `${Page.Number}:${Page.Image.Id}`).join(", ") : "",
 			"<obsidian_source>",
 			Context.Text,
 			"</obsidian_source>"

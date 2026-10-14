@@ -196,3 +196,10 @@
 	overflow-y: auto;
 	margin: 6px 0;
 }
+.codex-pdf-preview
+{
+	display: block;
+	width: 100%;
+	height: auto;
+	margin-top: 8px;
+}

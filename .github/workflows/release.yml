@@ -46,6 +46,6 @@ jobs:
           VERSION="$GITHUB_REF_NAME"
           gh release create "$VERSION" manifest.json main.js main.js.map styles.css \
             "dist/codex-sidebar-${VERSION}.zip" "dist/codex-sidebar-windows-bridge-${VERSION}.zip" \
-            --verify-tag --draft --prerelease --title "$VERSION - Math study workbench and compact iPad chat" \
+            --verify-tag --draft --prerelease --title "$VERSION - Obsidian Codex Sidebar" \
             --notes-file "docs/releases/${VERSION}.md"
           gh release edit "$VERSION" --draft=false

@@ -1,7 +1,7 @@
 {
 	"id": "codex-sidebar",
 	"name": "Codex Sidebar",
-	"version": "0.7.1",
+	"version": "0.8.0",
 	"minAppVersion": "1.7.2",
 	"description": "Private Codex sidebar with a mathematics reading, practice and reviewed writing workbench.",
 	"author": "HuangZY",

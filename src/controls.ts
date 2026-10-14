@@ -7,6 +7,7 @@ export interface ModelInfo
 	serviceTiers?: { id: string; name: string; description: string }[];
 	additionalSpeedTiers?: string[];
 	isDefault: boolean;
+	inputModalities?: string[];
 }
 
 export interface RunSettings

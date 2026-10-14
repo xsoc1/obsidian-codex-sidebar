@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync } from "node:fs";
+import { BridgePdfImages } from "./pdf/bridge-cache";
 import { dirname, join, resolve } from "node:path";
 import { CodexConnection, type RpcMessage } from "./rpc";
 import { CompletionService } from "./completion";
@@ -35,6 +36,7 @@ const bounded_string = (Value: unknown, Limit: number): string =>
 
 class DeviceAgent
 {
+	private PdfImages: BridgePdfImages;
 	Connection: RpcConnection | null = null;
 	private Ready: Promise<void> | null = null;
 	private Models: ModelInfo[] = [];
@@ -58,6 +60,7 @@ class DeviceAgent
 			throw new Error("设备 ID 无效");
 		}
 		mkdirSync(Config.StateDir, { recursive: true });
+		this.PdfImages = new BridgePdfImages(join(Config.StateDir, Id + "-pdf"));
 		this.File = join(Config.StateDir, Id + ".json");
 		if(existsSync(this.File))
 		{
@@ -88,7 +91,7 @@ class DeviceAgent
 				this.Connection = null; this.Ready = null; this.Threads.clear();
 				this.event({ method: "bridge/disconnected", params: { message: ErrorValue.message } });
 			});
-			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: "0.7.1" }, capabilities: { experimentalApi: true } });
+			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: "0.8.0" }, capabilities: { experimentalApi: true } });
 			this.Connection.send({ method: "initialized", params: {} });
 			let Cursor: string | null = null;
 			this.Models = [];
@@ -285,7 +288,7 @@ class DeviceAgent
 	async info(): Promise<any>
 	{
 		await this.ready();
-		return { client: this.Id, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, bridgeVersion: "0.7.1", mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
+		return { client: this.Id, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, bridgeVersion: "0.8.0", pdfPageImages: 1, mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
 	}
 
 	events(After: number): any
@@ -324,6 +327,7 @@ class DeviceAgent
 		{
 			return { isolated: true };
 		}
+		if(Method === "bridge/pdf-images") { return this.PdfImages.request(Params); }
 		if(Method === "account/read")
 		{
 			return Connection.request(Method, { refreshToken: false });
@@ -335,7 +339,7 @@ class DeviceAgent
 				defaultReasoningEffort: Model.defaultReasoningEffort,
 				supportedReasoningEfforts: Model.supportedReasoningEfforts.map(Effort => ({ reasoningEffort: Effort.reasoningEffort, description: "" })),
 				serviceTiers: Model.serviceTiers?.map(Tier => ({ id: Tier.id, name: Tier.name, description: "" })),
-				additionalSpeedTiers: Model.additionalSpeedTiers
+				additionalSpeedTiers: Model.additionalSpeedTiers, inputModalities: Model.inputModalities
 			})), nextCursor: null };
 		}
 		if(Method === "skills/list")
@@ -428,13 +432,16 @@ class DeviceAgent
 		if(Method === "turn/start")
 		{
 			const Id = this.owned(Params.threadId);
-			if(!Array.isArray(Params.input) || Params.input.length !== 2 || Params.input[0]?.type !== "text" || Params.input[1]?.type !== "skill" || Params.input[1]?.name !== "math-writing")
+			if(!Array.isArray(Params.input) || Params.input.length < 2 || Params.input.length > 4 || Params.input[0]?.type !== "text" || Params.input[1]?.type !== "skill" || Params.input[1]?.name !== "math-writing" || Params.input.slice(2).some((Item: any) => Item?.type !== "image" || Object.keys(Item).some(Key => !["type", "url"].includes(Key))))
 			{
 				throw new Error("远程请求必须包含问题与 math-writing");
 			}
 			const Text = bounded_string(Params.input[0].text, 96000);
 			const Options = run_options({ Model: Params.model, Effort: Params.effort, Fast: Params.serviceTier === "priority" }, this.Models);
-			const Result = await Connection.request(Method, { threadId: Id, input: skill_input(Text, await this.skill()), ...Options });
+			const Images = Params.input.slice(2).map((Item: any) => ({ type: "image", url: this.PdfImages.resolve(Item.url) }));
+			const Model = this.Models.find(Value => Value.model === Options.model);
+			if(Images.length && Model?.inputModalities && !Model.inputModalities.includes("image")) { throw new Error("当前模型不支持 PDF 页图"); }
+			const Result = await Connection.request(Method, { threadId: Id, input: [...skill_input(Text, await this.skill()), ...Images], ...Options });
 			const Thread = this.Threads.get(Id)!;
 			const Session = this.State?.Sessions?.find((Entry: any) => Entry.Id === Thread.Session);
 			const User = Session?.Messages.filter((Entry: any) => Entry.Role === "user").at(-1);
@@ -456,11 +463,18 @@ class DeviceAgent
 		if(Method === "thread/inject_items")
 		{
 			const Id = this.owned(Params.threadId);
-			if(!Array.isArray(Params.items) || Params.items.length > 4000 || Params.items.some((Item: any) => Item.type !== "message" || !["user", "assistant", "developer"].includes(Item.role) || !Array.isArray(Item.content) || Item.content.some((Part: any) => !["input_text", "output_text"].includes(Part.type) || typeof Part.text !== "string" || Part.text.length > 96000)))
+			if(!Array.isArray(Params.items) || Params.items.length > 4000 || Params.items.some((Item: any) => Item.type !== "message" || !["user", "assistant", "developer"].includes(Item.role) || !Array.isArray(Item.content) || Item.content.some((Part: any) => Part.type === "input_image" ? Item.role !== "user" || Object.keys(Part).some(Key => !["type", "image_url"].includes(Key)) : !["input_text", "output_text"].includes(Part.type) || typeof Part.text !== "string" || Part.text.length > 96000)))
 			{
 				throw new Error("问答恢复内容无效");
 			}
-			return Connection.request(Method, { threadId: Id, items: Params.items });
+			let ImageCount = 0;
+			const Items = Params.items.map((Item: any) => ({ ...Item, content: Item.content.map((Part: any) =>
+			{
+				if(Part.type !== "input_image") { return Part; }
+				if(++ImageCount > 32) { throw new Error("恢复的 PDF 页图过多"); }
+				return { type: "input_image", image_url: this.PdfImages.resolve(Part.image_url) };
+			}) }));
+			return Connection.request(Method, { threadId: Id, items: Items });
 		}
 		if(Method === "turn/interrupt")
 		{
