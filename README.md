@@ -4,7 +4,7 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-[下载 0.7.1 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.7.1), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions).
+[下载 0.7.1 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.7.1), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38532401701).
 
 **0.7.1** 增加“会话与连接”和“提问与发送”折叠区. 移动端的四个控制区都默认收起, 会话导航、新会话/重连、输入框及发送/停止按钮按需展开. 收起保留当前草稿和选择; 标签标出“有草稿”, 点击回答的“追问这段”自动展开输入框. 状态、思考提示、网络错误与按需出现的引用卡保持可见. 桌面布局继续展开, 原生 Tab 与输入法处理保留. 这是布局更新, 可继续连接现有 0.7.0 Windows 桥. 详见 [发布说明](docs/releases/0.7.1.md); 新布局仍待 iPad 真机验收.
 
