@@ -4,7 +4,7 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-**0.10.0 本地候选版本**新增 AI 自选修改范围、独立笔记选区卡片和 Windows 四个控制区折叠. 默认由 AI 在当前笔记提供的有限上下文中选一段, 展示实际原文/差异, 确认后才写入. Windows 首次收起会话、上下文和模型, 发送区展开, 后续记住本设备开合状态. 选中文本直接显示在侧栏, 阅读公式可展开对应源 Markdown, 不因进入聊天框而换目标. [使用与边界](docs/note-edits.md), [0.10.0 验证记录](docs/range-selection-validation.md). 日常安装和 GitHub 发布待本轮授权.
+**0.10.0** 新增 AI 自选修改范围、独立笔记选区卡片和 Windows 四个控制区折叠. 默认由 AI 在当前笔记提供的有限上下文中选一段, 展示实际原文/差异, 确认后才写入. Windows 首次收起会话、上下文和模型, 发送区展开, 后续记住本设备开合状态. 选中文本直接显示在侧栏, 阅读公式可展开对应源 Markdown, 不因进入聊天框而换目标. [下载 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.10.0), [使用与边界](docs/note-edits.md), [0.10.0 验证记录](docs/range-selection-validation.md). 用户明确授权安装 Windows 并发布 GitHub; Windows 日常主侧栏真实请求、确认写入和安全撤销已通过, iPad 本版仍待真机验收.
 
 **0.9.0** 把普通聊天的 Markdown 修改请求接入确认写回. 选中原文后输入“请修正这段”, 查看目标和差异, 再点“确认写入此文件”; Codex 继续只读, 实际写入在当前 Obsidian 客户端完成. 支持未保存编辑内容、安全撤销、陈旧拒绝和本设备记录恢复. 默认只改捕获范围, 整篇修改需在“修改选项”中明确选择. [下载 0.9.0 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.9.0), [构建/发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38762502227); 详见 [使用、协议与回退](docs/note-edits.md) 和 [验证记录](docs/note-edits-validation.md). Windows 日常安装已获授权更新并走通真实主侧栏请求与确认按钮, iPad 本版改稿仍待真机验收.
 
