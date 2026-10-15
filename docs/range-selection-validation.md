@@ -14,3 +14,7 @@
 已在日常 Windows 的真实主侧栏走通原创临时笔记: 原生编辑器选中开头说明, 来源 keyup 自动捕获; 选区卡片在收起的上下文区外可见, 转入输入框后快照不变. 真实发送按钮提交隐藏 gpt-6.1-sol/low/default 请求, completed 后模型自行选择后面的证明原文, 最终全文仅 e→2e. 预览期间文件和编辑器零修改; 实际主侧栏“确认写入此文件”连续点击两次只产生一次写入, “安全撤销本次修改”恢复原文. 另核对原始矩阵 LaTeX、选区手动收起、四个桌面折叠区、折叠保留草稿以及关闭/重开侧栏恢复偏好, 自有悬停属性为零. 原生截图已实际查看. 初始验收脚本误用插件 ID 作为 view type, 改为真实 codex-sidebar-view 后继续通过, 未因此修改产品代码.
 
 测试后移除自建会话/笔记/修改日志, 恢复原设置、选区和折叠偏好、字节相同的学习数据, 再重载. 未读取认证文件或改全局 Codex/技能/配对/桥服务/真实课程材料. 原生日志留有 RenderingCancelledException, 无插件帧, 不宣称运行时零错误. 本轮未做 iPad 真机、全部阅读嵌入组合、原生多主题或手动 IME 验收. GitHub 资产发布校验另行记录; 使用说明/迁移见 [note-edits.md](note-edits.md).
+
+2026-10-16 公开交付回读: 代码/不可变标签为 `2f9956e9203186da9ef67b28176f1df1eec97d2a`, 分支与标签原子推送. [Actions 38770158379](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38770158379) 的安装、构建、89 项 fixture、打包、发布步骤全部成功. 匿名回读确认仓库公开、默认分支 codex/initial、标签匹配, [0.10.0 release](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.10.0) 为 draft=false/prerelease=true, 六件资产齐全. 下载全部资产并逐一验证 GitHub SHA-256 digest, 四个独立插件文件与本地构建和 Windows 已安装文件逐字节相同. 插件 ZIP 恰含四个匹配文件, 桥 ZIP 恰含公共桥/启动停止脚本/指南及 scripts 目录, 内容与源码构建一致. 一次匿名下载出现临时 fetch 失败, 有界只读重试后全部校验完成, 未重发模型请求或重新发布.
+
+下载目录、源树与开发树中的自有候选 ZIP 经原 hash 核对后替换为公开 ZIP 字节. 最终插件 ZIP SHA-256 为 `7d9c6e9b902ec99866616e8ffd6384ee8d6bb0ec2c5593563b57fb51f819bd40`; 桥 ZIP 为 `e42f4d52b614352ce78dd0554fa87ad6e4d2b8c2da04ecc539a595a6f19043f9`. 现有 0.8.0 独立远程桥与配对/网络未改动, 本版普通文本契约兼容. 此回读记录不改变标签或已发布资产.
