@@ -25,3 +25,11 @@
 ## 未验收
 
 iPad 真机改稿/软键盘/网络切换、全部阅读块/嵌入组合和本版中文 IME 手动输入尚未验收. 既有 Tab/IME 代码保留且 fixture 回归通过, 不冒充本轮真机输入. 模型语义边界只测原创有限样本, 不是完整数学审查. GitHub 发布与下载资产校验另记录实际结果, 不用本地安装成功代替发布验证.
+
+## GitHub 交付回读
+
+[0.9.0 公共预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.9.0) 的不可变代码/tag 为 `7aa47b7c4b7fde6f9a2cac17fa1cf5812802a292`. [Actions 38762502227](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38762502227) 安装依赖、构建、81 项 fixture 测试、打包、发布全通过. 匿名 API 回读 public=true、default_branch=codex/initial、draft=false、prerelease=true 和精确 tag.
+
+六个公共资产全部实际下载并比对 GitHub SHA-256; 四个单独构建文件与本机生成/安装字节相同. 插件 ZIP 恰含 manifest/main/map/styles 四文件; Windows 桥 ZIP 仅含 bundle、两启动/停止脚本、公开 README 及 scripts 目录, 各文件与 source build 相同. ZIP 名单检查初次因 PowerShell -join 比较括号错误失败, 列出真实成员并修正检查后通过, 非打包缺陷. Downloads 和源码 dist 的插件包均换成公共下载的相同字节, SHA-256 `054e6007ae3e34c414e6af280547b23f984e8660cd84e0d6aa5c0a38f515c2f1`.
+
+最终 native reload + 真实账号/model/skill bootstrap 返回 0.9.0、7 个模型、math-writing 0.2.0. 三段原会话/具体设置/当前会话/连接模式再次比对一致, 临时笔记数量 0、mobile=false、EmulateMobile=null. 正常远程桥没有重启或改配对/网络入口, 0.8.0 text 契约保持兼容. 发布包成功不是 iPad 本版改稿真机验收.
