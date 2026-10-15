@@ -6,6 +6,7 @@ import { webcrypto, randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import { jpeg_info } from "../src/pdf/types";
 import { make_task } from "../src/study/task";
+import { version_of } from "../src/study/document";
 
 async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 {
@@ -145,6 +146,96 @@ function bootstrap_http(Before?: (Params: any) => Promise<void>)
 		return { status: 200, json: Value };
 	};
 }
+
+test("ordinary mobile chat edits use the two-input skilled turn and the local confirmation writer; replay never changes to current focus", async () =>
+{
+	const Requests: any[] = [];
+	const { Instance, Local, Required } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture"; Instance.Remote.Transport = "native";
+	const Old = "证明: $1+1=3$.", New = "证明: $1+1=2$.", Before = "private-outside-snapshot\n\n" + Old + "\n\nkeep-tail";
+	let Current = Before, Writes = 0;
+	Instance.Edits.Host.read_current = async () => Current;
+	Instance.Edits.Host.compare_write = async (_: string, Expected: string, Next: string) => { assert.equal(Current, Expected); Current = Next; Writes++; };
+	const From = Before.indexOf(Old);
+	const Source: any = { Path: "scratch.md", Mode: "编辑", Kind: "选区", Text: Old, SelectedText: Old, Selection: { From, To: From + Old.length }, Mapping: "源文本", Heading: "证明", LineStart: 2, LineEnd: 2, Truncated: false, CapturedAt: "original-time", Version: await version_of(Before) };
+	try
+	{
+		assert.equal(await Instance.send_chat("请修正这段证明", Source, null), true);
+		const Turn = Requests.find(Value => Value.method === "turn/start");
+		assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing");
+		const Task = JSON.parse(Turn.params.input[0].text.split("任务:\n")[1]);
+		assert.equal(Task.Action, "edit"); assert.equal(Task.Target.Before, null); assert.equal(Task.WriteUnit.Text, Old);
+		assert.ok(!JSON.stringify(Requests).includes("private-outside-snapshot"));
+		assert.equal(Writes, 0);
+		const Out = JSON.stringify({ schemaVersion: 1, kind: "note-edit", status: "proposal", markdown: New, rationale: "仅纠正加法结果." });
+		Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "edit-final", type: "agentMessage", phase: "final_answer", text: Out } } });
+		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+		await new Promise(Resolve => setTimeout(Resolve, 20));
+		assert.equal(Instance.Edits.Store.Data.Writes.length, 1); assert.equal(Writes, 0);
+		const Plan = Instance.Edits.Store.Data.Writes[0];
+		await Promise.all([Instance.Edits.confirm(Plan.Id), Instance.Edits.confirm(Plan.Id)]);
+		assert.equal(Writes, 1); assert.equal(Current, Before.replace(Old, New));
+		await Instance.Edits.undo(Plan.Id); assert.equal(Current, Before);
+		const User = Instance.Session.Messages.find((Value: any) => Value.Role === "user");
+		Instance.Capture.Snapshot = { ...Source, Path: "unrelated.md", Text: "new-focus" };
+		await Instance.resend_message(User.Id);
+		const Replay = Instance.Session.Messages.findLast((Value: any) => Value.Role === "user");
+		assert.equal(Replay.Task.Source.Path, "scratch.md"); assert.equal(Replay.Task.Source.CapturedAt, "original-time"); assert.notEqual(Replay.Task.Id, User.Task.Id);
+		assert.ok(Local.has("codex-sidebar-edits:v1:test")); assert.ok(!JSON.stringify(Instance.State).includes("private-outside-snapshot"));
+		assert.ok(Required.every(Name => ["obsidian", "@codemirror/state", "@codemirror/view"].includes(Name)));
+	}
+	finally { Instance.onunload(); }
+});
+
+test("question-only chat and answer quotes do not acquire edit tasks; missing skills prevent submission", async () =>
+{
+	const Requests: any[] = [];
+	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
+	try
+	{
+		assert.equal(await Instance.send_chat("修改建议是什么", null, null, { Mode: "question" }), true);
+		assert.equal(Instance.Session.Messages.find((Value: any) => Value.Role === "user").Task, undefined);
+		assert.equal(Instance.Edits.Store.Data.Records.length, 0);
+		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+		const Quote = { SessionId: "old", MessageId: "old-answer", SelectedText: "回答片段", SourceText: "回答片段", SelectedTruncated: false, SourceTruncated: false };
+		assert.equal(await Instance.send_chat("请修改这段回答的说法", null, Quote), true);
+		assert.equal(Instance.Session.Messages.findLast((Value: any) => Value.Role === "user").Task, undefined);
+		assert.equal(Instance.Edits.Store.Data.Records.length, 0);
+	}
+	finally { Instance.onunload(); }
+	const Ordinary = bootstrap_http();
+	const F = await mobile_fixture(async Params => JSON.parse(Params.body ?? "null")?.method === "skills/list" ? { status: 200, json: { data: [] } } : Ordinary(Params));
+	F.Instance.Remote.Url = "https://example.test"; F.Instance.Remote.Token = "fixture";
+	F.Instance.Edits.Host.read_current = async () => "原文";
+	const Source: any = { Path: "scratch.md", Mode: "阅读", Kind: "当前位置", Text: "原文", SelectedText: "", Mapping: "源块", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "t", Version: await version_of("原文") };
+	try
+	{
+		assert.equal(await F.Instance.send_chat("修改这里", Source, null), false);
+		assert.equal(F.Instance.Edits.Store.Data.Writes.length, 0);
+		assert.match(F.Instance.Status, /math-writing|技能/);
+	}
+	finally { F.Instance.onunload(); }
+});
+
+test("ordinary edits respect host read-only metadata before model submission", async () =>
+{
+	const Requests: any[] = [];
+	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
+	Instance.Edits.Host.read_current = async () => "教师原题";
+	Instance.app.vault.getFileByPath = () => ({ path: "scratch.md" });
+	Instance.app.metadataCache = { getFileCache: () => ({ frontmatter: { "codex-readonly": true } }) };
+	const Source: any = { Path: "scratch.md", Mode: "阅读", Kind: "当前位置", Text: "教师原题", SelectedText: "", Mapping: "源块", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "t", Version: await version_of("教师原题") };
+	try
+	{
+		assert.equal(await Instance.send_chat("帮我改一下", Source, null), false);
+		assert.equal(Requests.filter(Value => Value.method === "turn/start").length, 0);
+		assert.equal(Instance.Edits.Store.Data.Records.length, 0);
+		assert.match(Instance.Status, /只读/);
+	}
+	finally { Instance.onunload(); }
+});
 
 test("mobile native transport selection is device-local and reaches the same remote bootstrap without browser fetch", async () =>
 {

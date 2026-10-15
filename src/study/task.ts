@@ -1,5 +1,6 @@
 import type { ContextSnapshot } from "../prompt";
 import type { InputRole, StudyAction } from "./schema";
+import { edit_prompt } from "../edit/protocol";
 
 export interface WriteTarget
 {
@@ -7,8 +8,9 @@ export interface WriteTarget
 	Before: string | null;
 	Version: string;
 	BlockId: string | null;
-	Operation: "create" | "insert-after" | "replace-unit";
-	Role: "lecture";
+	Operation: "create" | "insert-after" | "replace-unit" | "replace-range";
+	Role: "lecture" | "note";
+	Range?: { From: number; To: number };
 }
 export interface TaskSpec
 {
@@ -16,7 +18,7 @@ export interface TaskSpec
 	Id: string;
 	Action: StudyAction;
 	Role: InputRole;
-	Scope: "explain-only" | "nearby-exercise" | "attempt-feedback" | "new-lecture" | "unit-suggestion";
+	Scope: "explain-only" | "nearby-exercise" | "attempt-feedback" | "new-lecture" | "unit-suggestion" | "note-edit";
 	HintLevel: "direct" | "on-demand";
 	Source: ContextSnapshot | null;
 	SourceVersion?: string;
@@ -44,6 +46,7 @@ export const StudyRules = `数学学习工作台约定:
 
 export function task_prompt(Task: TaskSpec): string
 {
+	if(Task.Action === "edit") { return edit_prompt(Task); }
 	const Formats: Partial<Record<StudyAction, object>> = {
 		exercise: { schemaVersion: 1, kind: "calculation|symbols|conditions|proof-step", statement: "一道相近题的完整题面", hints: ["目标提示", "工具提示", "局部步骤"], solution: "完整解答或 null", verification: "unverified" },
 		feedback: { schemaVersion: 1, verdict: "correct|partial|incorrect|uncertain", explanation: "核对学生实际路线, 说明理由" },

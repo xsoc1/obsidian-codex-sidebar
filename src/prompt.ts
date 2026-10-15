@@ -1,3 +1,5 @@
+import { ChatWriteRules } from "./edit/rules";
+
 export const LegacyInstructions = `你是运行在 Obsidian 笔记侧栏中的 Codex 助手, 帮助用户阅读、学习、研究数学与计算机科学, 解释概念与符号, 梳理推导, 检查证明, 整理思路, 并回答当前笔记相关或独立的问题. 默认用中文, 用户指定其他语言时遵从.
 
 工作方式:
@@ -35,17 +37,22 @@ export const EditingRules = `用户确定的数学内容修改准则 (适用于�
 - 语言风格模仿用户的写法: 以本次原稿及用户明确提供的样本为依据, 保留句式、术语、记号、详略与组织方式. 没有足够样本时沿用原文风格, 不把参考书、技能示例或其他笔记作者的风格当成用户风格. 保留正确而有辨识度的表达, 仅为逻辑正确或明确消歧作必要调整.
 - 行内补全只沿当前文本的路线补充短片段, 不重写已有答案或自动补齐整题; 涉及路线重建、未经决定的实质修改或无法可靠延续时返回空补全, 由侧栏聊天说明问题并让用户定夺.`;
 
-export const DefaultInstructions = PreviousInstructions + "\n\n" + EditingRules;
+export const PriorDefaultInstructions = PreviousInstructions + "\n\n" + EditingRules;
+const CurrentInstructions = PreviousInstructions
+	.replace("当前功能是只读问答. 不修改笔记、配置或仓库, 不提交或发布变更. 需要修改时先给出可供用户检查的文本建议.", "工具保持只读. 用户要求修改笔记时, 生成供客户端确认的提案, 不自行写文件、改配置、提交或发布.")
+	.replace(/- 用户授权后的笔记操作可用 create[^\n]+\n/, "- 笔记写入只由当前 Obsidian 客户端在用户确认后执行, 不使用 CLI 或 shell 写入.\n");
+export const DefaultInstructions = CurrentInstructions + "\n\n" + ChatWriteRules + "\n\n" + EditingRules;
 
 export function editing_instructions(Instructions: string): string
 {
 	const Work = Instructions.trim() || DefaultInstructions;
-	return Work.endsWith(EditingRules) ? Work : Work + "\n\n" + EditingRules;
+	const WithWrites = Work.includes(ChatWriteRules) ? Work : Work + "\n\n" + ChatWriteRules;
+	return WithWrites.includes(EditingRules) ? WithWrites : WithWrites + "\n\n" + EditingRules;
 }
 
 export function migrate_instructions(Instructions: string): string
 {
-	return Instructions === LegacyInstructions || Instructions === PreviousInstructions ? DefaultInstructions : Instructions;
+	return [LegacyInstructions, PreviousInstructions, PriorDefaultInstructions].includes(Instructions) ? DefaultInstructions : Instructions;
 }
 
 export function environment_instructions(Instructions: string, Environment: { Vault: string; Root: string; Cli: string }): string
@@ -79,6 +86,7 @@ export interface ContextSnapshot
 	Version?: string;
 	FocusLine?: number;
 	Pdf?: import("./pdf/types").PdfSnapshot;
+	Selection?: { From: number; To: number };
 }
 
 export interface AnswerQuote

@@ -6,6 +6,8 @@ src/study 分为 task、schema、document、manifest、store/validate-store、co
 
 TaskSpec SchemaVersion=1 保存任务 ID、动作、输入角色、范围、提示程度、原 Source/直接前置、来源核验登记、时间与请求, 以及可选练习/尝试关联、写作计划和宿主目标. 目标完整 Before 仅在本设备任务/写回记录, 不发给模型或远程聊天状态. 模型收到原捕获片段及直接需要的 WriteUnit.
 
+0.9.0 普通聊天修改复用同一协议与确认写回器, 新增 Action=edit / Scope=note-edit、note 输入角色和宿主 replace-range 目标. 独立 src/edit 模块管理运行时 schema、原范围绑定、本地修改记录、输入选项与提案呈现; 不进入学习记录或远程整份状态覆盖. 见 [普通改稿协议](note-edits.md).
+
 任务信息在 text 输入中序列化, 不是未知 turn/start 字段. 重发复制原任务/来源/目标基线并新建 ID; 反馈重发新建尝试, 不改旧记录. 重新捕获另走明确动作. 说明/检查不授予改写题面、教师原题或相邻答案的权限.
 
 ## Codex 协议

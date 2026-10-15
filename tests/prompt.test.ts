@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { build_prompt, bound_text, heading_at, source_excerpt, instruction_items, DefaultInstructions, LegacyInstructions, PreviousInstructions, EditingRules, editing_instructions, migrate_instructions, type ContextSnapshot } from "../src/prompt";
+import { build_prompt, bound_text, heading_at, source_excerpt, instruction_items, DefaultInstructions, PriorDefaultInstructions, LegacyInstructions, PreviousInstructions, EditingRules, editing_instructions, migrate_instructions, type ContextSnapshot } from "../src/prompt";
+import { ChatWriteRules } from "../src/edit/rules";
 
 test("reading selection carries original LaTeX and an honest block mapping", () =>
 {
@@ -48,12 +49,15 @@ test("unchanged prior defaults migrate but custom instructions remain intact", (
 {
 	assert.equal(migrate_instructions(LegacyInstructions), DefaultInstructions);
 	assert.equal(migrate_instructions(PreviousInstructions), DefaultInstructions);
+	assert.equal(migrate_instructions(PriorDefaultInstructions), DefaultInstructions);
+	assert.ok(!DefaultInstructions.includes("当前功能是只读问答"));
+	assert.ok(!DefaultInstructions.includes("用户授权后的笔记操作可用 create"));
 	assert.equal(migrate_instructions("Custom work instructions."), "Custom work instructions.");
 });
 
 test("fixed editing rules accompany custom instructions without duplicating the default policy", () =>
 {
-	assert.equal(editing_instructions("Custom work instructions."), "Custom work instructions.\n\n" + EditingRules);
+	assert.equal(editing_instructions("Custom work instructions."), "Custom work instructions.\n\n" + ChatWriteRules + "\n\n" + EditingRules);
 	assert.equal(editing_instructions(DefaultInstructions), DefaultInstructions);
 	assert.equal(editing_instructions(""), DefaultInstructions);
 	assert.ok(EditingRules.includes("题目文本可由你判断"));

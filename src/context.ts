@@ -68,6 +68,7 @@ export class ContextCapture
 		let End: number | null = null;
 		let FocusLine: number | undefined;
 		let Mapping: ContextSnapshot["Mapping"] = "源文本";
+		let Selection: ContextSnapshot["Selection"];
 		const Mode = View.getMode() === "preview" ? "阅读" : "编辑";
 		let ContextPath = Path;
 		if(Mode === "编辑")
@@ -80,6 +81,7 @@ export class ContextCapture
 			}
 			const From = Editor.getCursor(Kind === "选区" ? "from" : "head");
 			const To = Editor.getCursor(Kind === "选区" ? "to" : "head");
+			if(Kind === "选区" && SelectedText) { Selection = { From: Editor.posToOffset(From), To: Editor.posToOffset(To) }; }
 			FocusLine = From.line;
 			Start = Math.max(0, From.line - 5);
 			End = Math.min(Editor.lineCount() - 1, To.line + 5);
@@ -161,6 +163,7 @@ export class ContextCapture
 			CapturedAt: new Date().toISOString(),
 			Truncated: Bounded.Truncated || SelectedText.length > 12000,
 			Version: await version_of(VersionSource),
+			...(Selection ? { Selection } : {}),
 			FocusLine: FocusLine ?? Start ?? undefined
 		};
 		return this.Snapshot;

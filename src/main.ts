@@ -1,6 +1,6 @@
 import {
 	Plugin, ItemView, WorkspaceLeaf, PluginSettingTab, Setting, Notice,
-	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, type App
+	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, parseYaml, type App
 } from "obsidian";
 import { ContextCapture } from "./context";
 import { build_prompt, DefaultInstructions, editing_instructions, migrate_instructions, environment_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
@@ -27,6 +27,12 @@ import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
 import { image_inputs, message_pdf_refs, history_pdf_refs } from "./pdf/inputs";
 import { pdf_reference, jpeg_info, type PdfImageRef } from "./pdf/types";
 import { PdfPageModal, pdf_preview, PdfInstructions } from "./pdf/panel";
+import { ChatEdits } from "./edit/controller";
+import { EditStore } from "./edit/store";
+import { edit_intent, type EditRole, type EditScope } from "./edit/protocol";
+import { unit_range } from "./study/document";
+import { render_edit, export_edits } from "./edit/panel";
+import { EditOptions } from "./edit/options";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -98,6 +104,8 @@ async function instruction_hash(Text: string): Promise<string>
 
 export default class CodexSidebarPlugin extends Plugin
 {
+	Edits: ChatEdits | null = null;
+	ChatPreparing = false;
 	State!: SavedState;
 	Capture!: ContextCapture;
 	PdfImages!: PdfImages;
@@ -229,6 +237,15 @@ export default class CodexSidebarPlugin extends Plugin
 		try
 		{
 			const Host = new ObsidianWriteHost(this.app);
+			this.Edits = new ChatEdits(new EditStore(localStorage, this.app.vault.getName()), {
+				read_current: Path => Host.read_current(Path), compare_write: (Path, Before, After) => Host.compare_write(Path, Before, After),
+				protected_source: Task => this.protected_edit(Task), send: Task => this.send_message(Task.Request, Task.Source, null, Task), changed: () => this.refresh()
+			});
+		}
+		catch(ErrorValue) { this.Status = error_text(ErrorValue); }
+		try
+		{
+			const Host = new ObsidianWriteHost(this.app);
 			this.Study = new StudyController(new StudyStore(localStorage, this.app.vault.getName()), {
 				read_current: Path => Host.read_current(Path),
 				source_version: Path => Host.source_version(Path),
@@ -331,7 +348,7 @@ export default class CodexSidebarPlugin extends Plugin
 		return PdfInstructions + "\n\n" + environment_instructions(editing_instructions(this.State.Settings.Instructions), {
 			Vault: this.app.vault.getName(), Root: this.host_cwd(),
 			Cli: this.obsidian_cli()
-		}) + (this.Remote.Enabled ? "\n\n这是独立的 iPad/远程 Obsidian 会话. CLI 在 Windows, 用户界面在客户端. 当前笔记与选区以用户随问题提供的源快照为准, Windows vault 副本可能尚未同步. 只读 CLI 工具读到的是电脑副本, 不能声称看到了 iPad 屏幕、未同步文件或桌面其他会话. 不修改笔记, 补全只返回建议供客户端确认." : "");
+		}) + (this.Remote.Enabled ? "\n\n这是独立的 iPad/远程 Obsidian 会话. CLI 在 Windows, 用户界面在客户端. 当前笔记与选区以用户随问题提供的源快照为准, Windows vault 副本可能尚未同步. 只读 CLI 工具读到的是电脑副本, 不能声称看到了 iPad 屏幕、未同步文件或桌面其他会话. 修改只生成提案, 确认后的写入由当前 iPad/远程客户端完成; 不让 Windows 写同步副本. 补全也只返回建议供客户端确认." : "");
 	}
 
 	private host_cwd(): string
@@ -569,6 +586,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			return;
 		}
+		this.Edits?.consume(this.Session.Messages);
 		this.Ribbon?.toggleClass("is-active", this.app.workspace.getLeavesOfType(ViewType).length > 0);
 		this.Study?.consume(this.Session.Messages);
 		for(const Leaf of this.app.workspace.getLeavesOfType(ViewType))
@@ -970,9 +988,58 @@ export default class CodexSidebarPlugin extends Plugin
 		return Urls;
 	}
 
+	private protected_edit(Task: TaskSpec): boolean
+	{
+		const Path = Task.Target?.Path;
+		if(!Path || !Task.Target?.Range || Task.Target.Before === null) { return true; }
+		const File = this.app.vault.getFileByPath?.(Path);
+		const Frontmatter = File ? this.app.metadataCache?.getFileCache(File)?.frontmatter : null;
+		if(Frontmatter?.["codex-readonly"] === true || ["source-excerpt", "teacher-problem", "源书摘录", "教师原题"].includes(Frontmatter?.["study-role"] ?? Frontmatter?.role ?? Frontmatter?.note_type)) { return true; }
+		const Yaml = Task.Target.Before.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+		if(Yaml)
+		{
+			try
+			{
+				const Value = parseYaml(Yaml[1]);
+				if(Value?.["codex-readonly"] === true || ["source-excerpt", "teacher-problem", "源书摘录", "教师原题"].includes(Value?.["study-role"] ?? Value?.role ?? Value?.note_type)) { return true; }
+			}
+			catch { return true; }
+		}
+		for(const Unit of this.Study?.Store.Data.Manifest?.Data.units ?? [])
+		{
+			if(Unit.path !== Path || Unit.role === "lecture") { continue; }
+			try { const Range = unit_range(Task.Target.Before, Unit.blockId); if(Range.From < Task.Target.Range.To && Range.To > Task.Target.Range.From) { return true; } }
+			catch { return true; }
+		}
+		return false;
+	}
+
+	async send_chat(Question: string, Context: ContextSnapshot | null, Quote: AnswerQuote | null, Options: { Mode?: "auto" | "question" | "edit"; Scope?: EditScope; Role?: EditRole } = {}): Promise<boolean>
+	{
+		if(this.Busy || this.ChatPreparing || this.Capture.Suspended) { return false; }
+		const Edit = Options.Mode === "edit" || (Options.Mode !== "question" && !Quote && edit_intent(Question));
+		if(!Edit) { return this.send_message(Question, Context, Quote); }
+		this.ChatPreparing = true; this.StartedAt = Date.now(); this.Activity = "准备修改目标"; this.refresh();
+		try
+		{
+			if(!Question.trim()) { throw new Error("请写明修改要求"); }
+			if(!this.Edits) { throw new Error("本设备修改记录不可用, 请先导出检查, 不会覆盖旧数据"); }
+			if(Quote) { throw new Error("当前引用的是助手回答, 请取消引用并捕获要修改的笔记"); }
+			if(!this.State.Settings.AttachContext) { throw new Error("修改需要附带目标原文, 请打开附带上下文并捕获笔记"); }
+			if(!Context)
+			{
+				this.Capture.track_view(); Context = await this.Capture.capture("选区") ?? await this.Capture.capture("当前位置");
+			}
+			if(!Context) { throw new Error("请先打开 Markdown 并捕获需要修改的选区或段落"); }
+			return await this.Edits.request(Question.trim(), Context, Options.Scope ?? "captured", Options.Role ?? "auto");
+		}
+		catch(ErrorValue) { this.show_error(ErrorValue); return false; }
+		finally { this.ChatPreparing = false; if(!this.Busy) { this.Activity = ""; } this.refresh(); }
+	}
+
 	async send_message(Question: string, Context = this.State.Settings.AttachContext ? this.Capture.Snapshot : null, Quote: AnswerQuote | null = null, Task: TaskSpec | null = null): Promise<boolean>
 	{
-		if(this.Busy || this.Capture.Suspended || !Question.trim())
+		if(this.Unloaded || this.Busy || (this.ChatPreparing && Task?.Action !== "edit") || this.Capture.Suspended || !Question.trim())
 		{
 			return false;
 		}
@@ -1013,7 +1080,8 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				throw new Error("任务超过远程输入上限, 请缩小来源或已确认样章");
 			}
-			if(Task)
+			if(Task?.Action === "edit") { this.Edits?.register(Task); }
+			else if(Task)
 			{
 				this.Study?.register_task(Task);
 			}
@@ -1094,7 +1162,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async reconnect(): Promise<void>
 	{
-		if(this.Busy)
+		if(this.Busy || this.ChatPreparing)
 		{
 			new Notice("请先停止当前回复");
 			return;
@@ -1122,7 +1190,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async choose_session(Id?: string): Promise<void>
 	{
-		if(this.Busy)
+		if(this.Busy || this.ChatPreparing)
 		{
 			new Notice("请先停止当前回复");
 			return;
@@ -1149,7 +1217,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async resend_message(Id: string, Text?: string): Promise<boolean>
 	{
-		if(this.Busy)
+		if(this.Busy || this.ChatPreparing)
 		{
 			new Notice("请先停止当前回复");
 			return false;
@@ -1160,6 +1228,16 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			return false;
 		}
+		let EditReplay: TaskSpec | null = null;
+		try
+		{
+			if(Message.Task?.Action === "edit")
+			{
+				if(!this.Edits) { throw new Error("本设备修改记录不可用"); }
+				EditReplay = this.Edits.replay(Message.Task, Text);
+			}
+		}
+		catch(ErrorValue) { this.show_error(ErrorValue); return false; }
 		if(Message.ContextLabel && Message.Context === undefined)
 		{
 			new Notice("旧版消息没有保存源上下文. 此次重发仅使用原问题, 不附带当前选区.", 7000);
@@ -1180,8 +1258,9 @@ export default class CodexSidebarPlugin extends Plugin
 			await this.persist();
 			this.Busy = false;
 			const OriginalTask = this.Study?.Store.Data.Tasks.find(Value => Value.Spec.Id === Message.Task?.Id)?.Spec ?? Message.Task;
-			const Task = OriginalTask ? this.Study?.replay_task(OriginalTask, Text) ?? { ...structuredClone(OriginalTask), Id: crypto.randomUUID(), Request: Text ?? OriginalTask.Request } : null;
-			if(Task?.Target && !this.Study?.Store.Data.Tasks.some(Value => Value.Spec.Id === Message.Task?.Id))
+			if(OriginalTask?.Action === "edit" && !this.Edits) { throw new Error("本设备修改记录不可用"); }
+			const Task = EditReplay ?? (OriginalTask ? this.Study?.replay_task(OriginalTask, Text) ?? { ...structuredClone(OriginalTask), Id: crypto.randomUUID(), Request: Text ?? OriginalTask.Request } : null);
+			if(Task?.Target && Task.Action !== "edit" && !this.Study?.Store.Data.Tasks.some(Value => Value.Spec.Id === Message.Task?.Id))
 			{
 				new Notice("本设备没有原写回基线, 保留原任务仅作只读建议");
 				delete Task.Target;
@@ -1515,6 +1594,7 @@ class CodexView extends ItemView
 	private CompletionElement!: HTMLElement;
 	private MessagesElement!: HTMLElement;
 	private Input!: HTMLTextAreaElement;
+	private EditOptions!: EditOptions;
 	private QuoteElement!: HTMLElement;
 	private SelectedAnswer: AnswerQuote | null = null;
 	private SendButton!: HTMLButtonElement;
@@ -1647,6 +1727,7 @@ class CodexView extends ItemView
 		this.UsageElement = OptionsPanel.Body.createDiv({ cls: "codex-usage" });
 		this.ComposePanel = sidebar_panel(Composer, "codex-send-tools", "提问与发送", Mobile);
 		this.Input = this.ComposePanel.Body.createEl("textarea", { attr: { placeholder: "随时提问... Enter 发送, Shift+Enter 换行" } });
+		this.EditOptions = new EditOptions(this.ComposePanel.Body, () => this.refresh_compose_summary());
 		accessible_name(this.Input, "向 Codex 提问");
 		this.Input.addEventListener("input", () => this.refresh_compose_summary());
 		this.Input.addEventListener("keydown", Event =>
@@ -1736,12 +1817,14 @@ class CodexView extends ItemView
 	private refresh_compose_summary(): void
 	{
 		this.ComposePanel?.Summary?.setText(this.Input.value.trim() ? "提问与发送 · 有草稿" : this.Owner.AnswerQuote ? "提问与发送 · 已引用" : "提问与发送");
+		const Editing = this.EditOptions?.refresh(this.Input.value, !!this.Owner.AnswerQuote, this.Owner.Capture.Snapshot?.Path);
+		this.SendButton?.setText(Editing ? "生成修改预览" : "发送");
 	}
 
 	private refresh_activity(): void
 	{
-		this.ActivityElement.hidden = !this.Owner.Busy;
-		if(this.Owner.Busy)
+		this.ActivityElement.hidden = !this.Owner.Busy && !this.Owner.ChatPreparing;
+		if(this.Owner.Busy || this.Owner.ChatPreparing)
 		{
 			const Seconds = Math.max(0, Math.floor((Date.now() - this.Owner.StartedAt) / 1000));
 			this.ActivityLabel.setText(`${this.Owner.Activity || "思考中"} · ${Seconds} 秒`);
@@ -1788,9 +1871,9 @@ class CodexView extends ItemView
 			EffortOptions.push({ Value: "", Label: "加载思考档次..." });
 		}
 		this.set_options(this.EffortElement, EffortOptions, Settings.Effort);
-		this.ModelElement.disabled = this.Owner.Busy || !this.Owner.Models.length;
-		this.EffortElement.disabled = this.Owner.Busy || !Selected;
-		this.FastElement.disabled = this.Owner.Busy || (!fast_tier(Selected) && !Settings.Fast);
+		this.ModelElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || !this.Owner.Models.length;
+		this.EffortElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || !Selected;
+		this.FastElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || (!fast_tier(Selected) && !Settings.Fast);
 		this.FastElement.checked = Settings.Fast;
 		this.UsageToggle.checked = Settings.ShowUsage;
 		this.CompletionToggle.checked = Settings.Completion;
@@ -1830,7 +1913,7 @@ class CodexView extends ItemView
 	{
 		const Text = this.Input.value;
 		const Quote = this.Owner.AnswerQuote;
-		const Accepted = await this.Owner.send_message(Text, Quote ? null : this.Owner.State.Settings.AttachContext ? this.Owner.Capture.Snapshot : null, Quote);
+		const Accepted = await this.Owner.send_chat(Text, Quote ? null : this.Owner.State.Settings.AttachContext ? this.Owner.Capture.Snapshot : null, Quote, this.EditOptions.values());
 		if(Accepted && this.Input.value === Text)
 		{
 			this.Input.value = "";
@@ -1857,7 +1940,7 @@ class CodexView extends ItemView
 		this.refresh_completion();
 		this.refresh_quote();
 		this.StudyPanel?.refresh();
-		this.SendButton.disabled = this.Owner.Busy;
+		this.SendButton.disabled = this.Owner.Busy || this.Owner.ChatPreparing;
 		this.StopButton.disabled = !this.Owner.Busy || !this.Owner.TurnId;
 		const Options = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
 		if(this.SessionsElement.dataset.options !== Options)
@@ -1870,7 +1953,7 @@ class CodexView extends ItemView
 			this.SessionsElement.dataset.options = Options;
 		}
 		this.SessionsElement.value = Session.Id;
-		this.SessionsElement.disabled = this.Owner.Busy;
+		this.SessionsElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing;
 		this.ContextElement.empty();
 		const Snapshot = this.Owner.Capture.Snapshot;
 		this.ContextSummary?.setText(Snapshot ? `上下文与学习 · ${Snapshot.Kind}${Snapshot.Truncated ? " (已截断)" : ""}` : "上下文与学习");
@@ -2013,6 +2096,11 @@ class CodexView extends ItemView
 					this.button(Actions, "取消", () => { this.EditingId = ""; this.refresh(); });
 					Body.createDiv({ cls: "codex-message-context", text: "将使用原消息上下文创建分支, 原会话保留." });
 				}
+				else if(Structured?.Action === "edit")
+				{
+					await render_edit(this.app, Body, this.Owner.Edits, Structured, RenderComponent, () => this.Owner.refresh());
+					const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始修改输出" }); Raw.createEl("pre", { text: Message.Text });
+				}
 				else if(Structured)
 				{
 					Body.dataset.studyStructured = "true";
@@ -2095,7 +2183,7 @@ class CodexView extends ItemView
 
 	private message_signature(): string
 	{
-		return JSON.stringify([this.Owner.Session.Id, this.Owner.Session.Messages, this.Owner.Busy, this.EditingId]);
+		return JSON.stringify([this.Owner.Session.Id, this.Owner.Session.Messages, this.Owner.Busy, this.EditingId, this.Owner.Edits?.Error, this.Owner.Edits?.Store.Data.Records.map(Value => [Value.Spec.Id, Value.Status, Value.Error]), this.Owner.Edits?.Store.Data.Writes.map(Value => [Value.Id, Value.State, Value.Error])]);
 	}
 }
 
@@ -2170,6 +2258,16 @@ class CodexSettings extends PluginSettingTab
 			this.display();
 		}));
 		new Setting(this.containerEl).setName("数学内容修改准则").setDesc("题目可判断并标注补充条件; 完整答案最小修补, 需推倒重来时先由你决定; 解题思路严格沿原路线证明; 模仿原稿语言. 固定随请求注入, 自定义工作提示词仍保留.");
+		let ConfirmEdits = false;
+		new Setting(this.containerEl).setName("本设备修改记录").setDesc("普通聊天的修改提案、原文基线与撤销记录仅存本设备, 不随远程聊天覆盖. 导出含原文, 请自行保管. 清除后不能采用或安全撤销旧提案, 不会改动笔记.")
+			.addButton(Button => Button.setButtonText("导出记录").onClick(() => { if(this.Owner.Edits) { export_edits(this.app, this.Owner.Edits.Store.export_records()); } }))
+			.addButton(Button => Button.setButtonText("清除记录...").onClick(() =>
+			{
+				if(!ConfirmEdits) { ConfirmEdits = true; Button.setButtonText("确认清除此设备记录"); return; }
+				try { this.Owner.Edits?.clear(); this.Owner.refresh(); new Notice("本设备修改记录已清除, 笔记未改动"); }
+				catch(ErrorValue) { new Notice(error_text(ErrorValue)); }
+				this.display();
+			}));
 		let ConfirmClear = false;
 		new Setting(this.containerEl).setName("PDF 页图缓存").setDesc("页图在当前设备单独保存, 远程桥按配对设备隔离. 清除会保留聊天和学习记录, 但缺少原图的请求不能重发. 不会删除 PDF 或撤回模型已收到的图片.").addButton(Button => Button.setButtonText("清除页图缓存...").onClick(async () =>
 		{

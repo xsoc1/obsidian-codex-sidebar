@@ -7,7 +7,7 @@ export function structured_task(Messages: ChatMessage[], Reply: ChatMessage): Ta
 		return null;
 	}
 	const Task = Messages.find(Value => Value.Role === "user" && Value.TurnId === Reply.TurnId && Value.Task)?.Task;
-	return Reply.Role === "assistant" && Reply.Phase !== "commentary" && Task && ["exercise", "feedback", "solution", "sample", "chapter", "proposal"].includes(Task.Action) ? Task : null;
+	return Reply.Role === "assistant" && Reply.Phase !== "commentary" && Task && ["exercise", "feedback", "solution", "sample", "chapter", "proposal", "edit"].includes(Task.Action) ? Task : null;
 }
 export function question_label(Task: TaskSpec): string
 {

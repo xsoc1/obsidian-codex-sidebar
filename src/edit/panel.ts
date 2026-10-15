@@ -1,0 +1,60 @@
+import { MarkdownRenderer, Modal, type App, type Component } from "obsidian";
+import type { ChatEdits } from "./controller";
+import { diff_preview } from "../study/diff";
+import type { TaskSpec } from "../study/task";
+import { safe_math_markdown } from "../study/safe-markdown";
+
+export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatEdits | null, Task: TaskSpec, Render: Component, Changed: () => void): Promise<void>
+{
+	Root.dataset.studyStructured = "edit";
+	const Record = Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id);
+	Root.createEl("strong", { text: "笔记修改提案" });
+	Root.createDiv({ cls: "codex-message-context", text: `${Task.Source?.Path ?? "未知目标"} · ${Task.Role} · 原始快照 ${Task.Source?.CapturedAt ?? "未知"}` });
+	if(!Record) { Root.createDiv({ text: "本设备没有这次修改基线, 不能采用远程设备或已清除的提案. 原会话保留, 请明确重新捕获发起新修改." }); return; }
+	const Target = Record.Spec.Target!, Range = Target.Range!;
+	Root.createDiv({ text: `范围: 原文字符 ${Range.From + 1}-${Range.To}; 确认前不会修改文件.` });
+	Root.createEl("p", { text: Record.Error ?? Record.Output?.rationale ?? (Record.Status === "pending" ? "正在生成修改稿..." : "修改提案已取消") });
+	if(Edits?.Error) { Root.createDiv({ text: Edits.Error, attr: { role: "status" } }); }
+	if(Record.Output?.status === "needs-decision") { Root.createDiv({ text: "此修改需要你先决定处理路线, 没有生成可写入稿. 请在聊天中明确决定后重新提出修改." }); }
+	if(Record.Output?.status === "no-change") { Root.createDiv({ text: "本轮无需写入" }); }
+	const Plan = Edits!.Store.Data.Writes.find(Value => Value.TaskId === Task.Id);
+	if(!Plan) { return; }
+	Root.createDiv({ text: `状态: ${Plan.State}; ${Plan.Error ?? "格式已校验, 数学正确性仍须审核"}`, attr: { "aria-live": "polite" } });
+	const Diff = Root.createEl("details"); Diff.open = true; Diff.createEl("summary", { text: "修改差异 (- 删除 / + 增加)" });
+	Diff.createEl("pre", { text: diff_preview(Target.Before, Plan.After), cls: "codex-edit-diff" });
+	const Replacement = Record.Output!.markdown!;
+	const Preview = Root.createEl("details"); Preview.createEl("summary", { text: "查看修改后的片段" });
+	if(safe_math_markdown(Replacement)) { await MarkdownRenderer.render(AppValue, Replacement || "(删除此范围)", Preview.createDiv(), Target.Path, Render); }
+	else { Preview.createEl("pre", { text: Replacement }); }
+	const Actions = Root.createDiv({ cls: "codex-edit-actions" });
+	const Button = (Text: string, Action: () => Promise<void> | void) =>
+	{
+		const Value = Actions.createEl("button", { text: Text, attr: { type: "button" } });
+		Value.addEventListener("click", async () =>
+		{
+			Value.disabled = true;
+			try { await Action(); }
+			catch(ErrorValue) { Root.createDiv({ text: String(ErrorValue), attr: { role: "status" } }); }
+			finally { Value.disabled = false; Changed(); }
+		});
+	};
+	if(["preview", "pending"].includes(Plan.State)) { Button("确认写入此文件", () => Edits!.confirm(Plan.Id)); }
+	if(Plan.State === "preview" || Plan.State === "conflict") { Button("取消这次修改", () => Edits!.cancel(Task.Id)); }
+	if(Plan.State === "applied") { Button("安全撤销本次修改", () => Edits!.undo(Plan.Id)); }
+}
+
+export function export_edits(AppValue: App, Text: string): void
+{
+	const Dialog = new Modal(AppValue);
+	Dialog.contentEl.createEl("h2", { text: "导出本设备修改记录" });
+	const Label = Dialog.contentEl.createEl("label"); Label.createSpan({ text: "完整 JSON (包含原文基线, 请自行保管)" });
+	const Area = Label.createEl("textarea", { cls: "codex-edit-export" }); Area.readOnly = true; Area.value = Text;
+	const Save = Dialog.contentEl.createEl("button", { text: "下载 JSON", attr: { type: "button" } });
+	Save.addEventListener("click", () =>
+	{
+		const Url = URL.createObjectURL(new Blob([Text], { type: "application/json;charset=utf-8" }));
+		const Link = Dialog.contentEl.createEl("a", { attr: { href: Url, download: "codex-note-edits.json" } }); Link.click(); Link.remove();
+		setTimeout(() => URL.revokeObjectURL(Url), 1000);
+	});
+	const Close = Dialog.contentEl.createEl("button", { text: "关闭", attr: { type: "button" } }); Close.addEventListener("click", () => Dialog.close()); Dialog.open();
+}

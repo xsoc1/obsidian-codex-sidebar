@@ -203,3 +203,20 @@
 	height: auto;
 	margin-top: 8px;
 }
+.codex-edit-options label
+{
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 6px 0;
+}
+.codex-edit-options select, .codex-edit-export
+{
+	width: 100%;
+	min-width: 0;
+}
+.codex-edit-export { min-height: 240px; }
+.codex-edit-intent { font-size: var(--font-ui-small); color: var(--text-accent); margin-bottom: 6px; }
+.codex-edit-intent[hidden] { display: none; }
+.codex-edit-diff { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.codex-edit-actions { flex-wrap: wrap; }

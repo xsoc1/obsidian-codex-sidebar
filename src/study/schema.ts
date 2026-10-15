@@ -1,5 +1,5 @@
-export type StudyAction = "explain" | "symbols" | "expand" | "check" | "exercise" | "feedback" | "solution" | "sample" | "chapter" | "proposal";
-export type InputRole = "lecture" | "problem" | "complete-answer" | "outline" | "source-excerpt" | "teacher-problem";
+export type StudyAction = "explain" | "symbols" | "expand" | "check" | "exercise" | "feedback" | "solution" | "sample" | "chapter" | "proposal" | "edit";
+export type InputRole = "lecture" | "problem" | "complete-answer" | "outline" | "source-excerpt" | "teacher-problem" | "note";
 export interface ExerciseOutput
 {
 	schemaVersion: 1;

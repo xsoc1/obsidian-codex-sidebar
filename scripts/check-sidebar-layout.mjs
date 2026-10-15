@@ -11,11 +11,13 @@ const Browser = process.env.CODEX_LAYOUT_BROWSER;
 const AppCss = process.env.CODEX_LAYOUT_APP_CSS;
 if(!Browser || !AppCss) { throw new Error("Set CODEX_LAYOUT_BROWSER and CODEX_LAYOUT_APP_CSS (public Obsidian app.css)"); }
 const Directory = mkdtempSync(join(tmpdir(), "codex-sidebar-layout-"));
-await build({ entryPoints: ["src/sidebar-layout.ts"], bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
+await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { EditOptions } from "./src/edit/options";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
 const Baseline = execFileSync("git", ["show", "665d76f:styles.css"], { encoding: "utf8" });
 const Styles = readFileSync("styles.css", "utf8");
 writeFileSync(join(Directory, "fixture.html"), `<!doctype html><html><meta charset="utf-8"><style>${readFileSync(AppCss, "utf8")}</style><style id="plugin"></style><body class="is-mobile is-tablet theme-dark"><div id="root" class="codex-sidebar" style="position:fixed;top:0;left:0;width:450px;height:519px"></div><script src="layout.js"></script><script>
 function el(parent,tag,cls,text){const e=document.createElement(tag);e.className=cls||'';if(text)e.textContent=text;parent.appendChild(e);return e;}
+HTMLElement.prototype.createEl=function(tag,o={}){const e=el(this,tag,o.cls,o.text);if(o.value!==undefined)e.value=o.value;Object.entries(o.attr||{}).forEach(([k,v])=>e.setAttribute(k,v));return e;};
+HTMLElement.prototype.createDiv=function(o){return this.createEl('div',o);};HTMLElement.prototype.createSpan=function(o){return this.createEl('span',o);};HTMLElement.prototype.setText=function(t){this.textContent=t;};
 function render(folded,css,height,width)
 {
 	document.getElementById('plugin').textContent=css;
@@ -47,6 +49,7 @@ function render(folded,css,height,width)
 	el(o.Body,'div','codex-usage','上下文 ~28%');
 	const send=Layout.sidebar_panel(p,'codex-send-tools','提问与发送',folded);
 	el(send.Body,'textarea').placeholder='随时提问...';
+	if(css===styles)window.editOptions=new Layout.EditOptions(send.Body,()=>{});
 	const actions=el(send.Body,'div','codex-compose-actions');
 	el(actions,'button','','发送');el(actions,'button','','停止');
 	return {messageHeight:m.getBoundingClientRect().height,rootHeight:r.clientHeight,scrollHeight:r.scrollHeight,composerHeight:p.getBoundingClientRect().height};
@@ -91,18 +94,21 @@ try
 			compose.querySelector('summary').click();
 			Layout.reveal_sidebar_panel({Details:compose});input.focus();
 			const draftPreserved=input===compose.querySelector('textarea')&&input.value==='中文草稿 $[X,Y]$'&&input.selectionStart===2&&input.selectionEnd===4;
+			const edit=root.querySelector('.codex-edit-options');const editFolded=!edit.open;
+			edit.open=true;editOptions.Mode.value='edit';editOptions.refresh('修正本段',false,'Original.md');edit.open=false;edit.open=true;
+			const editPreserved=editOptions.Mode.value==='edit'&&[...edit.querySelectorAll('select')].every(s=>s.labels.length===1);editOptions.Mode.value='auto';editOptions.refresh('',false);edit.open=false;
 			const focusRestored=document.activeElement===input;
 			options.open=true;const select=options.querySelector('select');select.value='gpt-6.1-sol';options.open=false;
 			navigation.querySelector('summary').click();const session=navigation.querySelector('select');const selectedSession=session.value;navigation.querySelector('summary').click();
 			root.scrollTop=root.scrollHeight;
 			const send=[...root.querySelectorAll('button')].find(e=>e.textContent==='发送');
 			const rect=send.getBoundingClientRect(),bounds=root.getBoundingClientRect();
-			return {theme:'${Theme}',width:${Width},height:${Height},before,after,defaultFolded,initiallyHidden,draftPreserved,focusRestored,sendReachable:rect.bottom<=bounds.bottom&&rect.top>=bounds.top,preserved:select.value==='gpt-6.1-sol'&&session.value===selectedSession,contextClosed:!root.querySelector('.codex-context-tools').open,optionsClosed:!options.open,navigationClosed:!navigation.open,overflow:root.scrollWidth>root.clientWidth,hover:root.querySelectorAll('[title],[aria-label]').length};
+			return {theme:'${Theme}',width:${Width},height:${Height},before,after,defaultFolded,initiallyHidden,draftPreserved,editFolded,editPreserved,focusRestored,sendReachable:rect.bottom<=bounds.bottom&&rect.top>=bounds.top,preserved:select.value==='gpt-6.1-sol'&&session.value===selectedSession,contextClosed:!root.querySelector('.codex-context-tools').open,optionsClosed:!options.open,navigationClosed:!navigation.open,overflow:root.scrollWidth>root.clientWidth,hover:root.querySelectorAll('[title],[aria-label]').length};
 		})()`, returnByValue: true });
 		assert.ok(!Result.exceptionDetails, "Fixture evaluation failed");
 		const Row = Result.result.value; Rows.push(Row);
 		assert.ok(Row.after.messageHeight > Row.before.messageHeight + (Height > 400 ? 70 : 0), "Controls still squeeze the answer area");
-		assert.ok(Row.defaultFolded && Row.initiallyHidden && Row.draftPreserved && Row.focusRestored && Row.sendReachable && Row.preserved && Row.contextClosed && Row.optionsClosed && Row.navigationClosed && !Row.overflow && !Row.hover, JSON.stringify(Row));
+		assert.ok(Row.defaultFolded && Row.initiallyHidden && Row.draftPreserved && Row.editFolded && Row.editPreserved && Row.focusRestored && Row.sendReachable && Row.preserved && Row.contextClosed && Row.optionsClosed && Row.navigationClosed && !Row.overflow && !Row.hover, JSON.stringify(Row));
 	}
 	await call("Runtime.evaluate", { expression: "render(true,styles,519,450)" });
 	const Shot = await call("Page.captureScreenshot", { format: "png" });

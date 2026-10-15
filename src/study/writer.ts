@@ -1,13 +1,18 @@
 import { note_path, unique_blocks, unit_range, version_of } from "./document";
 import type { DraftOutput, ProposalOutput } from "./schema";
 import type { TaskSpec, WriteTarget } from "./task";
-import { StudyStore, type WritePlan } from "./store";
+import type { StudyData, WritePlan } from "./store";
 
 export interface WriteHost
 {
 	read_current(Path: string): Promise<string | null>;
 	source_version?(Path: string): Promise<string>;
 	compare_write(Path: string, Before: string | null, After: string): Promise<void>;
+}
+export function valid_range(Target: WriteTarget): boolean
+{
+	const Range = Target.Range;
+	return typeof Target.Before === "string" && !!Range && Object.keys(Range).every(Key => ["From", "To"].includes(Key)) && Number.isInteger(Range.From) && Number.isInteger(Range.To) && Range.From >= 0 && Range.To > Range.From && Range.To <= Target.Before.length;
 }
 export async function bind_target(Host: WriteHost, Path: string, Operation: WriteTarget["Operation"], BlockId: string | null): Promise<WriteTarget>
 {
@@ -83,12 +88,13 @@ export function plan_write(Task: TaskSpec, Output: DraftOutput | ProposalOutput)
 	}
 	return { Id: crypto.randomUUID(), TaskId: Task.Id, Target: structuredClone(Target), After, Rationale: Output.rationale, State: "preview" };
 }
-export class ConfirmedWriter
+export class ConfirmedWriter<Data extends { Writes: WritePlan[] } = StudyData>
 {
 	private Locked = new Set<string>();
-	constructor(private Store: StudyStore, private Host: WriteHost)
+	constructor(private Store: { Data: Data; change(Update: (Value: Data) => void): void }, private Host: WriteHost)
 	{
 	}
+	is_busy(): boolean { return this.Locked.size > 0; }
 	async confirm(Id: string): Promise<void>
 	{
 		const Plan = this.Store.Data.Writes.find(Value => Value.Id === Id);
@@ -100,11 +106,17 @@ export class ConfirmedWriter
 		try
 		{
 			note_path(Plan.Target.Path);
-			if(!["create", "insert-after", "replace-unit"].includes(Plan.Target.Operation) || Plan.Target.Role !== "lecture" || await version_of(Plan.Target.Before) !== Plan.Target.Version)
+			if(!((["create", "insert-after", "replace-unit"].includes(Plan.Target.Operation) && Plan.Target.Role === "lecture") || (Plan.Target.Operation === "replace-range" && Plan.Target.Role === "note" && valid_range(Plan.Target))) || await version_of(Plan.Target.Before) !== Plan.Target.Version)
 			{
 				throw new Error("写回操作或宿主基线无效");
 			}
 			unique_blocks(Plan.After);
+			if(Plan.Target.Operation === "replace-range")
+			{
+				const Range = Plan.Target.Range!, Before = Plan.Target.Before!;
+				const Tail = Before.length - Range.To;
+				if(Plan.After.length < Range.From + Tail || Plan.After.slice(0, Range.From) !== Before.slice(0, Range.From) || (Tail && Plan.After.slice(-Tail) !== Before.slice(Range.To))) { throw new Error("修改超出宿主绑定的原文范围"); }
+			}
 			const Current = await this.Host.read_current(Plan.Target.Path);
 			if(!this.Store.Data.Writes.some(Value => Value.Id === Id))
 			{
