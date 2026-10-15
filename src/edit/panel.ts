@@ -11,14 +11,15 @@ export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatE
 	Root.createEl("strong", { text: "笔记修改提案" });
 	Root.createDiv({ cls: "codex-message-context", text: `${Task.Source?.Path ?? "未知目标"} · ${Task.Role} · 原始快照 ${Task.Source?.CapturedAt ?? "未知"}` });
 	if(!Record) { Root.createDiv({ text: "本设备没有这次修改基线, 不能采用远程设备或已清除的提案. 原会话保留, 请明确重新捕获发起新修改." }); return; }
-	const Target = Record.Spec.Target!, Range = Target.Range!;
-	Root.createDiv({ text: `范围: 原文字符 ${Range.From + 1}-${Range.To}; 确认前不会修改文件.` });
+	const Plan = Edits!.Store.Data.Writes.find(Value => Value.TaskId === Task.Id);
+	const Target = Plan?.Target ?? Record.Spec.Target!, Range = Target.Range!;
+	Root.createDiv({ text: `${Task.EditMode === "ai" ? Plan ? "AI 选择的实际范围" : "AI 可选范围" : "范围"}: 原文字符 ${Range.From + 1}-${Range.To}; 确认前不会修改文件.${Task.EditMode === "ai" && Task.WriteUnit?.Truncated ? " 本轮仅提供当前位置附近的有限窗口." : ""}` });
 	Root.createEl("p", { text: Record.Error ?? Record.Output?.rationale ?? (Record.Status === "pending" ? "正在生成修改稿..." : "修改提案已取消") });
 	if(Edits?.Error) { Root.createDiv({ text: Edits.Error, attr: { role: "status" } }); }
 	if(Record.Output?.status === "needs-decision") { Root.createDiv({ text: "此修改需要你先决定处理路线, 没有生成可写入稿. 请在聊天中明确决定后重新提出修改." }); }
 	if(Record.Output?.status === "no-change") { Root.createDiv({ text: "本轮无需写入" }); }
-	const Plan = Edits!.Store.Data.Writes.find(Value => Value.TaskId === Task.Id);
 	if(!Plan) { return; }
+	if(Task.EditMode === "ai") { const Original = Root.createEl("details"); Original.createEl("summary", { text: "查看 AI 选择的原文" }); Original.createEl("pre", { text: Target.Before!.slice(Range.From, Range.To), cls: "codex-edit-diff" }); }
 	Root.createDiv({ text: `状态: ${Plan.State}; ${Plan.Error ?? "格式已校验, 数学正确性仍须审核"}`, attr: { "aria-live": "polite" } });
 	const Diff = Root.createEl("details"); Diff.open = true; Diff.createEl("summary", { text: "修改差异 (- 删除 / + 增加)" });
 	Diff.createEl("pre", { text: diff_preview(Target.Before, Plan.After), cls: "codex-edit-diff" });

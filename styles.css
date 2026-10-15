@@ -220,3 +220,9 @@
 .codex-edit-intent[hidden] { display: none; }
 .codex-edit-diff { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
 .codex-edit-actions { flex-wrap: wrap; }
+.codex-sidebar { overflow-y: auto; }
+.codex-context-tools[open] { max-height: 45%; overflow-y: auto; }
+.codex-note-selection { flex: 0 0 auto; border-left: 2px solid var(--interactive-accent); padding: 4px 8px; }
+.codex-note-selection[hidden] { display: none; }
+.codex-note-selection summary { cursor: pointer; font-size: var(--font-ui-small); }
+.codex-selection-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 110px; overflow: auto; font-size: 13px; user-select: text; -webkit-user-select: text; margin: 6px 0; }

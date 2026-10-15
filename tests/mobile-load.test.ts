@@ -100,7 +100,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 		}
 	});
 	const Instance = new Export.exports.default(); await Instance.onload();
-	return { Instance, Files, Required, Local, browser_requests: () => BrowserRequests };
+	return { Instance, Files, Required, Local, MarkdownView: Component, browser_requests: () => BrowserRequests };
 }
 
 function bootstrap_http(Before?: (Params: any) => Promise<void>)
@@ -160,7 +160,7 @@ test("ordinary mobile chat edits use the two-input skilled turn and the local co
 	const Source: any = { Path: "scratch.md", Mode: "编辑", Kind: "选区", Text: Old, SelectedText: Old, Selection: { From, To: From + Old.length }, Mapping: "源文本", Heading: "证明", LineStart: 2, LineEnd: 2, Truncated: false, CapturedAt: "original-time", Version: await version_of(Before) };
 	try
 	{
-		assert.equal(await Instance.send_chat("请修正这段证明", Source, null), true);
+		assert.equal(await Instance.send_chat("请修正这段证明", Source, null, { Scope: "captured" }), true);
 		const Turn = Requests.find(Value => Value.method === "turn/start");
 		assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing");
 		const Task = JSON.parse(Turn.params.input[0].text.split("任务:\n")[1]);
@@ -181,7 +181,7 @@ test("ordinary mobile chat edits use the two-input skilled turn and the local co
 		await Instance.resend_message(User.Id);
 		const Replay = Instance.Session.Messages.findLast((Value: any) => Value.Role === "user");
 		assert.equal(Replay.Task.Source.Path, "scratch.md"); assert.equal(Replay.Task.Source.CapturedAt, "original-time"); assert.notEqual(Replay.Task.Id, User.Task.Id);
-		assert.ok(Local.has("codex-sidebar-edits:v1:test")); assert.ok(!JSON.stringify(Instance.State).includes("private-outside-snapshot"));
+		assert.ok(Local.has("codex-sidebar-edits:v2:test")); assert.ok(!JSON.stringify(Instance.State).includes("private-outside-snapshot"));
 		assert.ok(Required.every(Name => ["obsidian", "@codemirror/state", "@codemirror/view"].includes(Name)));
 	}
 	finally { Instance.onunload(); }
@@ -235,6 +235,42 @@ test("ordinary edits respect host read-only metadata before model submission", a
 		assert.match(Instance.Status, /只读/);
 	}
 	finally { Instance.onunload(); }
+});
+
+test("default mobile chat lets AI select a range within the host window without changing transport or remote storage", async () =>
+{
+	const Requests: any[] = [], Before = "介绍段落\n\n计算 $1+1=3$.\n\n保留后文", Original = "$1+1=3$";
+	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
+	let Current = Before, Writes = 0;
+	Instance.Edits.Host.read_current = async () => Current;
+	Instance.Edits.Host.compare_write = async (_: string, Expected: string, Next: string) => { assert.equal(Current, Expected); Current = Next; Writes++; };
+	const Source: any = { Path: "scratch.md", Mode: "编辑", Kind: "选区", Text: "介绍段落", SelectedText: "介绍段落", Selection: { From: 0, To: 4 }, Mapping: "源文本", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "original-time", Version: await version_of(Before) };
+	try
+	{
+		assert.equal(await Instance.send_chat("请修正这份笔记的计算, 自己选范围", Source, null), true);
+		const Turn = Requests.find(Value => Value.method === "turn/start"), Task = JSON.parse(Turn.params.input[0].text.split("任务:\n")[1]);
+		assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing"); assert.equal(Task.EditMode, "ai"); assert.equal(Task.Source.SelectedText, "介绍段落"); assert.equal(Task.Target.Before, null);
+		const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", original: Original, markdown: "$1+1=2$", rationale: "只修正计算结果" };
+		Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "ai-final", type: "agentMessage", phase: "final_answer", text: JSON.stringify(Output) } } });
+		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+		await new Promise(Resolve => setTimeout(Resolve, 20));
+		const Plan = Instance.Edits.Store.Data.Writes[0]; assert.ok(Plan); assert.equal(Plan.Target.Range.From, Before.indexOf(Original)); assert.equal(Writes, 0);
+		await Instance.Edits.confirm(Plan.Id); assert.equal(Writes, 1); assert.equal(Current, Before.replace(Original, "$1+1=2$"));
+		assert.equal((Instance.State as any).Edits, undefined); assert.equal((Instance.State as any).Writes, undefined);
+	}
+	finally { Instance.onunload(); }
+});
+
+test("clearing note context refuses an already running source capture instead of reviving the preview", async () =>
+{
+	const F = await mobile_fixture(), View: any = new F.MarkdownView();
+	F.Instance.app.vault.getFileByPath = () => null;
+	Object.assign(View, { file: { path: "scratch.md" }, containerEl: { isConnected: true }, getViewType: () => "markdown", getMode: () => "source", getViewData: () => "abc", editor: { getSelection: () => "abc", getCursor: (Which: string) => ({ line: 0, ch: Which === "to" ? 3 : 0 }), posToOffset: (Pos: any) => Pos.ch, lineCount: () => 1 } });
+	const Pending = F.Instance.Capture.capture("选区", View); F.Instance.clear_context();
+	assert.equal(await Pending, null); assert.equal(F.Instance.Capture.Snapshot, null);
+	const Fresh = await F.Instance.Capture.capture("选区", View); assert.equal(Fresh.SelectedText, "abc");
+	F.Instance.onunload();
 });
 
 test("mobile native transport selection is device-local and reaches the same remote bootstrap without browser fetch", async () =>

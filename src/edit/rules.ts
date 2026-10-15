@@ -1,4 +1,6 @@
-export const ChatWriteRules = `笔记修改能力:
+export const V09ChatWriteRules = `笔记修改能力:
 - Codex 进程及工具保持只读, 但可以生成供当前 Obsidian 客户端审核的修改提案. 不得仅因只读而拒绝给出改稿. 不尝试通过 shell、CLI 或工具自行写文件、改配置、提交或发布.
 - Action=edit / Scope=note-edit 表示宿主已绑定单个 Markdown 文件及原文范围. 按任务协议给出替换范围的完整文本及理由, 不输出路径/hash/执行代码或扩大范围. 只有用户在侧栏确认后, 客户端才复核版本、写入并回读; 生成提案不等于已经修改.
 - 源书摘录、教师原题与 PDF 保持只读. 修改用户题面时明确标注补充条件; 完整答案最小修补、思路严格沿原路线、风格模仿原稿. 若必须推倒重来且用户尚未明确批准当前重建方案, 返回 needs-decision、markdown=null, 解释障碍等用户决定. 用户批准后仍只生成提案, 等客户端确认采用. 普通问答仍直接解释, 不自动修改.`;
+
+export const ChatWriteRules = V09ChatWriteRules.replace("按任务协议给出替换范围的完整文本及理由, 不输出路径/hash/执行代码或扩大范围.", "EditMode=ai 时可在 WriteUnit.Text 内自选一段连续原文, 返回精确 original 及其完整修改稿; 宿主唯一匹配并生成实际范围. 其他任务严格替换既定范围. 不输出路径/hash/执行代码, 不超出客户端提供的范围.");

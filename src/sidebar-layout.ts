@@ -5,11 +5,14 @@ export interface SidebarPanel
 	Details: HTMLDetailsElement | null;
 }
 
-export function sidebar_panel(Parent: HTMLElement, ClassName: string, Label: string, Mobile: boolean): SidebarPanel
+export function sidebar_panel(Parent: HTMLElement, ClassName: string, Label: string, Mobile: boolean, Saved?: { Storage: Pick<Storage, "getItem" | "setItem">; Key: string }): SidebarPanel
 {
-	if(!Mobile) { return { Body: Parent, Summary: null, Details: null }; }
 	const Details = Parent.ownerDocument.createElement("details");
 	Details.className = ClassName;
+	let Open = !Mobile && ClassName === "codex-send-tools";
+	try { const Value = Saved?.Storage.getItem(Saved.Key); if(Value === "open" || Value === "closed") { Open = Value === "open"; } } catch { }
+	Details.open = Open;
+	if(Saved) { Details.addEventListener("toggle", () => { try { Saved.Storage.setItem(Saved.Key, Details.open ? "open" : "closed"); } catch { } }); }
 	const Summary = Parent.ownerDocument.createElement("summary");
 	Summary.textContent = Label;
 	Details.appendChild(Summary);

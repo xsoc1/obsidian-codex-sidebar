@@ -12,6 +12,8 @@ function dom_fixture()
 		className = "";
 		textContent = "";
 		open = false;
+		Listeners = new Map<string, () => void>();
+		addEventListener(Name: string, Listener: () => void) { this.Listeners.set(Name, Listener); }
 		constructor(readonly tagName: string) { }
 		appendChild(Child: Element) { this.children.push(Child); return Child; }
 	}
@@ -35,15 +37,20 @@ test("mobile context and model controls start folded, while the same input nodes
 	assert.equal("title" in Details, false);
 });
 
-test("desktop panels keep their original parent and do not fold or move existing controls", () =>
+test("desktop controls fold independently, retain nodes, and restore device-local fold choices", () =>
 {
 	const Root = dom_fixture();
-	const Panel = sidebar_panel(Root as unknown as HTMLElement, "codex-context-tools", "笔记上下文", false);
-	assert.equal(Panel.Body, Root);
-	assert.equal(Panel.Summary, null);
-	assert.equal(Root.children.length, 0);
-	reveal_sidebar_panel(Panel);
-	assert.equal(Root.children.length, 0);
+	const Local = new Map<string, string>();
+	const Saved = { Storage: { getItem: (Key: string) => Local.get(Key) ?? null, setItem: (Key: string, Value: string) => Local.set(Key, Value) }, Key: "desktop-context" };
+	const Panel = sidebar_panel(Root as unknown as HTMLElement, "codex-context-tools", "笔记上下文", false, Saved);
+	assert.equal(Panel.Details!.open, false); assert.ok(Panel.Summary);
+	const Input = Root.ownerDocument.createElement("select"); Input.textContent = "saved-model";
+	Panel.Body.appendChild(Input as unknown as HTMLElement);
+	reveal_sidebar_panel(Panel); Root.children[0].Listeners.get("toggle")!();
+	const Restart = sidebar_panel(dom_fixture() as unknown as HTMLElement, "codex-context-tools", "笔记上下文", false, Saved);
+	assert.equal(Restart.Details!.open, true); assert.equal((Panel.Body as any).children[0], Input);
+	const Compose = sidebar_panel(Root as unknown as HTMLElement, "codex-send-tools", "提问与发送", false);
+	assert.equal(Compose.Details!.open, true); assert.equal(Local.size, 1);
 });
 
 test("revealing a follow-up composer preserves the draft and keeps navigation and options independently folded", () =>

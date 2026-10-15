@@ -33,6 +33,7 @@ import { edit_intent, type EditRole, type EditScope } from "./edit/protocol";
 import { unit_range } from "./study/document";
 import { render_edit, export_edits } from "./edit/panel";
 import { EditOptions } from "./edit/options";
+import { SelectionPreview, selection_in_source } from "./selection-preview";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -502,16 +503,16 @@ export default class CodexSidebarPlugin extends Plugin
 			return;
 		}
 		this.BoundDocuments.add(DocumentValue);
-		this.registerDomEvent(DocumentValue, "selectionchange", () => this.queue_capture());
-		this.registerDomEvent(DocumentValue, "pointerup", () => this.queue_capture());
-		this.registerDomEvent(DocumentValue, "keyup", () => this.queue_capture());
+		this.registerDomEvent(DocumentValue, "selectionchange", () => { if(selection_in_source(this.Capture.LastView?.containerEl, DocumentValue)) { this.queue_capture(); } });
+		this.registerDomEvent(DocumentValue, "pointerup", EventValue => { if(selection_in_source(this.Capture.LastView?.containerEl, DocumentValue, EventValue.target)) { this.queue_capture(true); } });
+		this.registerDomEvent(DocumentValue, "keyup", EventValue => { if(selection_in_source(this.Capture.LastView?.containerEl, DocumentValue, EventValue.target)) { this.queue_capture(true); } });
 		this.registerDomEvent(DocumentValue, "scroll", EventValue =>
 		{
-			if(EventValue.target instanceof DocumentValue.defaultView!.Node && this.Capture.LastView?.containerEl.contains(EventValue.target) && this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading") { this.queue_capture(); }
+			if(EventValue.target instanceof DocumentValue.defaultView!.Node && this.Capture.LastView?.containerEl.contains(EventValue.target) && this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading") { this.queue_capture(true); }
 		}, { capture: true });
 	}
 
-	private queue_capture(): void
+	private queue_capture(Follow = false): void
 	{
 		if(!this.State.Settings.AutoCapture || this.Capture.Suspended)
 		{
@@ -524,10 +525,10 @@ export default class CodexSidebarPlugin extends Plugin
 		this.CaptureTimer = setTimeout(() =>
 		{
 			this.CaptureTimer = null;
-			if(this.Capture.PdfPending) { this.queue_capture(); return; }
+			if(this.Capture.PdfPending) { this.queue_capture(Follow); return; }
 			void this.Capture.capture("选区").then(async Snapshot =>
 			{
-				if(!Snapshot && this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading")
+				if(!Snapshot && Follow && this.Study && !this.Study.Store.Data.Pinned && this.Study.Store.Data.Mode === "reading")
 				{
 					Snapshot = await this.Capture.capture("当前位置");
 				}
@@ -537,6 +538,11 @@ export default class CodexSidebarPlugin extends Plugin
 				}
 			}).catch(() => {});
 		}, 150);
+	}
+	clear_context(): void
+	{
+		if(this.CaptureTimer) { clearTimeout(this.CaptureTimer); this.CaptureTimer = null; }
+		this.Capture.clear(); this.refresh();
 	}
 
 	async toggle_sidebar(): Promise<void>
@@ -1031,7 +1037,7 @@ export default class CodexSidebarPlugin extends Plugin
 				this.Capture.track_view(); Context = await this.Capture.capture("选区") ?? await this.Capture.capture("当前位置");
 			}
 			if(!Context) { throw new Error("请先打开 Markdown 并捕获需要修改的选区或段落"); }
-			return await this.Edits.request(Question.trim(), Context, Options.Scope ?? "captured", Options.Role ?? "auto");
+			return await this.Edits.request(Question.trim(), Context, Options.Scope ?? "ai", Options.Role ?? "auto");
 		}
 		catch(ErrorValue) { this.show_error(ErrorValue); return false; }
 		finally { this.ChatPreparing = false; if(!this.Busy) { this.Activity = ""; } this.refresh(); }
@@ -1591,6 +1597,7 @@ class CodexView extends ItemView
 	private StudyPanel: StudyPanel | null = null;
 	private StatusElement!: HTMLElement;
 	private ContextElement!: HTMLElement;
+	private SelectionPreview!: SelectionPreview;
 	private CompletionElement!: HTMLElement;
 	private MessagesElement!: HTMLElement;
 	private Input!: HTMLTextAreaElement;
@@ -1647,7 +1654,8 @@ class CodexView extends ItemView
 		Root.empty();
 		Root.addClass("codex-sidebar");
 		const Mobile = Platform.isMobile || Root.ownerDocument.body.classList.contains("is-mobile");
-		const Navigation = sidebar_panel(Root, "codex-navigation", "会话与连接", Mobile);
+		const Panel = (Parent: HTMLElement, ClassName: string, Label: string) => sidebar_panel(Parent, ClassName, Label, Mobile, { Storage: localStorage, Key: `codex-sidebar-folds:v1:${this.app.vault.getName()}:${ClassName}` });
+		const Navigation = Panel(Root, "codex-navigation", "会话与连接");
 		this.NavigationSummary = Navigation.Summary;
 		const Header = Navigation.Body.createDiv({ cls: "codex-header" });
 		Header.createEl("strong", { text: "Codex" });
@@ -1657,7 +1665,8 @@ class CodexView extends ItemView
 		accessible_name(this.SessionsElement, "Codex 会话");
 		this.SessionsElement.addEventListener("change", () => void this.Owner.choose_session(this.SessionsElement.value));
 		this.StatusElement = Root.createDiv({ cls: "codex-status" });
-		const ContextPanel = sidebar_panel(Root, "codex-context-tools", "上下文与学习", Mobile);
+		this.SelectionPreview = new SelectionPreview(Root, () => this.Owner.clear_context());
+		const ContextPanel = Panel(Root, "codex-context-tools", "上下文与学习");
 		this.ContextSummary = ContextPanel.Summary;
 		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
 		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
@@ -1693,7 +1702,7 @@ class CodexView extends ItemView
 		this.ActivityLabel = this.ActivityElement.createSpan();
 		const Composer = Root.createDiv({ cls: "codex-composer" });
 		this.QuoteElement = Composer.createDiv({ cls: "codex-answer-quote" });
-		const OptionsPanel = sidebar_panel(Composer, "codex-options", "模型与选项", Mobile);
+		const OptionsPanel = Panel(Composer, "codex-options", "模型与选项");
 		this.OptionsSummary = OptionsPanel.Summary;
 		const Controls = OptionsPanel.Body.createDiv({ cls: "codex-controls" });
 		const ModelLabel = Controls.createEl("label");
@@ -1725,7 +1734,7 @@ class CodexView extends ItemView
 		});
 		this.CatalogElement = Composer.createDiv({ cls: "codex-catalog-status" });
 		this.UsageElement = OptionsPanel.Body.createDiv({ cls: "codex-usage" });
-		this.ComposePanel = sidebar_panel(Composer, "codex-send-tools", "提问与发送", Mobile);
+		this.ComposePanel = Panel(Composer, "codex-send-tools", "提问与发送");
 		this.Input = this.ComposePanel.Body.createEl("textarea", { attr: { placeholder: "随时提问... Enter 发送, Shift+Enter 换行" } });
 		this.EditOptions = new EditOptions(this.ComposePanel.Body, () => this.refresh_compose_summary());
 		accessible_name(this.Input, "向 Codex 提问");
@@ -1956,6 +1965,8 @@ class CodexView extends ItemView
 		this.SessionsElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing;
 		this.ContextElement.empty();
 		const Snapshot = this.Owner.Capture.Snapshot;
+		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
+		this.refresh_compose_summary();
 		this.ContextSummary?.setText(Snapshot ? `上下文与学习 · ${Snapshot.Kind}${Snapshot.Truncated ? " (已截断)" : ""}` : "上下文与学习");
 		if(Snapshot)
 		{
@@ -1965,6 +1976,7 @@ class CodexView extends ItemView
 			Checkbox.addEventListener("change", () =>
 			{
 				this.Owner.State.Settings.AttachContext = Checkbox.checked;
+				this.SelectionPreview.update(this.Owner.Capture.Snapshot, Checkbox.checked);
 				void this.Owner.persist();
 			});
 			Label.createSpan({ text: `附带 ${Snapshot.Kind} (${Snapshot.Mode}, ${Snapshot.Mapping})` });
@@ -1979,8 +1991,7 @@ class CodexView extends ItemView
 			}
 			this.button(this.ContextElement, "清除上下文", () =>
 			{
-				this.Owner.Capture.Snapshot = null;
-				this.Owner.refresh();
+				this.Owner.clear_context();
 			});
 		}
 		else

@@ -11,23 +11,24 @@ const Browser = process.env.CODEX_LAYOUT_BROWSER;
 const AppCss = process.env.CODEX_LAYOUT_APP_CSS;
 if(!Browser || !AppCss) { throw new Error("Set CODEX_LAYOUT_BROWSER and CODEX_LAYOUT_APP_CSS (public Obsidian app.css)"); }
 const Directory = mkdtempSync(join(tmpdir(), "codex-sidebar-layout-"));
-await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { EditOptions } from "./src/edit/options";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
+await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { EditOptions } from "./src/edit/options"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
 const Baseline = execFileSync("git", ["show", "665d76f:styles.css"], { encoding: "utf8" });
 const Styles = readFileSync("styles.css", "utf8");
 writeFileSync(join(Directory, "fixture.html"), `<!doctype html><html><meta charset="utf-8"><style>${readFileSync(AppCss, "utf8")}</style><style id="plugin"></style><body class="is-mobile is-tablet theme-dark"><div id="root" class="codex-sidebar" style="position:fixed;top:0;left:0;width:450px;height:519px"></div><script src="layout.js"></script><script>
 function el(parent,tag,cls,text){const e=document.createElement(tag);e.className=cls||'';if(text)e.textContent=text;parent.appendChild(e);return e;}
 HTMLElement.prototype.createEl=function(tag,o={}){const e=el(this,tag,o.cls,o.text);if(o.value!==undefined)e.value=o.value;Object.entries(o.attr||{}).forEach(([k,v])=>e.setAttribute(k,v));return e;};
 HTMLElement.prototype.createDiv=function(o){return this.createEl('div',o);};HTMLElement.prototype.createSpan=function(o){return this.createEl('span',o);};HTMLElement.prototype.setText=function(t){this.textContent=t;};
-function render(folded,css,height,width)
+function render(folded,css,height,width,mobile=true)
 {
 	document.getElementById('plugin').textContent=css;
 	const r=document.getElementById('root');
 	r.replaceChildren();r.style.height=height+'px';r.style.width=width+'px';
-	const nav=Layout.sidebar_panel(r,'codex-navigation','会话与连接 · 微型李代数讲义',folded);
+	const nav=folded?Layout.sidebar_panel(r,'codex-navigation','会话与连接 · 微型李代数讲义',mobile):{Body:r};
 	const h=el(nav.Body,'div','codex-header');
 	el(h,'strong','','Codex');el(h,'button','','新会话');el(h,'button','','重连');
 	el(el(nav.Body,'select','codex-sessions'),'option','','微型李代数讲义');
 	el(r,'div','codex-status','回复完成 | math-writing 就绪');
+	window.selectionCard=new Layout.SelectionPreview(r,()=>selectionCard.update(null,true));
 	const c=Layout.sidebar_panel(r,'codex-context-tools','上下文与学习',true);
 	const a=el(c.Body,'div','codex-context-actions');
 	['捕获当前位置','解释选区','检查证明'].forEach(t=>el(a,'button','',t));
@@ -41,13 +42,13 @@ function render(folded,css,height,width)
 		el(card,'div','codex-message-body','先看矩阵单位的乘法, 再计算交换子。定义与第一次完整运算留在正文中。');
 	}
 	const p=el(r,'div','codex-composer');
-	const o=Layout.sidebar_panel(p,'codex-options','模型与选项 · gpt-6.1-sol / xhigh',true);
+	const o=Layout.sidebar_panel(p,'codex-options','模型与选项 · gpt-6.1-sol / xhigh',mobile);
 	const controls=el(o.Body,'div','codex-controls');
 	['模型','思考档次'].forEach(t=>{const l=el(controls,'label','',t);el(el(l,'select'),'option','',t==='模型'?'gpt-6.1-sol':'xhigh');});
 	const toggles=el(o.Body,'div','codex-run-toggles');
 	['Fast','上下文占用','行内补全'].forEach(t=>{const l=el(toggles,'label');const input=el(l,'input');input.type='checkbox';el(l,'span','',t);});
 	el(o.Body,'div','codex-usage','上下文 ~28%');
-	const send=Layout.sidebar_panel(p,'codex-send-tools','提问与发送',folded);
+	const send=folded?Layout.sidebar_panel(p,'codex-send-tools','提问与发送',mobile):{Body:p};
 	el(send.Body,'textarea').placeholder='随时提问...';
 	if(css===styles)window.editOptions=new Layout.EditOptions(send.Body,()=>{});
 	const actions=el(send.Body,'div','codex-compose-actions');
@@ -109,6 +110,26 @@ try
 		const Row = Result.result.value; Rows.push(Row);
 		assert.ok(Row.after.messageHeight > Row.before.messageHeight + (Height > 400 ? 70 : 0), "Controls still squeeze the answer area");
 		assert.ok(Row.defaultFolded && Row.initiallyHidden && Row.draftPreserved && Row.editFolded && Row.editPreserved && Row.focusRestored && Row.sendReachable && Row.preserved && Row.contextClosed && Row.optionsClosed && Row.navigationClosed && !Row.overflow && !Row.hover, JSON.stringify(Row));
+	}
+	for(const Theme of ["theme-dark", "theme-light"])
+	for(const [Width, Height] of [[450,720],[320,620]])
+	{
+		const Result = await call("Runtime.evaluate", { expression: `(()=>{
+			document.body.className='${Theme}';render(true,styles,${Height},${Width},false);
+			const root=document.getElementById('root'), nav=root.querySelector('.codex-navigation'), context=root.querySelector('.codex-context-tools'), options=root.querySelector('.codex-options'), compose=root.querySelector('.codex-send-tools');
+			const defaults=!nav.open&&!context.open&&!options.open&&compose.open;
+			const input=compose.querySelector('textarea');input.value='中文草稿, 不因折叠丢失';input.setSelectionRange(2,4);
+			compose.open=false;Layout.reveal_sidebar_panel({Details:compose});input.focus();
+			const preserved=input.value==='中文草稿, 不因折叠丢失'&&input.selectionStart===2&&document.activeElement===input;
+			const sample={Path:'Original.md',Kind:'选区',Mapping:'源块',SelectedText:'x+y=1',Text:'$$ x+y=1 $$',CapturedAt:'original-time',Truncated:true};selectionCard.update(sample,true);
+			const card=root.querySelector('.codex-note-selection');const selectionVisible=card.checkVisibility()&&card.open&&!context.open&&card.parentElement===root;
+			const rawPreserved=card.querySelectorAll('pre')[1].textContent.includes('$$');
+			const before=card.open;card.open=false;selectionCard.update(sample,true);const foldPreserved=!card.open;card.open=before;
+			nav.open=true;nav.open=false;options.open=true;options.open=false;
+			return {surface:'desktop',theme:'${Theme}',width:${Width},height:${Height},defaults,preserved,selectionVisible,rawPreserved,foldPreserved,messageHeight:root.querySelector('.codex-messages').clientHeight,overflow:root.scrollWidth>root.clientWidth,hover:root.querySelectorAll('[title],[aria-label]').length};
+		})()`, returnByValue: true });
+		assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails)); const Row = Result.result.value; Rows.push(Row);
+		assert.ok(Row.defaults && Row.preserved && Row.selectionVisible && Row.rawPreserved && Row.foldPreserved && Row.messageHeight >= 120 && !Row.overflow && !Row.hover, JSON.stringify(Row));
 	}
 	await call("Runtime.evaluate", { expression: "render(true,styles,519,450)" });
 	const Shot = await call("Page.captureScreenshot", { format: "png" });

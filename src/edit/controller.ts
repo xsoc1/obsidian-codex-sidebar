@@ -25,8 +25,10 @@ export class ChatEdits
 		if(Generation !== this.Store.Generation) { throw new Error("修改记录已清除, 拒绝迟到任务"); }
 		const Task = make_task("edit", Source, Request, Bound.Role); Task.Scope = "note-edit";
 		Task.Target = Bound.Target; Task.WriteUnit = { ...Bound.Source, SelectedText: "" };
-		if(this.Host.protected_source(Task)) { throw new Error("此范围包含标为只读的源书或教师原题, 不生成写回提案"); }
+		if(Scope === "ai") { Task.EditMode = "ai"; }
+		if(this.Host.protected_source({ ...Task, Target: { ...Task.Target, Range: Bound.Focus } })) { throw new Error("此范围包含标为只读的源书或教师原题, 不生成写回提案"); }
 		this.register(Task);
+		this.Error = "";
 		try
 		{
 			const Accepted = await this.Host.send(Task);
@@ -61,6 +63,7 @@ export class ChatEdits
 		if(!Record || Record.Status !== "pending") { return; }
 		if(!Completed) { throw new Error("修改输出中断或失败, 不生成可采用的提案"); }
 		const Output = parse_edit(Text), Plan = edit_plan(Record.Spec, Output);
+		if(Plan && this.Host.protected_source({ ...Record.Spec, Target: Plan.Target })) { throw new Error("AI 选择的实际范围包含只读内容, 提案已拒绝"); }
 		this.Store.change(Data =>
 		{
 			const Entry = Data.Records.find(Value => Value.Spec.Id === TaskId);
@@ -68,6 +71,7 @@ export class ChatEdits
 			Entry.Status = "complete"; Entry.Output = Output;
 			if(Plan) { Data.Writes.push(Plan); }
 		});
+		this.Error = "";
 		this.Host.changed();
 	}
 	consume(Messages: ChatMessage[]): void
@@ -94,13 +98,14 @@ export class ChatEdits
 	{
 		const Plan = this.Store.Data.Writes.find(Value => Value.Id === Id);
 		const Record = this.Store.Data.Records.find(Value => Value.Spec.Id === Plan?.TaskId);
-		if(!Record || this.Host.protected_source(Record.Spec)) { throw new Error("修改基线缺失或目标现已只读"); }
+		if(!Record || !Plan || this.Host.protected_source({ ...Record.Spec, Target: Plan.Target })) { throw new Error("修改基线缺失或目标现已只读"); }
 		await this.Writer.confirm(Id); this.Host.changed();
 	}
 	async undo(Id: string): Promise<void>
 	{
-		const Record = this.Store.Data.Records.find(Value => Value.Spec.Id === this.Store.Data.Writes.find(Value => Value.Id === Id)?.TaskId);
-		if(!Record || this.Host.protected_source(Record.Spec)) { throw new Error("修改基线缺失或目标现已只读, 不自动撤销"); }
+		const Plan = this.Store.Data.Writes.find(Value => Value.Id === Id);
+		const Record = this.Store.Data.Records.find(Value => Value.Spec.Id === Plan?.TaskId);
+		if(!Record || !Plan || this.Host.protected_source({ ...Record.Spec, Target: Plan.Target })) { throw new Error("修改基线缺失或目标现已只读, 不自动撤销"); }
 		await this.Writer.undo(Id); this.Host.changed();
 	}
 	cancel(TaskId: string): void

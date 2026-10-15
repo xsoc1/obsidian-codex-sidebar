@@ -60,6 +60,7 @@ export class ContextCapture
 			return this.capture_pdf(View.file!, Location.Pages, View.containerEl.ownerDocument, Kind, Location.SelectedText, Location.Truncated);
 		}
 		if(!(View instanceof MarkdownView)) { return null; }
+		const Generation = ++this.Generation;
 		const Source = View.getViewData();
 		let VersionSource = Source;
 		let Text = "";
@@ -149,6 +150,8 @@ export class ContextCapture
 		const Bounded = bound_text(Text);
 		const ContextFile = this.App.vault.getFileByPath(ContextPath);
 		const Headings = ContextFile ? this.App.metadataCache.getFileCache(ContextFile)?.headings ?? [] : [];
+		const Version = await version_of(VersionSource);
+		if(Generation !== this.Generation) { return null; }
 		this.Snapshot =
 		{
 			Path: ContextPath,
@@ -162,7 +165,7 @@ export class ContextCapture
 			Mapping,
 			CapturedAt: new Date().toISOString(),
 			Truncated: Bounded.Truncated || SelectedText.length > 12000,
-			Version: await version_of(VersionSource),
+			Version,
 			...(Selection ? { Selection } : {}),
 			FocusLine: FocusLine ?? Start ?? undefined
 		};
@@ -192,4 +195,5 @@ export class ContextCapture
 	{
 		this.Generation++; this.Pdf.close();
 	}
+	clear(): void { this.Generation++; this.Snapshot = null; }
 }

@@ -14,6 +14,7 @@ import { EditStore } from "../src/edit/store";
 async function run_live(): Promise<void>
 {
 	const Cli = process.env.CODEX_EDIT_TEST_CLI;
+	const Scope = process.env.CODEX_EDIT_SCOPE === "ai" ? "ai" : "captured";
 	if(!Cli) { throw new Error("Set CODEX_EDIT_TEST_CLI to the installed CLI. No authentication file is read."); }
 	const Directory = mkdtempSync(join(tmpdir(), "codex-edit-live-"));
 	const Before = readFileSync("examples/study/Edit-mini.md", "utf8").replace(/\r\n/g, "\n");
@@ -61,9 +62,9 @@ async function run_live(): Promise<void>
 				await Controller.accept_result(Task.Id, Output, true); return true;
 			}
 		});
-		const From = Before.indexOf(Paragraph);
-		const Source: ContextSnapshot = { Path: "Edit-mini.md", Mode: "编辑", Kind: "选区", Mapping: "源文本", Text: Before, SelectedText: Paragraph, Selection: { From, To: From + Paragraph.length }, LineStart: 0, LineEnd: Before.split("\n").length - 1, Heading: "证明", CapturedAt: new Date().toISOString(), Version: await version_of(Before), Truncated: false };
-		await Controller.request("请修正这段计算中的系数错误, 只作最小改动, 保留原句式和路线.", Source, "captured", "complete-answer");
+		const Focus = Scope === "ai" ? Before.split("\n\n")[1] : Paragraph, From = Before.indexOf(Focus);
+		const Source: ContextSnapshot = { Path: "Edit-mini.md", Mode: "编辑", Kind: "选区", Mapping: "源文本", Text: Before, SelectedText: Focus, Selection: { From, To: From + Focus.length }, LineStart: 0, LineEnd: Before.split("\n").length - 1, Heading: "证明", CapturedAt: new Date().toISOString(), Version: await version_of(Before), Truncated: false };
+		await Controller.request("请修正这份笔记中交换子计算的最后系数错误, 只作最小改动, 保留原句式和路线, 由你选择所需修改范围.", Source, Scope, "complete-answer");
 		writeFileSync(join(Directory, "model-output-private.json"), JSON.stringify({ before: Before, output: Output, task: Spec! }, null, 2));
 		assert.equal(Writes, 0); assert.equal(Current, Before); const Plan = Store.Data.Writes[0]; assert.ok(Plan);
 		assert.equal(Plan.After, Before.replace("[h,e]=he-eh=e", "[h,e]=he-eh=2e"));
@@ -71,7 +72,8 @@ async function run_live(): Promise<void>
 		await Controller.undo(Plan.Id); assert.equal(Current, Before);
 		const Replay = Controller.replay(Spec!); Controller.register(Replay); await Controller.accept_result(Replay.Id, Output, true);
 		Current += "\n后续编辑"; await assert.rejects(Controller.confirm(Store.Data.Writes.at(-1)!.Id), /陈旧/);
-		const Report = { model: Model.model, effort: Effort, skillVersion: SkillVersion, inputs: 2, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", passed: ["real completed model edit", "runtime schema", "minimal coefficient correction", "zero pre-confirm writes", "duplicate confirm", "safe undo", "stale rejection"], host: "in-memory; native host checked separately" };
+		if(Scope === "ai") { assert.ok(Plan.Target.Range!.From > Source.Selection!.To); }
+		const Report = { scope: Scope, model: Model.model, effort: Effort, skillVersion: SkillVersion, inputs: 2, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", passed: ["real completed model edit", "runtime schema", "minimal coefficient correction", "zero pre-confirm writes", "duplicate confirm", "safe undo", "stale rejection"], host: "in-memory; native host checked separately" };
 		writeFileSync(join(Directory, "result-private.json"), JSON.stringify({ before: Before, output: Output, task: Spec!, report: Report }, null, 2));
 		process.stdout.write(JSON.stringify({ directory: Directory, report: Report }) + "\n");
 	}

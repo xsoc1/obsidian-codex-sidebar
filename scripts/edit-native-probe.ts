@@ -5,6 +5,8 @@ import { ObsidianWriteHost } from "../src/study/obsidian-host";
 import { ChatEdits } from "../src/edit/controller";
 import { EditStore } from "../src/edit/store";
 import { render_edit } from "../src/edit/panel";
+import { SelectionPreview } from "../src/selection-preview";
+import { sidebar_panel } from "../src/sidebar-layout";
 
 function check(Value: unknown, Message: string): asserts Value
 {
@@ -12,7 +14,7 @@ function check(Value: unknown, Message: string): asserts Value
 }
 export default class EditProbe extends Plugin
 {
-	async run(Input: { before: string; output: string }): Promise<object>
+	async run(Input: { before: string; output: string; task?: { EditMode?: string } }): Promise<object>
 	{
 		const Path = `Codex-edit-scratch-${crypto.randomUUID()}.md`, Previous = this.app.workspace.activeLeaf;
 		const File = await this.app.vault.create(Path, Input.before), Leaf = this.app.workspace.getLeaf("tab");
@@ -29,10 +31,21 @@ export default class EditProbe extends Plugin
 			const From = Original.indexOf(Paragraph); Editor.setSelection(Editor.offsetToPos(From), Editor.offsetToPos(From + Paragraph.length));
 			const Capture = new ContextCapture(this.app), Source = await Capture.capture("选区", View);
 			check(Source?.Selection?.From === From, "Native selection offsets missing");
+			const Selection = new SelectionPreview(Root, () => {}); Selection.update(Source, true);
+			check(!Selection.Element.hidden && Selection.Element.open && Selection.Element.querySelector("pre")?.textContent === Paragraph, "Native selected source did not display");
+			Selection.update({ ...Source, Mapping: "源块", SelectedText: "渲染后的矩阵", Truncated: true }, false);
+			check(Selection.Element.textContent?.includes(Paragraph) && Selection.Element.textContent.includes("未附带") && Selection.Element.textContent.includes("已截断"), "Reading formula/raw selection lost");
+			for(const Name of ["codex-navigation", "codex-context-tools", "codex-options", "codex-send-tools"])
+			{
+				const Panel = sidebar_panel(Root, Name, Name, false); check(Panel.Details && Panel.Details.open === (Name === "codex-send-tools"), "Desktop folding default failed"); Panel.Details.open = !Panel.Details.open;
+			}
+			check(Selection.Element.parentElement === Root, "Selection hidden in collapsed controls");
+			Root.empty();
 			const Host = new ObsidianWriteHost(this.app), Local = new Map<string, string>();
 			const Store = new EditStore({ getItem: Key => Local.get(Key) ?? null, setItem: (Key, Value) => Local.set(Key, Value) }, "native-original-probe");
 			const Controller = new ChatEdits(Store, { read_current: Value => Host.read_current(Value), compare_write: async (...Args) => { Writes++; await Host.compare_write(...Args); }, protected_source: () => false, changed: () => {}, send: async Task => { await Controller.accept_result(Task.Id, Input.output, true); return true; } });
-			await Controller.request("修正这段系数错误, 最小修改", Source, "captured", "complete-answer");
+			const Scope = Input.task?.EditMode === "ai" ? "ai" : "captured";
+			await Controller.request("修正这段系数错误, 最小修改", Source, Scope, "complete-answer");
 			const Task = Store.Data.Records[0].Spec, Plan = Store.Data.Writes[0];
 			check(Plan && Writes === 0 && Editor.getValue() === Original, "Preview changed source");
 			await render_edit(this.app, Root, Controller, Task, Render, () => {});
@@ -51,13 +64,13 @@ export default class EditProbe extends Plugin
 			check(Editor.getValue() === Original, "Safe undo did not restore baseline");
 			Editor.setSelection(Editor.offsetToPos(From), Editor.offsetToPos(From + Paragraph.length));
 			const Fresh = await Capture.capture("选区", View); check(Fresh, "Fresh capture missing");
-			await Controller.request("修正", Fresh, "captured", "complete-answer");
+			await Controller.request("修正", Fresh, Scope, "complete-answer");
 			const Next = Store.Data.Writes.at(-1)!, NextTask = Store.Data.Records.at(-1)!.Spec;
 			Editor.setValue(Original + "\n后续编辑, 不可覆盖"); const Current = Editor.getValue();
 			Root.empty(); await render_edit(this.app, Root, Controller, NextTask, Render, () => {}); await Click("确认写入此文件", "conflict", Next.Id);
 			check(Editor.getValue() === Current && Number(Writes) === 2, "Stale preview overwrote subsequent edits");
 			Capture.close();
-			return { passed: ["native SDK source capture", "preview zero writes", "actual confirmation button", "duplicate click", "editor content retained", "native undo/redo", "safe undo button", "stale conflict button", "no owned hover labels"], unsavedAtCapture: DiskBefore !== Original, mobile: Platform.isMobileApp };
+			return { scope: Scope, passed: ["native SDK source capture", "visible selection component with source math", "desktop four folds", "preview zero writes", "actual confirmation button", "duplicate click", "editor content retained", "native undo/redo", "safe undo button", "stale conflict button", "no owned hover labels"], unsavedAtCapture: DiskBefore !== Original, mobile: Platform.isMobileApp };
 		}
 		finally
 		{

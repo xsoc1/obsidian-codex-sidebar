@@ -30,6 +30,7 @@ export interface TaskSpec
 	ExerciseId?: string;
 	AttemptId?: string;
 	Target?: WriteTarget;
+	EditMode?: "ai";
 	Writing?: { Sources: string; Endpoint: string; Spine: string; ContentMap: string; ApprovedSample?: string };
 }
 

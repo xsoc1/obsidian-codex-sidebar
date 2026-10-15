@@ -6,6 +6,7 @@ import { bind_edit, edit_intent, parse_edit, safe_edit_markdown } from "../src/e
 import { task_prompt } from "../src/study/task";
 import { version_of } from "../src/study/document";
 import type { ContextSnapshot } from "../src/prompt";
+import { search_window } from "../src/edit/range";
 
 const Before = "# 原笔记\n\n保留前文.\n\n证明: $1+1=3$.\n\n保留后文和留白.\n";
 const Old = "证明: $1+1=3$.", New = "证明: $1+1=2$.";
@@ -101,4 +102,57 @@ test("reading blocks have honest whole-block replacements, deletion is bounded, 
 	const Original = F.Store.export_records(); const Broken = JSON.parse(Original); Broken.Writes[0].After += "unauthorized";
 	const Raw = JSON.stringify(Broken), Storage = { getItem: () => Raw, setItem: () => { throw new Error("must not migrate"); } };
 	assert.throws(() => new EditStore(Storage, "test"), /不一致/); assert.equal(Storage.getItem(), Raw);
+});
+
+test("AI selects a unique smaller range beyond the original selection, preserving snapshot and all outside text", async () =>
+{
+	const F = await fixture(); await F.Controller.request("修正本笔记中的加法错误, 由你选范围", { ...F.Source, SelectedText: "保留前文.", Selection: { From: Before.indexOf("保留前文."), To: Before.indexOf("保留前文.") + "保留前文.".length } }, "ai", "note");
+	const Task = F.Sent[0]; assert.equal(Task.EditMode, "ai"); assert.equal(Task.WriteUnit.Text, Before);
+	F.Controller.Error = "上一轮的定位错误";
+	assert.equal(Task.Source.SelectedText, "保留前文."); assert.equal(JSON.parse(task_prompt(Task).split("任务:\n")[1]).Target.Before, null);
+	await F.Controller.accept_result(Task.Id, JSON.stringify({ ...Output, original: Old }), true);
+	assert.equal(F.Controller.Error, "");
+	const Plan = F.Store.Data.Writes[0]; assert.equal(Plan.Target.Range!.From, Before.indexOf(Old)); assert.equal(Plan.Target.Range!.To, Before.indexOf(Old) + Old.length);
+	assert.equal(F.Writes.length, 0); await F.Controller.confirm(Plan.Id); assert.equal(F.Files.get("original.md"), Before.replace(Old, New));
+	await F.Controller.undo(Plan.Id); assert.equal(F.Files.get("original.md"), Before);
+	const Restart = await fixture(F.Local), Replay = Restart.Controller.replay(Task); assert.equal(Replay.EditMode, "ai"); assert.deepEqual(Replay.WriteUnit, Task.WriteUnit);
+});
+
+test("AI range rejects missing or duplicated originals, out-of-window text, readonly resolved ranges and unknown output mode", async () =>
+{
+	for(const Original of [undefined, "not-in-note", ""]) { const F = await fixture(); await F.Controller.request("修改", F.Source, "ai", "note"); await assert.rejects(F.Controller.accept_result(F.Sent[0].Id, JSON.stringify({ ...Output, ...(Original === undefined ? {} : { original: Original }) }), true)); assert.equal(F.Writes.length, 0); }
+	const F = await fixture(); F.Files.set("original.md", Before + Old);
+	const Source = { ...F.Source, Version: await version_of(Before + Old) };
+	await F.Controller.request("修正", Source, "ai", "note"); await assert.rejects(F.Controller.accept_result(F.Sent[0].Id, JSON.stringify({ ...Output, original: Old }), true), /不唯一/);
+	const G = await fixture(); await G.Controller.request("修正", G.Source, "ai", "note"); G.protect(); await assert.rejects(G.Controller.accept_result(G.Sent[0].Id, JSON.stringify({ ...Output, original: Old }), true), /只读/);
+	const H = await fixture(); await H.Controller.request("修正", H.Source, "captured", "note"); await assert.rejects(H.Controller.accept_result(H.Sent[0].Id, JSON.stringify({ ...Output, original: Old }), true), /模式/);
+	const Text = ("outside\n".repeat(5000)) + Old + "\n" + ("tail\n".repeat(5000)); const From = Text.indexOf(Old), Range = search_window(Text, { From, To: From + Old.length });
+	assert.ok(Range.To - Range.From <= 24000 && Range.From <= From && Range.To >= From + Old.length);
+	assert.ok(Range.From > 0 && Range.To < Text.length);
+});
+
+test("v1 records migrate into v2 without overwriting the old store, and resolved-plan tampering is rejected", async () =>
+{
+	const F = await fixture(); await F.Controller.request("修正", F.Source, "captured", "note"); await F.Controller.accept_result(F.Sent[0].Id, JSON.stringify(Output), true);
+	const OldData = { ...structuredClone(F.Store.Data), schemaVersion: 1 }, Raw = JSON.stringify(OldData), Local = new Map([["codex-sidebar-edits:v1:test", Raw]]);
+	const G = await fixture(Local); assert.equal(G.Store.Data.schemaVersion, 2); assert.deepEqual(G.Store.Data.Records, F.Store.Data.Records); assert.equal(Local.get("codex-sidebar-edits:v1:test"), Raw);
+	await G.Controller.confirm(G.Store.Data.Writes[0].Id); assert.ok(Local.has("codex-sidebar-edits:v2:test")); assert.equal(Local.get("codex-sidebar-edits:v1:test"), Raw);
+	G.Controller.clear(); assert.equal(Local.get("codex-sidebar-edits:v1:test"), ""); assert.equal(G.Store.Data.Records.length, 0);
+	const H = await fixture(); await H.Controller.request("修改", H.Source, "ai", "note"); await H.Controller.accept_result(H.Sent[0].Id, JSON.stringify({ ...Output, original: Old }), true);
+	assert.throws(() => H.Store.change(Data => Data.Writes[0].Target.Range!.From = 0), /损坏/); assert.equal(H.Writes.length, 0);
+});
+
+test("AI context window is bounded and a readonly neighbour cannot become the resolved target", async () =>
+{
+	const F = await fixture();
+	const C = new ChatEdits(F.Store, { ...F.Host, protected_source: Task => Task.Target!.Range!.From < Before.indexOf(Old) });
+	await C.request("修正", F.Source, "ai", "note"); await C.accept_result(F.Sent[0].Id, JSON.stringify({ ...Output, original: Old }), true);
+	await C.confirm(F.Store.Data.Writes[0].Id); assert.equal(F.Writes.length, 1);
+	const G = await fixture(), Big = "unique-first\n" + "ordinary\n".repeat(4000) + Old + "\n" + "tail\n".repeat(4000), From = Big.indexOf(Old);
+	G.Files.set("original.md", Big);
+	const Source = { ...G.Source, Text: Old, Selection: { From, To: From + Old.length }, Version: await version_of(Big) };
+	await G.Controller.request("修改", Source, "ai", "note");
+	assert.equal(G.Sent[0].WriteUnit.Truncated, true); assert.ok(G.Sent[0].WriteUnit.Text.length <= 24000);
+	await assert.rejects(G.Controller.accept_result(G.Sent[0].Id, JSON.stringify({ ...Output, original: "unique-first" }), true), /不在本轮/);
+	assert.equal(G.Writes.length, 0);
 });

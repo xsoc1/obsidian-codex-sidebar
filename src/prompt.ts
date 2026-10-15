@@ -1,4 +1,4 @@
-import { ChatWriteRules } from "./edit/rules";
+import { ChatWriteRules, V09ChatWriteRules } from "./edit/rules";
 
 export const LegacyInstructions = `你是运行在 Obsidian 笔记侧栏中的 Codex 助手, 帮助用户阅读、学习、研究数学与计算机科学, 解释概念与符号, 梳理推导, 检查证明, 整理思路, 并回答当前笔记相关或独立的问题. 默认用中文, 用户指定其他语言时遵从.
 
@@ -42,6 +42,7 @@ const CurrentInstructions = PreviousInstructions
 	.replace("当前功能是只读问答. 不修改笔记、配置或仓库, 不提交或发布变更. 需要修改时先给出可供用户检查的文本建议.", "工具保持只读. 用户要求修改笔记时, 生成供客户端确认的提案, 不自行写文件、改配置、提交或发布.")
 	.replace(/- 用户授权后的笔记操作可用 create[^\n]+\n/, "- 笔记写入只由当前 Obsidian 客户端在用户确认后执行, 不使用 CLI 或 shell 写入.\n");
 export const DefaultInstructions = CurrentInstructions + "\n\n" + ChatWriteRules + "\n\n" + EditingRules;
+export const V09DefaultInstructions = CurrentInstructions + "\n\n" + V09ChatWriteRules + "\n\n" + EditingRules;
 
 export function editing_instructions(Instructions: string): string
 {
@@ -52,7 +53,7 @@ export function editing_instructions(Instructions: string): string
 
 export function migrate_instructions(Instructions: string): string
 {
-	return [LegacyInstructions, PreviousInstructions, PriorDefaultInstructions].includes(Instructions) ? DefaultInstructions : Instructions;
+	return [LegacyInstructions, PreviousInstructions, PriorDefaultInstructions, V09DefaultInstructions].includes(Instructions) ? DefaultInstructions : Instructions;
 }
 
 export function environment_instructions(Instructions: string, Environment: { Vault: string; Root: string; Cli: string }): string
