@@ -4,7 +4,7 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-**0.9.0 待发布构建**把普通聊天的 Markdown 修改请求接入确认写回. 选中原文后输入“请修正这段”, 查看目标和差异, 再点“确认写入此文件”; Codex 继续只读, 实际写入在当前 Obsidian 客户端完成. 支持未保存编辑内容、安全撤销、陈旧拒绝和本设备记录恢复. 默认只改捕获范围, 整篇修改需在“修改选项”中明确选择. 详见 [使用、协议与回退](docs/note-edits.md) 和 [验证记录](docs/note-edits-validation.md). 尚未替换日常安装或发布 GitHub 版本.
+**0.9.0** 把普通聊天的 Markdown 修改请求接入确认写回. 选中原文后输入“请修正这段”, 查看目标和差异, 再点“确认写入此文件”; Codex 继续只读, 实际写入在当前 Obsidian 客户端完成. 支持未保存编辑内容、安全撤销、陈旧拒绝和本设备记录恢复. 默认只改捕获范围, 整篇修改需在“修改选项”中明确选择. [下载 0.9.0 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.9.0); 详见 [使用、协议与回退](docs/note-edits.md) 和 [验证记录](docs/note-edits-validation.md). Windows 日常安装已获授权更新并走通真实主侧栏请求与确认按钮, iPad 本版改稿仍待真机验收.
 
 [下载 0.8.0 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.8.0), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38587559640).
 
