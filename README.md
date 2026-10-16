@@ -4,7 +4,7 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-**0.11.0** 将差异稿改为原文/拟采用稿的公式排版对照, 保留可展开的原始字符差异. 按用户决定默认开启“随笔记切换会话”: 按当前 Markdown/PDF 分别新建和恢复会话, 可手动绑定旧会话; 回复、草稿和引用期间暂缓切换. 旧历史保留, 手动关闭后记住关闭状态. 切换本身不请求模型, 关联只存当前设备. 构建/106 项 fixture、原生公式组件/文件事件与 12 组 headless 布局已有分层验证. 2026-10-16 经明确授权安装到 Windows 日常库, 实际主侧栏 A→B→A、草稿延迟和重载恢复通过, 原聊天/快照/设置/学习与修改记录保留. [使用、检测结果与验证边界](docs/formula-comparison-and-note-sessions.md). 已获 GitHub 发布授权, 按现有工作流提供 [下载 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.11.0), 发布结果待回读核验. 本版 iPad 真机未验收.
+**0.11.0** 将差异稿改为原文/拟采用稿的公式排版对照, 保留可展开的原始字符差异. 按用户决定默认开启“随笔记切换会话”: 按当前 Markdown/PDF 分别新建和恢复会话, 可手动绑定旧会话; 回复、草稿和引用期间暂缓切换. 旧历史保留, 手动关闭后记住关闭状态. 切换本身不请求模型, 关联只存当前设备. 构建/106 项 fixture、原生公式组件/文件事件与 12 组 headless 布局已有分层验证. 2026-10-16 经明确授权安装到 Windows 日常库, 实际主侧栏 A→B→A、草稿延迟和重载恢复通过, 原聊天/快照/设置/学习与修改记录保留. [下载 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.11.0), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38897330181), [使用、检测结果与验证边界](docs/formula-comparison-and-note-sessions.md). GitHub 发布成功, 六件公共资产校验通过, 插件文件与 Windows 安装一致. 本版 iPad 真机未验收.
 
 **0.10.1** 修复“将上条改动方案落地”“应用上条改稿”被当成普通只读问答的问题. “本轮方式”直接显示在发送区, 可明确选择“生成修改预览”; “AI 自选”仍只决定当前笔记中的范围. 旧版可先在“修改选项”将本轮方式切为“明确生成修改预览”, 核对来源后从输入框新发请求. 经明确授权安装并发布, 六件公共资产校验通过且插件文件与 Windows 安装一致; 91 项 fixture、带旧只读回答的真实模型请求、实际主侧栏确认写入/撤销及明暗/窄栏检查通过. [下载 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.10.1), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38881971148), [验证记录](docs/edit-routing-validation.md). iPad 本版仍待真机验收.
 
