@@ -4,7 +4,7 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-**0.11.0 本地候选**将差异稿改为原文/拟采用稿的公式排版对照, 保留可展开的原始字符差异. 已在 Windows 原生事件中验证笔记切换检测, 并接入默认关闭的“随笔记切换会话”: 开启后按当前 Markdown/PDF 分别新建和恢复会话, 可手动绑定旧会话; 回复、草稿和引用期间暂缓切换. 切换本身不请求模型, 关联只存当前设备. 构建/105 项 fixture、原生公式组件和文件事件、12 组 headless 布局检查分层通过. [使用、检测结果与验证边界](docs/formula-comparison-and-note-sessions.md). 本候选尚未覆盖日常 0.10.1 或发布, iPad 真机未验收.
+**0.11.0 本地候选**将差异稿改为原文/拟采用稿的公式排版对照, 保留可展开的原始字符差异. 已在 Windows 原生事件中验证笔记切换检测, 并按用户决定默认开启“随笔记切换会话”: 按当前 Markdown/PDF 分别新建和恢复会话, 可手动绑定旧会话; 回复、草稿和引用期间暂缓切换. 旧历史保留, 手动关闭后记住关闭状态. 切换本身不请求模型, 关联只存当前设备. 当前构建/106 项 fixture 通过, 原生公式组件和文件事件、12 组 headless 布局已有分层验证. [使用、检测结果与验证边界](docs/formula-comparison-and-note-sessions.md). 本候选尚未覆盖日常 0.10.1 或发布, iPad 真机未验收.
 
 **0.10.1** 修复“将上条改动方案落地”“应用上条改稿”被当成普通只读问答的问题. “本轮方式”直接显示在发送区, 可明确选择“生成修改预览”; “AI 自选”仍只决定当前笔记中的范围. 旧版可先在“修改选项”将本轮方式切为“明确生成修改预览”, 核对来源后从输入框新发请求. 经明确授权安装并发布, 六件公共资产校验通过且插件文件与 Windows 安装一致; 91 项 fixture、带旧只读回答的真实模型请求、实际主侧栏确认写入/撤销及明暗/窄栏检查通过. [下载 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.10.1), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38881971148), [验证记录](docs/edit-routing-validation.md). iPad 本版仍待真机验收.
 

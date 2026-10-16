@@ -17,13 +17,22 @@ test("note detection ignores sidebar/settings focus and unsafe paths while accep
 	for(const Path of ["../A.md", "/A.md", "C:/A.md", ".obsidian/config.md"]) { assert.equal(note_file_path({ getViewType: () => "markdown", file: { path: Path } }), null); }
 });
 
-test("default off preserves old chats; enabling gives one stable session per note and ignores duplicate or sidebar observations", async () =>
+test("default on preserves old chats, gives one stable session per note and ignores duplicate or sidebar observations", async () =>
 {
-	const F = fixture(), R = F.Router; R.observe("A.md"); await R.flush(); assert.equal(F.active(), "old-general"); assert.equal(F.Local.size, 0);
-	R.set_enabled(true); await R.flush(); const A = F.active(); R.observe("A.md"); R.observe(null); await R.flush(); assert.equal(F.Activated.length, 1);
+	const F = fixture(), R = F.Router; assert.equal(R.Data.Enabled, true); assert.equal(F.Local.size, 0);
+	R.observe("A.md"); await R.flush(); const A = F.active(); assert.notEqual(A, "old-general"); R.observe("A.md"); R.observe(null); await R.flush(); assert.equal(F.Activated.length, 1);
 	R.observe("B.md"); await R.flush(); const B = F.active(); assert.notEqual(A, B);
 	R.observe("A.md"); await R.flush(); assert.equal(F.active(), A); assert.equal(F.Sessions.size, 3); assert.ok(F.Sessions.has("old-general"));
 	const Restart = fixture(F.Local); for(const Id of F.Sessions) { Restart.Sessions.add(Id); } Restart.Router.observe("B.md"); await Restart.Router.flush(); assert.equal(Restart.active(), B);
+});
+
+test("an explicit disabled choice survives restart and re-enabling reuses the existing associations", async () =>
+{
+	const F = fixture(), R = F.Router; R.observe("A.md"); await R.flush(); const A = F.active();
+	R.set_enabled(false); const Restart = fixture(F.Local); for(const Id of F.Sessions) { Restart.Sessions.add(Id); }
+	assert.equal(Restart.Router.Data.Enabled, false); Restart.Router.observe("A.md"); await Restart.Router.flush(); assert.equal(Restart.active(), "old-general");
+	Restart.Router.observe("B.md"); await Restart.Router.flush(); assert.equal(Restart.Sessions.size, 2); assert.equal(Restart.Router.Data.Links.length, 1);
+	Restart.Router.observe("A.md"); Restart.Router.set_enabled(true); await Restart.Router.flush(); assert.equal(Restart.active(), A); assert.equal(Restart.Sessions.size, 2);
 });
 
 test("busy turns and drafts defer to the latest note; disabling or manual history selection cancels pending automatic switching", async () =>
@@ -38,7 +47,7 @@ test("renames move only associations, deletions preserve chats, and local/remote
 {
 	const F = fixture(), R = F.Router; R.set_enabled(true); R.observe("A.md"); await R.flush(); const Id = F.active(); R.rename("A.md", "Moved.md"); R.observe("Moved.md"); await R.flush();
 	assert.equal(F.active(), Id); assert.equal(F.Sessions.size, 2); assert.equal(R.Data.Links[0].Path, "Moved.md");
-	const Remote = fixture(F.Local, "remote:device-fixture"); assert.equal(Remote.Router.Data.Enabled, false); assert.equal(Remote.Router.Data.Links.length, 0);
+	const Remote = fixture(F.Local, "remote:device-fixture"); assert.equal(Remote.Router.Data.Enabled, true); assert.equal(Remote.Router.Data.Links.length, 0);
 	R.forget("Moved.md"); assert.equal(R.Data.Links.length, 0); assert.ok(F.Sessions.has(Id));
 });
 
@@ -47,7 +56,7 @@ test("unknown metadata/storage failures preserve raw data and do not activate or
 	const Raw = JSON.stringify({ schemaVersion: 9, Enabled: true, Links: [] }), Local = new Map([["codex-sidebar-note-sessions:v1:test:desktop", Raw]]);
 	assert.throws(() => fixture(Local), /版本/); assert.equal(Local.values().next().value, Raw);
 	const R = new NoteSessions({ getItem: () => null, setItem: () => { throw Error("storage full"); } }, "test", "desktop", { active: () => "old", exists: () => true, blocked: () => "", activate: async () => { throw Error("must not activate"); }, changed: () => {} });
-	assert.throws(() => R.set_enabled(true), /storage full/); assert.equal(R.Data.Enabled, false);
+	assert.throws(() => R.set_enabled(false), /storage full/); assert.equal(R.Data.Enabled, true);
 });
 
 test("queued rapid navigation or disabling cannot activate an obsolete note, and explicit rebinding never shares one chat between notes", async () =>

@@ -169,9 +169,9 @@ test("native note event handlers in the mobile-safe bundle switch locally withou
 	try
 	{
 		const Old = P.State.ActiveId; source_view(F, "A.md", "# A\n\n$x=1$."); F.emit("file-open");
-		assert.equal(P.State.ActiveId, Old); assert.equal(P.NoteSessions.Path, "A.md");
+		assert.equal(P.NoteSessions.Data.Enabled, true); assert.equal(P.NoteSessions.Path, "A.md");
 		Object.assign(P.State.Settings, { Model: "saved-model", Effort: "xhigh", Fast: true }); const Settings = JSON.stringify(P.State.Settings);
-		await P.set_note_sessions(true); const A = P.State.ActiveId; assert.notEqual(A, Old); assert.equal(P.Capture.Snapshot.Path, "A.md");
+		await P.NoteSessions.flush(); const A = P.State.ActiveId; assert.notEqual(A, Old); assert.ok(P.State.Sessions.some((Value: any) => Value.Id === Old)); assert.equal(P.Capture.Snapshot.Path, "A.md");
 		P.Session.Messages.push({ Id: "original", Role: "user", Text: "original question", Context: structuredClone(P.Capture.Snapshot) });
 		P.Study.Store.Data.Pinned = structuredClone(P.Capture.Snapshot);
 		P.Busy = true; source_view(F, "B.md", "# B\n\n$x=2$."); F.emit("active-leaf-change"); F.emit("file-open"); await P.NoteSessions.flush();
@@ -200,7 +200,7 @@ test("bridge restore retains locally linked note sessions and the intended activ
 	const P = F.Instance;
 	try
 	{
-		source_view(F, "A.md", "# A"); F.emit("file-open"); await P.set_note_sessions(true); const A = P.State.ActiveId;
+		source_view(F, "A.md", "# A"); F.emit("file-open"); await P.NoteSessions.flush(); const A = P.State.ActiveId;
 		P.Session.Messages.push({ Id: "local-only", Role: "user", Text: "unsynced note history" });
 		P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture"; P.Remote.Transport = "native";
 		await P.ensure_connection(); assert.equal(P.State.ActiveId, A); assert.equal(P.Session.Messages[0].Id, "local-only");

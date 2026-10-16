@@ -49,7 +49,7 @@ export class NoteSessions
 	{
 		this.Key = `codex-sidebar-note-sessions:v1:${Vault}:${Scope}`;
 		const Raw = Storage.getItem(this.Key);
-		this.Data = Raw ? JSON.parse(Raw) : { schemaVersion: 1, Enabled: false, Links: [] }; validate(this.Data);
+		this.Data = Raw ? JSON.parse(Raw) : { schemaVersion: 1, Enabled: true, Links: [] }; validate(this.Data);
 	}
 	private save(Data: NoteSessionData): void
 	{
