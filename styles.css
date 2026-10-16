@@ -203,17 +203,30 @@
 	height: auto;
 	margin-top: 8px;
 }
-.codex-edit-options label
+.codex-edit-field
 {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
 	margin: 6px 0;
 }
-.codex-edit-options select, .codex-edit-export
+.codex-edit-field select, .codex-edit-export
 {
 	width: 100%;
 	min-width: 0;
+}
+.codex-send-tools > .codex-panel-body > .codex-edit-field
+{
+	flex-direction: row;
+	align-items: center;
+	margin: 0;
+	font-size: 12px;
+}
+.codex-send-tools > .codex-panel-body > .codex-edit-field > span { flex: 0 0 auto; }
+.codex-send-tools > .codex-panel-body > .codex-edit-field > select { flex: 1; width: 0; }
+@media (max-height: 700px)
+{
+	.codex-send-tools > .codex-panel-body > textarea { min-height: 64px; }
 }
 .codex-edit-export { min-height: 240px; }
 .codex-edit-intent { font-size: var(--font-ui-small); color: var(--text-accent); margin-bottom: 6px; }

@@ -96,6 +96,9 @@ try
 			Layout.reveal_sidebar_panel({Details:compose});input.focus();
 			const draftPreserved=input===compose.querySelector('textarea')&&input.value==='中文草稿 $[X,Y]$'&&input.selectionStart===2&&input.selectionEnd===4;
 			const edit=root.querySelector('.codex-edit-options');const editFolded=!edit.open;
+			const explicitModeVisible=editOptions.Mode.checkVisibility()&&!edit.contains(editOptions.Mode);
+			const followupRoutes=editOptions.refresh('将你这个笔记改动方案落地',false,'Original.md');
+			if(!explicitModeVisible||!followupRoutes)throw Error('The explicit preview mode must be visible and adopting a revision must route to preview');
 			edit.open=true;editOptions.Mode.value='edit';editOptions.refresh('修正本段',false,'Original.md');edit.open=false;edit.open=true;
 			const editPreserved=editOptions.Mode.value==='edit'&&[...edit.querySelectorAll('select')].every(s=>s.labels.length===1);editOptions.Mode.value='auto';editOptions.refresh('',false);edit.open=false;
 			const focusRestored=document.activeElement===input;

@@ -237,7 +237,7 @@ test("ordinary edits respect host read-only metadata before model submission", a
 	finally { Instance.onunload(); }
 });
 
-test("default mobile chat lets AI select a range within the host window without changing transport or remote storage", async () =>
+test("adopting a previous proposal routes through an AI edit task even after an old read-only answer, keeping the host window and transport", async () =>
 {
 	const Requests: any[] = [], Before = "介绍段落\n\n计算 $1+1=3$.\n\n保留后文", Original = "$1+1=3$";
 	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
@@ -248,8 +248,11 @@ test("default mobile chat lets AI select a range within the host window without 
 	const Source: any = { Path: "scratch.md", Mode: "编辑", Kind: "选区", Text: "介绍段落", SelectedText: "介绍段落", Selection: { From: 0, To: 4 }, Mapping: "源文本", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "original-time", Version: await version_of(Before) };
 	try
 	{
-		assert.equal(await Instance.send_chat("请修正这份笔记的计算, 自己选范围", Source, null), true);
-		const Turn = Requests.find(Value => Value.method === "turn/start"), Task = JSON.parse(Turn.params.input[0].text.split("任务:\n")[1]);
+		Instance.Session.Messages.push({ Id: "old-readonly-reply", Role: "assistant", Text: "当前工具只读, 可把错误改为 $1+1=2$. 尚未写入." });
+		assert.equal(await Instance.send_chat("将你这个笔记改动方案落地", Source, null, { Mode: "auto", Scope: "ai" }), true);
+		const Turn = Requests.find(Value => Value.method === "turn/start");
+		assert.match(Turn.params.input[0].text, /任务:\n/, "adopting a proposal must submit a structured edit task instead of read-only chat");
+		const Task = JSON.parse(Turn.params.input[0].text.split("任务:\n")[1]);
 		assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing"); assert.equal(Task.EditMode, "ai"); assert.equal(Task.Source.SelectedText, "介绍段落"); assert.equal(Task.Target.Before, null);
 		const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", original: Original, markdown: "$1+1=2$", rationale: "只修正计算结果" };
 		Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "ai-final", type: "agentMessage", phase: "final_answer", text: JSON.stringify(Output) } } });

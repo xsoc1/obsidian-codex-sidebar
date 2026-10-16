@@ -10,11 +10,14 @@ import { task_prompt, type TaskSpec } from "../src/study/task";
 import { version_of } from "../src/study/document";
 import { ChatEdits } from "../src/edit/controller";
 import { EditStore } from "../src/edit/store";
+import { edit_intent } from "../src/edit/protocol";
+import { history_items } from "../src/history";
 
 async function run_live(): Promise<void>
 {
 	const Cli = process.env.CODEX_EDIT_TEST_CLI;
 	const Scope = process.env.CODEX_EDIT_SCOPE === "ai" ? "ai" : "captured";
+	const Followup = process.env.CODEX_EDIT_FOLLOWUP === "1";
 	if(!Cli) { throw new Error("Set CODEX_EDIT_TEST_CLI to the installed CLI. No authentication file is read."); }
 	const Directory = mkdtempSync(join(tmpdir(), "codex-edit-live-"));
 	const Before = readFileSync("examples/study/Edit-mini.md", "utf8").replace(/\r\n/g, "\n");
@@ -43,6 +46,13 @@ async function run_live(): Promise<void>
 		const Thread = await Connection.request("thread/start", { cwd: Directory, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", model: Model.model });
 		assert.equal(Thread.thread.path, null);
 		await Connection.request("thread/inject_items", { threadId: Thread.thread.id, items: instruction_items(DefaultInstructions) });
+		if(Followup)
+		{
+			await Connection.request("thread/inject_items", { threadId: Thread.thread.id, items: history_items([
+				{ Id: "original-question", Role: "user", Text: "如何修正这篇原创笔记中的交换子计算?" },
+				{ Id: "original-proposal", Role: "assistant", Text: "工具只读, 尚未写入. 改动方案: 保留原文其他内容, 将 $[h,e]=he-eh=e$ 改为 $[h,e]=he-eh=2e$." }
+			]) });
+		}
 		const Local = new Map<string, string>(), Store = new EditStore({ getItem: Key => Local.get(Key) ?? null, setItem: (Key, Value) => Local.set(Key, Value) }, "original-only");
 		let Current = Before, Writes = 0, Output = "", Spec: TaskSpec;
 		const Controller = new ChatEdits(Store, {
@@ -64,7 +74,8 @@ async function run_live(): Promise<void>
 		});
 		const Focus = Scope === "ai" ? Before.split("\n\n")[1] : Paragraph, From = Before.indexOf(Focus);
 		const Source: ContextSnapshot = { Path: "Edit-mini.md", Mode: "编辑", Kind: "选区", Mapping: "源文本", Text: Before, SelectedText: Focus, Selection: { From, To: From + Focus.length }, LineStart: 0, LineEnd: Before.split("\n").length - 1, Heading: "证明", CapturedAt: new Date().toISOString(), Version: await version_of(Before), Truncated: false };
-		await Controller.request("请修正这份笔记中交换子计算的最后系数错误, 只作最小改动, 保留原句式和路线, 由你选择所需修改范围.", Source, Scope, "complete-answer");
+		const Request = Followup ? "将你这个笔记改动方案落地" : "请修正这份笔记中交换子计算的最后系数错误, 只作最小改动, 保留原句式和路线, 由你选择所需修改范围.";
+		assert.equal(edit_intent(Request), true); await Controller.request(Request, Source, Scope, "complete-answer");
 		writeFileSync(join(Directory, "model-output-private.json"), JSON.stringify({ before: Before, output: Output, task: Spec! }, null, 2));
 		assert.equal(Writes, 0); assert.equal(Current, Before); const Plan = Store.Data.Writes[0]; assert.ok(Plan);
 		assert.equal(Plan.After, Before.replace("[h,e]=he-eh=e", "[h,e]=he-eh=2e"));
@@ -73,7 +84,7 @@ async function run_live(): Promise<void>
 		const Replay = Controller.replay(Spec!); Controller.register(Replay); await Controller.accept_result(Replay.Id, Output, true);
 		Current += "\n后续编辑"; await assert.rejects(Controller.confirm(Store.Data.Writes.at(-1)!.Id), /陈旧/);
 		if(Scope === "ai") { assert.ok(Plan.Target.Range!.From > Source.Selection!.To); }
-		const Report = { scope: Scope, model: Model.model, effort: Effort, skillVersion: SkillVersion, inputs: 2, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", passed: ["real completed model edit", "runtime schema", "minimal coefficient correction", "zero pre-confirm writes", "duplicate confirm", "safe undo", "stale rejection"], host: "in-memory; native host checked separately" };
+		const Report = { scope: Scope, followup: Followup, model: Model.model, effort: Effort, skillVersion: SkillVersion, inputs: 2, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", passed: ["real completed model edit", "runtime schema", "minimal coefficient correction", "zero pre-confirm writes", "duplicate confirm", "safe undo", "stale rejection"], host: "in-memory; native host checked separately" };
 		writeFileSync(join(Directory, "result-private.json"), JSON.stringify({ before: Before, output: Output, task: Spec!, report: Report }, null, 2));
 		process.stdout.write(JSON.stringify({ directory: Directory, report: Report }) + "\n");
 	}

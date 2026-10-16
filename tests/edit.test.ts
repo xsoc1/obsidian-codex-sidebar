@@ -11,6 +11,17 @@ import { search_window } from "../src/edit/range";
 const Before = "# 原笔记\n\n保留前文.\n\n证明: $1+1=3$.\n\n保留后文和留白.\n";
 const Old = "证明: $1+1=3$.", New = "证明: $1+1=2$.";
 const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", markdown: New, rationale: "仅修正加法结果, 保留原句和路线." };
+test("adopting a previous note revision enters preview while explanations and refused edits remain chat", () =>
+{
+	for(const Text of ["将你这个笔记改动方案落地", "把上面的改稿落地", "应用上条改稿", "采用刚才的方案", "将修改建议应用到笔记", "把这段写回笔记", "apply your proposed changes"])
+	{
+		assert.equal(edit_intent(Text), true, Text);
+	}
+	for(const Text of ["不要将改动方案落地, 只解释", "先不要应用上条改稿", "只讨论如何落实方案", "采用上条方案会怎样?", "这是什么应用?", "什么是落地页?", "给我修改建议", "don't apply your changes"])
+	{
+		assert.equal(edit_intent(Text), false, Text);
+	}
+});
 async function fixture(Local = new Map<string, string>())
 {
 	const Store = new EditStore({ getItem: Key => Local.get(Key) ?? null, setItem: (Key, Value) => Local.set(Key, Value) }, "test");
