@@ -24,3 +24,7 @@ npx tsx --eval 'import {strict as assert} from "node:assert"; import {edit_inten
 清理脚本曾先移除活动测试会话, 再恢复 ActiveId, 期间窗口回调出现 Messages TypeError. 这是脚本造成的暂时无效状态; 后续清理必须先切到保留的活动会话, 再移除测试会话/关闭笔记. 已恢复并重载, 核对原三个会话 ID/消息、具体模型/档次/Fast 等设置、活动会话、原快照、学习/修改数据和旧 v1 原字节相同, 三类临时笔记均清除, mobile=false/EmulateMobile=null. 恢复后的刷新/selectionchange 回调未增加错误记录. 旧 RenderingCancelledException 及测试清理错误留在原生日志, 不宣称零错误.
 
 未启动/重启桥、未改配对/全局配置或认证文件, 真实课程正文未改动. iPad 真机及手动 IME 未验收. GitHub 发布与资产校验另记录实际结果. 回退只需保留/恢复原四个构建文件, 没有新的学习/修改数据迁移.
+
+公开交付回读: 代码/不可变标签 `2851ab3b0dd747d631788b3fbe3b1eea4b1bd7bb`, 分支和标签原子推送. [Actions 38881971148](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38881971148) 安装/构建/91 项 fixture/打包/发布步骤全部成功. 匿名回读确认仓库公开、默认分支 codex/initial、标签一致, [0.10.1 release](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.10.1) 为 draft=false/prerelease=true, 六件资产齐全. 每件下载内容 SHA-256 与 GitHub digest 相同; 四个独立插件文件与本地构建及 Windows 安装字节相同. 插件 ZIP 恰含四个匹配文件, 桥 ZIP 恰含匹配的公共桥/脚本/指南及 scripts 目录. 直连 Node 下载连接超时, 本次命令加 --use-env-proxy 复用已有环境后校验完成, 没有改全局网络配置或重发模型请求.
+
+Downloads、源树、开发树中的自有候选 ZIP 经旧 hash 检查后替换为公开字节. 插件 ZIP SHA-256 为 `45f2f695d141d17b8976a158618aa6eb44174bc6058ffd8efe98a6cd25ed99d7`; 桥 ZIP 为 `0fe4ddcfa3ee22b7f390a581cb25e07cb8d69e7ad362af8052a9e7827332a407`. 现有远程桥/配对/网络未改动; 本版无协议或技能输入扩展. 此记录不改变标签或发布资产.
