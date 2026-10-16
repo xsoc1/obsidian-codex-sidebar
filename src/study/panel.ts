@@ -7,7 +7,7 @@ import { bind_target } from "./writer";
 import { block_ids, unit_range, version_of } from "./document";
 import { parse_manifest, prerequisite_excerpt } from "./manifest";
 import { exercise_markdown, latex_source, reading_markdown } from "./export";
-import { diff_preview } from "./diff";
+import { render_comparison } from "./comparison";
 import { safe_math_markdown } from "./safe-markdown";
 
 export interface PanelHost
@@ -421,9 +421,7 @@ export class StudyPanel
 			Box.createEl("summary", { text: `${Plan.Target.Path} / ${Plan.Target.Operation} / ${Plan.State}` });
 			Box.createEl("p", { text: `目标版本: ${Plan.Target.Version}; ${Plan.Rationale}. 格式通过, 数学未独立核验.` });
 			Box.createEl("p", { text: Plan.Error ?? "确认前不会修改任何正文" });
-			const Diff = Box.createEl("details"); Diff.open = true; Diff.createEl("summary", { text: "待采用差异 (- 删除 / + 增加)" });
-			Diff.createEl("pre", { text: diff_preview(Plan.Target.Before, Plan.After) });
-			await this.markdown(Box.createDiv({ cls: "codex-study-draft" }), Plan.After, Plan.Target.Path);
+			render_comparison(this.Host.App, Box, Plan.Target.Before, Plan.After, Plan.Target.Path, this.Render);
 			if(["preview", "pending"].includes(Plan.State))
 			{
 				this.button(Box, "确认采用到当前客户端", async () => { await this.Host.Study.Writer.confirm(Plan.Id); this.refresh(); });

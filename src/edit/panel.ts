@@ -1,8 +1,7 @@
-import { MarkdownRenderer, Modal, type App, type Component } from "obsidian";
+import { Modal, type App, type Component } from "obsidian";
 import type { ChatEdits } from "./controller";
-import { diff_preview } from "../study/diff";
+import { render_comparison } from "../study/comparison";
 import type { TaskSpec } from "../study/task";
-import { safe_math_markdown } from "../study/safe-markdown";
 
 export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatEdits | null, Task: TaskSpec, Render: Component, Changed: () => void): Promise<void>
 {
@@ -21,12 +20,7 @@ export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatE
 	if(!Plan) { return; }
 	if(Task.EditMode === "ai") { const Original = Root.createEl("details"); Original.createEl("summary", { text: "查看 AI 选择的原文" }); Original.createEl("pre", { text: Target.Before!.slice(Range.From, Range.To), cls: "codex-edit-diff" }); }
 	Root.createDiv({ text: `状态: ${Plan.State}; ${Plan.Error ?? "格式已校验, 数学正确性仍须审核"}`, attr: { "aria-live": "polite" } });
-	const Diff = Root.createEl("details"); Diff.open = true; Diff.createEl("summary", { text: "修改差异 (- 删除 / + 增加)" });
-	Diff.createEl("pre", { text: diff_preview(Target.Before, Plan.After), cls: "codex-edit-diff" });
-	const Replacement = Record.Output!.markdown!;
-	const Preview = Root.createEl("details"); Preview.createEl("summary", { text: "查看修改后的片段" });
-	if(safe_math_markdown(Replacement)) { await MarkdownRenderer.render(AppValue, Replacement || "(删除此范围)", Preview.createDiv(), Target.Path, Render); }
-	else { Preview.createEl("pre", { text: Replacement }); }
+	render_comparison(AppValue, Root, Target.Before, Plan.After, Target.Path, Render, Range);
 	const Actions = Root.createDiv({ cls: "codex-edit-actions" });
 	const Button = (Text: string, Action: () => Promise<void> | void) =>
 	{

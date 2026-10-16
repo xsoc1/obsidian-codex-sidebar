@@ -11,6 +11,7 @@ import { version_of } from "../src/study/document";
 async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 {
 	const Required: string[] = []; const Files = new Map<string, string>(); const Local = new Map<string, string>();
+	const WorkspaceEvents = new Map<string, ((...Args: any[]) => void)[]>(), Views = new Map<string, (Leaf: any) => any>();
 	class Component { }
 	class Plugin
 	{
@@ -26,9 +27,9 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 				}
 			},
 			workspace: {
-				on: () =>
-				{
-				}, onLayoutReady: () =>
+				activeLeaf: null as any,
+				on: (Name: string, Handler: (...Args: any[]) => void) => { WorkspaceEvents.set(Name, [...WorkspaceEvents.get(Name) ?? [], Handler]); },
+				onLayoutReady: () =>
 				{
 				}, getLeavesOfType: () => [], getActiveFile: () => null
 			}
@@ -43,8 +44,9 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 		}
 		registerEditorExtension()
 		{
-		} registerView()
+		} registerView(Name: string, Factory: (Leaf: any) => any)
 		{
+			Views.set(Name, Factory);
 		} addCommand()
 		{
 		} addSettingTab()
@@ -52,6 +54,9 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 		} registerMarkdownPostProcessor()
 		{
 		} registerEvent()
+		{
+		}
+		registerDomEvent()
 		{
 		}
 		addRibbonIcon()
@@ -100,7 +105,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 		}
 	});
 	const Instance = new Export.exports.default(); await Instance.onload();
-	return { Instance, Files, Required, Local, MarkdownView: Component, browser_requests: () => BrowserRequests };
+	return { Instance, Files, Required, Local, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
 }
 
 function bootstrap_http(Before?: (Params: any) => Promise<void>)
@@ -146,6 +151,64 @@ function bootstrap_http(Before?: (Params: any) => Promise<void>)
 		return { status: 200, json: Value };
 	};
 }
+
+function source_view(Fixture: Awaited<ReturnType<typeof mobile_fixture>>, Path: string, Text: string)
+{
+	const View = new Fixture.MarkdownView() as any;
+	Object.assign(View, { file: { path: Path }, containerEl: { isConnected: true }, getViewType: () => "markdown", getMode: () => "source", getViewData: () => Text, editor: { getSelection: () => "", getCursor: () => ({ line: 0, ch: 0 }), lineCount: () => Text.split("\n").length } });
+	const Workspace = Fixture.Instance.app.workspace;
+	Workspace.activeLeaf = { view: View }; Workspace.getActiveViewOfType = () => Workspace.activeLeaf?.view.getViewType() === "markdown" ? Workspace.activeLeaf.view : null;
+	Workspace.getActiveFile = () => Workspace.activeLeaf?.view.file ?? null;
+	Fixture.Instance.app.vault.getFileByPath = (Value: string) => ({ path: Value }); Fixture.Instance.app.metadataCache = { getFileCache: () => ({ headings: [] }) };
+	return View;
+}
+
+test("native note event handlers in the mobile-safe bundle switch locally without RPC, keep pinned source/history/settings, and defer drafts and turns", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance;
+	try
+	{
+		const Old = P.State.ActiveId; source_view(F, "A.md", "# A\n\n$x=1$."); F.emit("file-open");
+		assert.equal(P.State.ActiveId, Old); assert.equal(P.NoteSessions.Path, "A.md");
+		Object.assign(P.State.Settings, { Model: "saved-model", Effort: "xhigh", Fast: true }); const Settings = JSON.stringify(P.State.Settings);
+		await P.set_note_sessions(true); const A = P.State.ActiveId; assert.notEqual(A, Old); assert.equal(P.Capture.Snapshot.Path, "A.md");
+		P.Session.Messages.push({ Id: "original", Role: "user", Text: "original question", Context: structuredClone(P.Capture.Snapshot) });
+		P.Study.Store.Data.Pinned = structuredClone(P.Capture.Snapshot);
+		P.Busy = true; source_view(F, "B.md", "# B\n\n$x=2$."); F.emit("active-leaf-change"); F.emit("file-open"); await P.NoteSessions.flush();
+		assert.equal(P.State.ActiveId, A); assert.equal(P.Capture.Snapshot.Path, "A.md");
+		P.Busy = false; await P.NoteSessions.flush(); const B = P.State.ActiveId; assert.notEqual(A, B); assert.equal(P.Capture.Snapshot.Path, "B.md");
+		assert.equal(P.Study.Store.Data.Pinned.Path, "A.md"); assert.equal(P.State.Sessions.find((Value: any) => Value.Id === A).Messages[0].Context.Path, "A.md");
+		const Sidebar = F.Views.get("codex-sidebar-view")!({}); Sidebar.Input = { value: "中文草稿" };
+		P.app.workspace.getLeavesOfType = (Type: string) => Type === "codex-sidebar-view" ? [{ view: Sidebar }] : [];
+		source_view(F, "A.md", "# A\n\n$x=1$."); F.emit("file-open"); await P.NoteSessions.flush(); assert.equal(P.State.ActiveId, B);
+		Sidebar.Input.value = ""; await P.NoteSessions.flush(); assert.equal(P.State.ActiveId, A);
+		P.app.workspace.activeLeaf = { view: { getViewType: () => "codex-sidebar-view" } }; F.emit("active-leaf-change"); assert.equal(P.State.ActiveId, A);
+		assert.equal(JSON.stringify(P.State.Settings), Settings); assert.equal(P.State.Sessions.length, 3); assert.equal(F.browser_requests(), 0); assert.equal(P.NoteSessions.Error, "");
+		assert.equal(JSON.stringify(P.State).includes("codex-sidebar-note-sessions"), false);
+		P.State.Settings.AutoCapture = false; source_view(F, "C.md", "# Private capture opt-out"); F.emit("file-open"); await P.NoteSessions.flush(); assert.equal(P.Capture.Snapshot, null);
+	}
+	finally { P.onunload(); }
+});
+
+test("bridge restore retains locally linked note sessions and the intended active conversation without mixing local mappings into remote state", async () =>
+{
+	const Ordinary = bootstrap_http(), F = await mobile_fixture(async Params =>
+	{
+		if(new URL(Params.url).pathname === "/state" && Params.method === "GET") { return { status: 200, json: { state: { Settings: { Model: "test-model", Effort: "low" }, Sessions: [{ Id: "server-existing", Title: "Server", ThreadId: null, Messages: [] }], ActiveId: "server-existing" }, cursor: 0 } }; }
+		return Ordinary(Params);
+	});
+	const P = F.Instance;
+	try
+	{
+		source_view(F, "A.md", "# A"); F.emit("file-open"); await P.set_note_sessions(true); const A = P.State.ActiveId;
+		P.Session.Messages.push({ Id: "local-only", Role: "user", Text: "unsynced note history" });
+		P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture"; P.Remote.Transport = "native";
+		await P.ensure_connection(); assert.equal(P.State.ActiveId, A); assert.equal(P.Session.Messages[0].Id, "local-only");
+		assert.ok(P.State.Sessions.some((Value: any) => Value.Id === "server-existing")); assert.equal(P.NoteSessions.Data.Links[0].SessionId, A);
+		assert.equal(JSON.stringify(P.State).includes('"Links"'), false);
+	}
+	finally { P.onunload(); }
+});
 
 test("ordinary mobile chat edits use the two-input skilled turn and the local confirmation writer; replay never changes to current focus", async () =>
 {

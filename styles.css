@@ -35,6 +35,9 @@
 .codex-header strong { flex: 1; font-size: 16px; }
 .codex-sidebar button { font-size: 12px; padding: 4px 8px; }
 .codex-sessions { width: 100%; }
+.codex-note-session-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 6px 0; }
+.codex-note-session-status { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; max-height: 3em; overflow: auto; }
+.codex-note-session-status[hidden] { display: none; }
 .codex-sr-only {
 	position: absolute;
 	width: 1px;
@@ -233,6 +236,12 @@
 .codex-edit-intent[hidden] { display: none; }
 .codex-edit-diff { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
 .codex-edit-actions { flex-wrap: wrap; }
+.codex-comparison-side { border-left: 2px solid var(--background-modifier-border); margin: 10px 0; padding: 6px 8px; min-width: 0; }
+.codex-comparison-before { border-color: var(--text-error); }
+.codex-comparison-after { border-color: var(--color-green); }
+.codex-comparison-body { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.codex-comparison-body .math-block { overflow-x: auto; max-width: 100%; }
+.codex-comparison-body > :last-child { margin-bottom: 0; }
 .codex-sidebar { overflow-y: auto; }
 .codex-context-tools[open] { max-height: 45%; overflow-y: auto; }
 .codex-note-selection { flex: 0 0 auto; border-left: 2px solid var(--interactive-accent); padding: 4px 8px; }
