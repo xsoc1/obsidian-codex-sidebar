@@ -10,6 +10,7 @@ import { client_instructions, DefaultInstructions, instruction_items, ManagedIns
 import { DevelopmentCases } from "../examples/exposition/cases";
 import { exposition_input } from "./exposition-input";
 import { skill_input } from "../src/skills";
+import { reserve_request } from "./exposition-budget";
 
 async function run_live(): Promise<void>
 {
@@ -50,6 +51,7 @@ async function run_live(): Promise<void>
 		await Client.request("thread/inject_items", { threadId: Thread.thread.id, items: instruction_items(Instructions) });
 		const State = { Settings: { Model: "gpt-6.1-sol", Effort: "low", Fast: false }, Sessions: [{ Id: Session, ThreadId: Thread.thread.id, Messages: [{ Id: "original-question", Role: "user", Text: Input.Task!.Request, Prompt: Input.Prompt, Task: Input.Task, Context: Input.Source }] }], ActiveId: Session };
 		await Client.sync_state(State);
+		reserve_request(Directory, "remote/D03");
 		writeFileSync(LedgerPath, JSON.stringify({ status: "submitting", plannedRequests: 1, sample: "D03", skill: "production-selected 0.2.0; plugin-only", startedAt: new Date().toISOString() }, null, 2));
 		await Client.request("turn/start", { threadId: Thread.thread.id, input: skill_input(Input.Prompt, { type: "skill", name: "math-writing", path: "/ignored-client-path/SKILL.md" }), model: "gpt-6.1-sol", effort: "low", serviceTier: "default" });
 		const Turn = await Done; assert.equal(Turn.status, "completed"); assert.ok(Output);

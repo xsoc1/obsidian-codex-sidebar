@@ -13,6 +13,7 @@ import { history_items } from "../src/history";
 import { parse_edit } from "../src/edit/protocol";
 import { parse_output } from "../src/study/schema";
 import { parse_completion, MathCompletionInstructions } from "../src/completion";
+import { reserve_request } from "./exposition-budget";
 
 const hash = (Text: string | Buffer) => createHash("sha256").update(Text).digest("hex");
 
@@ -110,6 +111,7 @@ async function run_live(): Promise<void>
 				await Connection.request("thread/inject_items", { threadId: Thread.thread.id, items: CandidatePrompt.instruction_items(Instructions) });
 				if(Sample.History) { await Connection.request("thread/inject_items", { threadId: Thread.thread.id, items: history_items(Sample.History.map((Value, Index) => ({ ...Value, Id: String(Index) }))) }); }
 				const Entry: any = { id: Sample.Id, variant: Variant, run: Run, stage: Stage, status: "submitting", startedAt: new Date().toISOString(), model: Model.model, effort: "low", serviceTier: "default", skillSha256: hash(SkillText), instructionsSha256: hash(Instructions) };
+				reserve_request(Directory, `${Run}/${Variant}/${Sample.Id}`);
 				Ledger.push(Entry); writeFileSync(LedgerPath, JSON.stringify(Ledger, null, 2));
 				process.stdout.write(JSON.stringify({ id: Sample.Id, variant: Variant, status: "starting" }) + "\n");
 				try

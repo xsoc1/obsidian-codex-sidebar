@@ -1,6 +1,6 @@
 # Codex Sidebar
 
-数学表达专项已完成 **0.12.0 本地候选**: 共享规则按任务组织, 保留数学条件和原证明路线, 明确语言修改仍走差异预览与确认. 113 项测试、27 次有记录的真实请求与原生临时组件检查已完成, 各验证层和候选技能修订分别记录. 未替换日常 0.11.1, 未发布. 详见 [使用与迁移](docs/math-exposition.md) 和 [实际验证记录](docs/math-exposition-validation.md).
+数学表达专项已完成 **0.12.0 本地候选**: 共享规则按任务组织, 保留数学条件和原证明路线, 明确语言修改仍走差异预览与确认. 114 项测试、27 次有记录的真实请求与原生临时组件检查已完成, 各验证层和候选技能修订分别记录. 未替换日常 0.11.1, 未发布. 详见 [使用与迁移](docs/math-exposition.md) 和 [实际验证记录](docs/math-exposition-validation.md); [完整阅读示例](examples/exposition/README.md) 可直接打开.
 
 Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动隐藏 CLI, iPad 可连接 Windows 独立远程 Agent. 点击 Obsidian 工具栏的机器人图标, 打开或收起聊天栏.
 
