@@ -4,7 +4,7 @@ Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动
 
 [GitHub 源码仓库](https://github.com/xsoc1/obsidian-codex-sidebar)
 
-2026-10-18 本地界面调整 (未发布): 隐藏发送区上方的问答/修改说明段, 保留“本轮方式”、范围/原文类型、来源卡片与确认写回. Windows 当前侧栏已即时生效, 无需重载或中断回复.
+**0.11.1** 隐藏发送区上方冗余的问答/修改说明段, 保留“本轮方式”、范围/原文类型、来源卡片与确认写回. Windows 已验证该说明区不再显示或占位. 本次按用户“更新”要求提供 [下载 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.11.1), 发布完成后记录公共资产校验结果. 远程桥无需升级, iPad 本版未做真机验收.
 
 **0.11.0** 将差异稿改为原文/拟采用稿的公式排版对照, 保留可展开的原始字符差异. 按用户决定默认开启“随笔记切换会话”: 按当前 Markdown/PDF 分别新建和恢复会话, 可手动绑定旧会话; 回复、草稿和引用期间暂缓切换. 旧历史保留, 手动关闭后记住关闭状态. 切换本身不请求模型, 关联只存当前设备. 构建/106 项 fixture、原生公式组件/文件事件与 12 组 headless 布局已有分层验证. 2026-10-16 经明确授权安装到 Windows 日常库, 实际主侧栏 A→B→A、草稿延迟和重载恢复通过, 原聊天/快照/设置/学习与修改记录保留. [下载 / BRAT 预发布版本](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.11.0), [构建与发布检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/38897330181), [使用、检测结果与验证边界](docs/formula-comparison-and-note-sessions.md). GitHub 发布成功, 六件公共资产校验通过, 插件文件与 Windows 安装一致. 本版 iPad 真机未验收.
 
