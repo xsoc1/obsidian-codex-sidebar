@@ -11,6 +11,17 @@ import { search_window } from "../src/edit/range";
 const Before = "# 原笔记\n\n保留前文.\n\n证明: $1+1=3$.\n\n保留后文和留白.\n";
 const Old = "证明: $1+1=3$.", New = "证明: $1+1=2$.";
 const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", markdown: New, rationale: "仅修正加法结果, 保留原句和路线." };
+test("explicit Chinese and English language edits route to proposals while explanation-only and refused changes stay chat", () =>
+{
+	for(const Request of ["请调整这段文风, 保留公式和路线", "润色这段语言", "Polish this proof, keep the route", "Please improve the wording", "Can you rephrase this paragraph?"])
+	{
+		assert.equal(edit_intent(Request), true, Request);
+	}
+	for(const Request of ["只解释如何润色, 不修改", "How can I polish this proof?", "Only explain how to improve the wording", "Explain how to polish this proof", "Can you explain how to rephrase this?", "What does rephrase mean?", "Don't polish this", "Do not adjust the style", "Don't edit; just explain how to rephrase"])
+	{
+		assert.equal(edit_intent(Request), false, Request);
+	}
+});
 test("adopting a previous note revision enters preview while explanations and refused edits remain chat", () =>
 {
 	for(const Text of ["将你这个笔记改动方案落地", "把上面的改稿落地", "应用上条改稿", "采用刚才的方案", "将修改建议应用到笔记", "把这段写回笔记", "apply your proposed changes"])

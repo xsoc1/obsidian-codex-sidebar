@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { RemoteBridge, token_hash } from "../src/bridge";
 import type { RpcMessage } from "../src/rpc";
+import { client_instructions, instruction_items, ManagedInstructions } from "../src/prompt";
 
 test("private bridge isolates devices, clamps permissions, replaces skill paths, and deduplicates requests", async () =>
 {
@@ -75,13 +76,21 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 		assert.equal(Saved.status, 200);
 		assert.deepEqual(Saved.body, { cursor: 0 });
 		assert.ok(JSON.stringify(Saved.body).length < 64);
-		const StartParams = { clientSessionId: "session-a", model: "model-a", cwd: "outside", sandbox: "danger-full-access", config: { model_reasoning_effort: "low" } };
+		const ClientInstructions = client_instructions("original user choice", null);
+		const StartParams = { clientSessionId: "session-a", model: "model-a", cwd: "outside", sandbox: "danger-full-access", developerInstructions: ClientInstructions, config: { model_reasoning_effort: "low" } };
 		const [Thread, SameSession] = await Promise.all([Rpc(0, "thread/start", StartParams), Rpc(0, "thread/start", StartParams)]);
 		assert.equal(Thread.status, 200);
 		assert.equal(SameSession.body.thread.id, Thread.body.thread.id);
 		assert.equal(Peers[0].calls.filter(Value => Value.Method === "thread/start").length, 1);
 		const Started = Peers[0].calls.find(Value => Value.Method === "thread/start").Params;
 		assert.equal(Started.cwd, Dir); assert.equal(Started.sandbox, "read-only"); assert.equal(Started.approvalPolicy, "never"); assert.equal(Started.ephemeral, true);
+		assert.equal(Started.developerInstructions.split(ManagedInstructions).length - 1, 1);
+		assert.ok(Started.developerInstructions.includes(JSON.stringify(Dir)));
+		await Rpc(0, "thread/inject_items", { threadId: Thread.body.thread.id, items: [...instruction_items(ClientInstructions), { type: "message", role: "user", content: [{ type: "input_text", text: "original saved source" }] }] });
+		const Injected = Peers[0].calls.find(Value => Value.Method === "thread/inject_items").Params.items;
+		assert.equal(Injected[0].content[0].text.split(ManagedInstructions).length - 1, 1);
+		assert.ok(Injected[0].content[0].text.includes(JSON.stringify(Dir)));
+		assert.equal(Injected[1].content[0].text, "original saved source");
 		const Params = { threadId: Thread.body.thread.id, model: "model-a", effort: "low", serviceTier: "default", input: [{ type: "text", text: "question" }, { type: "skill", name: "math-writing", path: "/arbitrary/secret" }] };
 		assert.equal((await Rpc(1, "turn/start", Params)).status, 400);
 		assert.equal((await Http(1, "/state")).body.state, null);

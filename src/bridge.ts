@@ -7,7 +7,7 @@ import { CodexConnection, type RpcMessage } from "./rpc";
 import { CompletionService } from "./completion";
 import { math_writing_skill, skill_input } from "./skills";
 import { run_options, type ModelInfo } from "./controls";
-import { editing_instructions, environment_instructions } from "./prompt";
+import { environment_instructions } from "./prompt";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcConnection } from "./remote";
 import { skill_version } from "./desktop";
@@ -397,7 +397,7 @@ class DeviceAgent
 			{
 				throw new Error("远程运行会话过多, 请重启桥并从历史恢复");
 			}
-			const Instructions = environment_instructions(editing_instructions(bounded_string(Params.developerInstructions ?? "", 64000)), { Vault: this.Config.Vault, Root: this.Config.Cwd, Cli: this.Config.ObsidianCli });
+			const Instructions = environment_instructions(bounded_string(Params.developerInstructions ?? "", 64000), { Vault: this.Config.Vault, Root: this.Config.Cwd, Cli: this.Config.ObsidianCli });
 			const Options = run_options({ Model: Params.model, Effort: Params.config?.model_reasoning_effort, Fast: Params.serviceTier === "priority" }, this.Models);
 			const Work = (async () =>
 			{
@@ -470,7 +470,10 @@ class DeviceAgent
 			let ImageCount = 0;
 			const Items = Params.items.map((Item: any) => ({ ...Item, content: Item.content.map((Part: any) =>
 			{
-				if(Part.type !== "input_image") { return Part; }
+				if(Part.type !== "input_image")
+				{
+					return Item.role === "developer" ? { ...Part, text: environment_instructions(Part.text, { Vault: this.Config.Vault, Root: this.Config.Cwd, Cli: this.Config.ObsidianCli }) } : Part;
+				}
 				if(++ImageCount > 32) { throw new Error("恢复的 PDF 页图过多"); }
 				return { type: "input_image", image_url: this.PdfImages.resolve(Part.image_url) };
 			}) }));

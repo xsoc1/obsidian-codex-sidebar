@@ -3,7 +3,7 @@ import {
 	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, parseYaml, type App
 } from "obsidian";
 import { ContextCapture } from "./context";
-import { build_prompt, DefaultInstructions, editing_instructions, migrate_instructions, environment_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
+import { build_prompt, DefaultInstructions, client_instructions, migrate_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
 import { answer_quote } from "./quote";
 import { branch_prefix, history_items, type ChatMessage } from "./history";
 import type { CompletionService, CompletionInput } from "./completion";
@@ -405,10 +405,10 @@ export default class CodexSidebarPlugin extends Plugin
 
 	private work_instructions(): string
 	{
-		return PdfInstructions + "\n\n" + environment_instructions(editing_instructions(this.State.Settings.Instructions), {
+		return client_instructions(this.State.Settings.Instructions, this.Remote.Enabled ? null : {
 			Vault: this.app.vault.getName(), Root: this.host_cwd(),
 			Cli: this.obsidian_cli()
-		}) + (this.Remote.Enabled ? "\n\n这是独立的 iPad/远程 Obsidian 会话. CLI 在 Windows, 用户界面在客户端. 当前笔记与选区以用户随问题提供的源快照为准, Windows vault 副本可能尚未同步. 只读 CLI 工具读到的是电脑副本, 不能声称看到了 iPad 屏幕、未同步文件或桌面其他会话. 修改只生成提案, 确认后的写入由当前 iPad/远程客户端完成; 不让 Windows 写同步副本. 补全也只返回建议供客户端确认." : "");
+		}, PdfInstructions);
 	}
 
 	private host_cwd(): string

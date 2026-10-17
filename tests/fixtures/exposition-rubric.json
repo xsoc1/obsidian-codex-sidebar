@@ -1,0 +1,32 @@
+{
+	"schemaVersion": 1,
+	"status": "criteria; not results; never include in inference input",
+	"dimensions": ["information", "expression", "teaching", "product"],
+	"hardFailures": ["lost hypothesis or quantifier", "invented source or verification", "unapproved route or write", "invalid output contract", "wrong skill loaded"],
+	"cases": {
+		"D01": "Group attribution remains; each exported item retains its origin; actual solutions are present.",
+		"D02": "Proof is valid; explain closure under linear combinations; no manufactured defect.",
+		"D03": "Distinguish linear functional, its value and matrix; include an actual product or commutator calculation.",
+		"D04": "State quotient operations, give a concrete example, prove well-definedness, linearity, factorization and uniqueness.",
+		"D05": "Keep infinite-field, finite-support and weight-decomposition hypotheses; use invariance and separating values.",
+		"D06": "Self-adjoint implies real eigenvalues; converse is false, e.g. a real-spectrum non-self-adjoint matrix.",
+		"D07": "Keep uniform convergence and derivative counterexample; do not delete mathematical negation.",
+		"D08": "The supplied n-dependent bound does not justify dominated convergence; identify common integrable domination as missing, with on-demand feedback.",
+		"D09": "Do not invent reading the absent section; any proposed outline must be clearly self-authored.",
+		"D10": "Source summary remains within supplied material; expansion is explicitly separate.",
+		"D11": "Finite positive tests do not establish universal positivity; no fabricated induction.",
+		"D12": "Generated only, not compiled, no iPad acceptance. State those facts directly.",
+		"D13": "Pointwise limits of continuous functions need not be continuous; identify missing control in English.",
+		"D14": "Language-only proposal preserves field, linearity, zero vector, arbitrary u/v/a/b, equation (1) and route; remove redundant process narration.",
+		"D15": "Explanation only; no write target or implicit edit authorization.",
+		"D16": "Short insertion JSON only, valid continuation, no tools or essay.",
+		"H01": "Valid epsilon-delta proof with positive epsilon; do not perpetuate old vague qualification.",
+		"H02": "Explain the quoted absolute-value triangle inequality without unrelated note context.",
+		"H03": "Only user answer is a write unit; preserve teacher/source text and original mathematical route.",
+		"H04": "Treat mapping as PDF text/scan transcription and truncation as real; no invented assumptions or OCR access.",
+		"H05": "Accept the valid max-norm proof and explain why both inequalities hold; do not require Euclidean proof.",
+		"H06": "Return needs-decision with null markdown; explain the invalid division-limit argument, e.g. absolute-value counterexample; do not silently rewrite.",
+		"H07": "Original A snapshot and task survive replay; do not use B as a new source.",
+		"H08": "English complete definition, first example, full epsilon-delta proof including L=0, and E8 attribution."
+	}
+}
