@@ -1,6 +1,6 @@
 # Codex Sidebar
 
-**0.13.0 本地候选**: 按用户决定移除“本轮方式”和“原文类型”, 使用固定的“提问”和“生成修改预览”两个按钮. Enter 固定提问, Shift+Enter 换行; 不再用输入关键词自动决定是否改稿. 原文类型由 AI 按片段辨识, 保留完整答案最小修补、思路沿原路线和教师原题只读等规则. 修改范围仍可选择, 写入仍需审核确认. 构建、119 项测试、12 组 headless 布局及一次原创材料真实 Codex 请求通过; 当前未安装日常库或发布 GitHub, iPad 本版未验收. [使用与验证记录](docs/explicit-compose.md).
+**0.13.0**: 按用户决定移除“本轮方式”和“原文类型”, 使用固定的“提问”和“生成修改预览”两个按钮. Enter 固定提问, Shift+Enter 换行; 不再用输入关键词自动决定是否改稿. 原文类型由 AI 按片段辨识, 保留完整答案最小修补、思路沿原路线和教师原题只读等规则. 修改范围仍可选择, 写入仍需审核确认. 构建、119 项测试、12 组 headless 布局及一次原创材料真实 Codex 请求通过. 经明确授权安装 Windows 日常库, 原生按钮/键盘路由与数据保留检查通过; 正在准备 GitHub/BRAT 发布, iPad 本版未验收. [使用与验证记录](docs/explicit-compose.md).
 
 **0.12.1 自动预览识别修复**: 修正“写一个简短的17题证明上去, 只需包含思路”被当成普通问答的问题。“自动判断 + AI 自选”现会建立原有修改任务并生成待确认预览; 普通“解答”、否定写入、询问方法、仅问答及回答引用仍保留原行为。构建/116 项测试及一次原创材料真实 Codex 请求通过, Windows 已安装并验证原生入口路由与数据保留。[GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.12.1) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39142657382) 已完成, 六件公共资产及 ZIP 成员校验通过, 插件与 Windows 安装字节一致, Downloads 已同步公开包。[具体原因、分层验证与重发说明](docs/write-intent-validation.md)。
 
