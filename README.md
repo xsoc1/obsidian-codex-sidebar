@@ -1,6 +1,8 @@
 # Codex Sidebar
 
-**0.12.0 数学表达更新**: 共享规则按任务组织, 保留数学条件和原证明路线, 明确语言修改仍走差异预览与确认. 用户授权后已安装 Windows 日常插件, 原会话、快照、选择和设备记录保留; [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.12.0) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39086009506) 已完成, 六件公共资产及 ZIP 成员校验通过, 插件文件与 Windows 安装相同, Downloads 已同步公开包. 114 项测试、27 次有记录的真实请求与原生临时组件检查已完成, 各验证层和候选技能修订分别记录. 私有技能仍为原安装 0.2.0, 在用远程桥未重启. 详见 [版本说明](docs/releases/0.12.0.md)、[使用与迁移](docs/math-exposition.md) 和 [实际验证记录](docs/math-exposition-validation.md); [完整阅读示例](examples/exposition/README.md) 可直接打开.
+**0.12.0 数学表达更新**: 共享规则按任务组织, 保留数学条件和原证明路线, 明确语言修改仍走差异预览与确认. 用户授权后已安装 Windows 日常插件, 原会话、快照、选择和设备记录保留; [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.12.0) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39086009506) 已完成, 六件公共资产及 ZIP 成员校验通过, 插件文件与 Windows 安装相同, Downloads 已同步公开包. 114 项测试、27 次有记录的真实请求与原生临时组件检查已完成, 各验证层和候选技能修订分别记录. 私有技能独立安装, 不包含在公开插件包中; 在用远程桥未重启. 详见 [版本说明](docs/releases/0.12.0.md)、[使用与迁移](docs/math-exposition.md) 和 [实际验证记录](docs/math-exposition-validation.md); [完整阅读示例](examples/exposition/README.md) 可直接打开.
+
+本机采用记录 (2026-10-18): 发布后用户另行授权使用新技能, 已备份并采用私有 `math-writing 0.3.0-candidate.4`, Windows 侧栏实际重新发现该版本。未追加模型请求或 iPad 真机验收, 未上传私有技能; 公开安装包和既有发布证据不变。
 
 Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动隐藏 CLI, iPad 可连接 Windows 独立远程 Agent. 点击 Obsidian 工具栏的机器人图标, 打开或收起聊天栏.
 
