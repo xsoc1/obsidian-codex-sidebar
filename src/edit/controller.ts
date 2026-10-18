@@ -26,6 +26,7 @@ export class ChatEdits
 		const Task = make_task("edit", Source, Request, Bound.Role); Task.Scope = "note-edit";
 		Task.Target = Bound.Target; Task.WriteUnit = { ...Bound.Source, SelectedText: "" };
 		if(Scope === "ai") { Task.EditMode = "ai"; }
+		if(Role === "auto") { Task.EditRoleMode = "auto"; }
 		if(this.Host.protected_source({ ...Task, Target: { ...Task.Target, Range: Bound.Focus } })) { throw new Error("此范围包含标为只读的源书或教师原题, 不生成写回提案"); }
 		this.register(Task);
 		this.Error = "";

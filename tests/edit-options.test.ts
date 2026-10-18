@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EditOptions } from "../src/edit/options";
+import { ComposerActions, type ComposeAction } from "../src/edit/composer";
 
 class Element
 {
@@ -10,6 +11,9 @@ class Element
 	value = "";
 	hidden = false;
 	open = false;
+	disabled = false;
+	classList = { add: (_: string) => {} };
+	Handlers = new Map<string, ((Event: any) => void)[]>();
 	Attributes: Record<string, string> = {};
 	constructor(readonly Tag = "div") { }
 	createEl(Tag: string, Options: any = {}): any
@@ -20,29 +24,53 @@ class Element
 	}
 	createDiv(Options?: any): any { return this.createEl("div", Options); }
 	createSpan(Options?: any): any { return this.createEl("span", Options); }
-	addEventListener(): void { }
+	addEventListener(Name: string, Handler: (Event: any) => void): void { this.Handlers.set(Name, [...this.Handlers.get(Name) ?? [], Handler]); }
+	fire(Name: string, Data: any = {}): boolean
+	{
+		const Event = { ...Data, defaultPrevented: !!Data.defaultPrevented, preventDefault() { this.defaultPrevented = true; } };
+		this.Handlers.get(Name)?.forEach(Handler => Handler(Event)); return Event.defaultPrevented;
+	}
+	click(): void { if(!this.disabled) { this.fire("click"); } }
 	setText(Text: string): void { this.textContent = Text; }
 }
 
-test("the explicit preview mode is visible without unfolding ranges and an AI scope alone never overrides question-only mode", () =>
+test("composer options expose only the modification range with automatic source-role inference", () =>
 {
 	const Root = new Element(), Options = new EditOptions(Root as any, () => {});
-	assert.equal(Options.Mode.parentElement!.parentElement, Root);
 	assert.equal((Options.Scope.parentElement!.parentElement as any).Tag, "details");
 	assert.equal(Options.Scope.value, "ai");
-	assert.equal(Options.refresh("写一个简短的17题证明上去, 只需包含思路", false, "personal.md"), true);
-	assert.equal(Options.refresh("将你这个笔记改动方案落地", false, "personal.md"), true);
-	const Hint = Root.children[0]; assert.equal(Hint.hidden, false); assert.match(Hint.textContent, /personal.md.*AI 自选范围/);
-	Options.Mode.value = "question";
-	assert.equal(Options.refresh("写一个简短的17题证明上去, 只需包含思路", false, "personal.md"), false);
-	assert.equal(Options.refresh("应用上条改稿", false, "personal.md"), false);
-	assert.match(Hint.textContent, /本轮为问答.*生成修改预览.*修改范围只在预览模式生效/);
-	Options.Mode.value = "edit";
-	assert.equal(Options.refresh("就按刚才那个来", false, "personal.md"), true);
-	assert.match(Hint.textContent, /确认后才写入/);
-	Options.Mode.value = "auto";
-	assert.equal(Options.refresh("写一个简短的17题证明上去, 只需包含思路", true, "personal.md"), false);
-	assert.equal(Options.refresh("应用上条改稿", true, "personal.md"), false);
-	Options.refresh("", false); assert.equal(Hint.hidden, true);
-	assert.ok(Root.children.every(Value => !Value.Attributes.title && !Value.Attributes["aria-label"]));
+	const All = (Value: Element): Element[] => [Value, ...Value.children.flatMap(All)], Elements = All(Root);
+	assert.equal(Elements.filter(Value => Value.Tag === "select").length, 1);
+	assert.ok(Elements.every(Value => !["本轮方式", "原文类型", "修改范围与原文类型"].includes(Value.textContent)));
+	for(const Scope of ["ai", "captured", "note"])
+	{
+		Options.Scope.value = Scope; assert.deepEqual(Options.values(), { Scope, Role: "auto" });
+	}
+	assert.ok(Elements.every(Value => !Value.Attributes.title && !Value.Attributes["aria-label"]));
+});
+
+test("the two stable action buttons and Enter choose an explicit route while Shift+Enter, IME and Tab remain native", () =>
+{
+	const Root = new Element(), Input = new Element("textarea"), Calls: ComposeAction[] = [];
+	const Actions = new ComposerActions(Root as any, Input as any, Mode => Calls.push(Mode), () => {});
+	Actions.refresh(false, false, false);
+	assert.deepEqual(Root.children.map(Value => Value.textContent), ["提问", "生成修改预览", "停止"]);
+	(Actions.Question as any).click(); (Actions.Preview as any).click();
+	assert.equal(Input.fire("keydown", { key: "Enter" }), true);
+	assert.deepEqual(Calls, ["question", "edit", "question"]);
+	for(const Event of [{ key: "Enter", shiftKey: true }, { key: "Enter", isComposing: true }, { key: "Enter", keyCode: 229 }, { key: "Tab" }]) { assert.equal(Input.fire("keydown", Event), false); }
+	assert.equal(Calls.length, 3);
+});
+
+test("busy and quote states protect both actions and re-enable them without changing their labels", () =>
+{
+	const Root = new Element(), Input = new Element("textarea"), Calls: ComposeAction[] = []; let Stopped = 0;
+	const Actions = new ComposerActions(Root as any, Input as any, Mode => Calls.push(Mode), () => Stopped++);
+	Actions.refresh(true, true, false);
+	(Actions.Question as any).click(); (Actions.Preview as any).click(); Input.fire("keydown", { key: "Enter" }); (Actions.Stop as any).click();
+	assert.equal(Calls.length, 0); assert.equal(Stopped, 1);
+	Actions.refresh(false, false, true);
+	(Actions.Preview as any).click(); (Actions.Question as any).click(); assert.deepEqual(Calls, ["question"]);
+	Actions.refresh(false, false, false); (Actions.Preview as any).click(); assert.deepEqual(Calls, ["question", "edit"]);
+	assert.deepEqual(Root.children.map(Value => Value.textContent), ["提问", "生成修改预览", "停止"]);
 });

@@ -29,10 +29,11 @@ import { pdf_reference, jpeg_info, type PdfImageRef } from "./pdf/types";
 import { PdfPageModal, pdf_preview, PdfInstructions } from "./pdf/panel";
 import { ChatEdits } from "./edit/controller";
 import { EditStore } from "./edit/store";
-import { edit_intent, type EditRole, type EditScope } from "./edit/protocol";
+import { type EditRole, type EditScope } from "./edit/protocol";
 import { unit_range } from "./study/document";
 import { render_edit, export_edits } from "./edit/panel";
 import { EditOptions } from "./edit/options";
+import { ComposerActions, type ComposeAction } from "./edit/composer";
 import { SelectionPreview, selection_in_source } from "./selection-preview";
 import { NoteSessions, note_file_path } from "./note-sessions";
 
@@ -1089,10 +1090,10 @@ export default class CodexSidebarPlugin extends Plugin
 		return false;
 	}
 
-	async send_chat(Question: string, Context: ContextSnapshot | null, Quote: AnswerQuote | null, Options: { Mode?: "auto" | "question" | "edit"; Scope?: EditScope; Role?: EditRole } = {}): Promise<boolean>
+	async send_chat(Question: string, Context: ContextSnapshot | null, Quote: AnswerQuote | null, Options: { Mode?: ComposeAction; Scope?: EditScope; Role?: EditRole } = {}): Promise<boolean>
 	{
 		if(this.Busy || this.ChatPreparing || this.Capture.Suspended || this.NoteSessions?.Switching) { return false; }
-		const Edit = Options.Mode === "edit" || (Options.Mode !== "question" && !Quote && edit_intent(Question));
+		const Edit = Options.Mode === "edit";
 		if(!Edit) { return this.send_message(Question, Context, Quote); }
 		this.ChatPreparing = true; this.StartedAt = Date.now(); this.Activity = "准备修改目标"; this.refresh();
 		try
@@ -1684,8 +1685,7 @@ class CodexView extends ItemView
 	private EditOptions!: EditOptions;
 	private QuoteElement!: HTMLElement;
 	private SelectedAnswer: AnswerQuote | null = null;
-	private SendButton!: HTMLButtonElement;
-	private StopButton!: HTMLButtonElement;
+	private ComposeActions!: ComposerActions;
 	private SessionsElement!: HTMLSelectElement;
 	private ModelElement!: HTMLSelectElement;
 	private EffortElement!: HTMLSelectElement;
@@ -1826,22 +1826,12 @@ class CodexView extends ItemView
 		this.CatalogElement = Composer.createDiv({ cls: "codex-catalog-status" });
 		this.UsageElement = OptionsPanel.Body.createDiv({ cls: "codex-usage" });
 		this.ComposePanel = Panel(Composer, "codex-send-tools", "提问与发送");
-		this.Input = this.ComposePanel.Body.createEl("textarea", { attr: { placeholder: "随时提问... Enter 发送, Shift+Enter 换行" } });
+		this.Input = this.ComposePanel.Body.createEl("textarea", { attr: { placeholder: "随时提问... Enter 提问, Shift+Enter 换行" } });
 		this.EditOptions = new EditOptions(this.ComposePanel.Body, () => this.refresh_compose_summary());
 		accessible_name(this.Input, "向 Codex 提问");
 		this.Input.addEventListener("input", () => { this.refresh_compose_summary(); void this.Owner.NoteSessions?.flush(); });
-		this.Input.addEventListener("keydown", Event =>
-		{
-			if(Event.key === "Enter" && !Event.shiftKey && !Event.isComposing)
-			{
-				Event.preventDefault();
-				void this.send_input();
-			}
-		});
 		const Actions = this.ComposePanel.Body.createDiv({ cls: "codex-compose-actions" });
-		this.SendButton = this.button(Actions, "发送", () => void this.send_input());
-		this.SendButton.addClass("mod-cta");
-		this.StopButton = this.button(Actions, "停止", () => void this.Owner.stop_turn());
+		this.ComposeActions = new ComposerActions(Actions, this.Input, Mode => void this.send_input(Mode), () => void this.Owner.stop_turn());
 		this.ActivityTimer = setInterval(() => this.refresh_activity(), 1000);
 		const CaptureAnswer = () => this.capture_answer_selection();
 		this.registerDomEvent(Root.ownerDocument, "selectionchange", CaptureAnswer);
@@ -1880,9 +1870,10 @@ class CodexView extends ItemView
 			this.SelectedAnswer = null;
 		}
 		const Quote = this.Owner.AnswerQuote ?? this.SelectedAnswer;
+		this.ComposeActions?.refresh(this.Owner.Busy || this.Owner.ChatPreparing || !!this.Owner.NoteSessions?.Switching, this.Owner.Busy && !!this.Owner.TurnId, !!this.Owner.AnswerQuote);
 		this.refresh_compose_summary();
 		this.QuoteElement.hidden = !Quote;
-		this.Input.placeholder = this.Owner.AnswerQuote ? "针对选中的回答继续提问..." : "随时提问... Enter 发送, Shift+Enter 换行";
+		this.Input.placeholder = this.Owner.AnswerQuote ? "针对选中的回答继续提问... Enter 提问, Shift+Enter 换行" : "随时提问... Enter 提问, Shift+Enter 换行";
 		this.QuoteElement.empty();
 		if(!Quote)
 		{
@@ -1917,8 +1908,6 @@ class CodexView extends ItemView
 	private refresh_compose_summary(): void
 	{
 		this.ComposePanel?.Summary?.setText(this.Input.value.trim() ? "提问与发送 · 有草稿" : this.Owner.AnswerQuote ? "提问与发送 · 已引用" : "提问与发送");
-		const Editing = this.EditOptions?.refresh(this.Input.value, !!this.Owner.AnswerQuote, this.Owner.Capture.Snapshot?.Path);
-		this.SendButton?.setText(Editing ? "生成修改预览" : "发送");
 	}
 
 	private refresh_activity(): void
@@ -2009,11 +1998,11 @@ class CodexView extends ItemView
 		return Button;
 	}
 
-	private async send_input(): Promise<void>
+	private async send_input(Mode: ComposeAction): Promise<void>
 	{
 		const Text = this.Input.value;
 		const Quote = this.Owner.AnswerQuote;
-		const Accepted = await this.Owner.send_chat(Text, Quote ? null : this.Owner.State.Settings.AttachContext ? this.Owner.Capture.Snapshot : null, Quote, this.EditOptions.values());
+		const Accepted = await this.Owner.send_chat(Text, Quote ? null : this.Owner.State.Settings.AttachContext ? this.Owner.Capture.Snapshot : null, Quote, { Mode, ...this.EditOptions.values() });
 		if(Accepted && this.Input.value === Text)
 		{
 			this.Input.value = "";
@@ -2047,8 +2036,6 @@ class CodexView extends ItemView
 		this.refresh_completion();
 		this.refresh_quote();
 		this.StudyPanel?.refresh();
-		this.SendButton.disabled = this.Owner.Busy || this.Owner.ChatPreparing || !!Notes?.Switching;
-		this.StopButton.disabled = !this.Owner.Busy || !this.Owner.TurnId;
 		const Options = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
 		if(this.SessionsElement.dataset.options !== Options)
 		{

@@ -32,6 +32,7 @@ export interface TaskSpec
 	AttemptId?: string;
 	Target?: WriteTarget;
 	EditMode?: "ai";
+	EditRoleMode?: "auto";
 	Writing?: { Sources: string; Endpoint: string; Spine: string; ContentMap: string; ApprovedSample?: string };
 }
 

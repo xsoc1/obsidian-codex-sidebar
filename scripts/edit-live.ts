@@ -10,7 +10,6 @@ import { task_prompt, type TaskSpec } from "../src/study/task";
 import { version_of } from "../src/study/document";
 import { ChatEdits } from "../src/edit/controller";
 import { EditStore } from "../src/edit/store";
-import { edit_intent } from "../src/edit/protocol";
 import { history_items } from "../src/history";
 
 async function run_live(): Promise<void>
@@ -77,7 +76,7 @@ async function run_live(): Promise<void>
 		const Focus = Writing ? "## 第17题" : Scope === "ai" ? Before.split("\n\n")[1] : Paragraph, From = Before.indexOf(Focus);
 		const Source: ContextSnapshot = { Path: Writing ? "Write-proof-mini.md" : "Edit-mini.md", Mode: "编辑", Kind: "选区", Mapping: "源文本", Text: Before, SelectedText: Focus, Selection: { From, To: From + Focus.length }, LineStart: 0, LineEnd: Before.split("\n").length - 1, Heading: Writing ? "第17题" : "证明", CapturedAt: new Date().toISOString(), Version: await version_of(Before), Truncated: false };
 		const Request = Writing ? "写一个简短的17题证明上去, 只需包含思路" : Followup ? "将你这个笔记改动方案落地" : "请修正这份笔记中交换子计算的最后系数错误, 只作最小改动, 保留原句式和路线, 由你选择所需修改范围.";
-		assert.equal(edit_intent(Request), true); await Controller.request(Request, Source, Scope, Writing ? "note" : "complete-answer");
+		await Controller.request(Request, Source, Scope, Writing ? "auto" : "complete-answer");
 		writeFileSync(join(Directory, "model-output-private.json"), JSON.stringify({ before: Before, output: Output, task: Spec! }, null, 2));
 		assert.equal(Writes, 0); assert.equal(Current, Before); const Plan = Store.Data.Writes[0]; assert.ok(Plan);
 		if(Writing)

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ChatEdits } from "../src/edit/controller";
 import { EditStore } from "../src/edit/store";
-import { bind_edit, edit_intent, parse_edit, safe_edit_markdown } from "../src/edit/protocol";
+import { bind_edit, parse_edit, safe_edit_markdown } from "../src/edit/protocol";
 import { task_prompt } from "../src/study/task";
 import { version_of } from "../src/study/document";
 import type { ContextSnapshot } from "../src/prompt";
@@ -11,40 +11,6 @@ import { search_window } from "../src/edit/range";
 const Before = "# 原笔记\n\n保留前文.\n\n证明: $1+1=3$.\n\n保留后文和留白.\n";
 const Old = "证明: $1+1=3$.", New = "证明: $1+1=2$.";
 const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", markdown: New, rationale: "仅修正加法结果, 保留原句和路线." };
-test("requests to write a short numbered proof into the note enter preview", () =>
-{
-	for(const Request of ["写一个简短的17题证明上去, 只需包含思路", "请你直接写个证明上去", "帮我写一段解题思路进去", "把刚才的证明放进答案里", "在第17题答案处写一个简短证明", "往笔记里加一段说明", "请把上面的解答写到笔记中", "Please write a short proof into the answer section", "Can you put this into the note?", "Fill in the proof for exercise 17"])
-	{
-		assert.equal(edit_intent(Request), true, Request);
-	}
-	for(const Request of ["解答", "写一个简短证明给我看", "不要写一个证明上去, 只讲思路", "先别把证明放进答案", "如何把证明写进去?", "请解释“写一个证明上去”是什么意思", "写进去怎么操作?", "写入的原理是什么", "老师要求写一个证明上去", "例如: 写一个证明上去", "Don't write this into the note", "How do I fill in the proof?", "Explain how to put this into the note"])
-	{
-		assert.equal(edit_intent(Request), false, Request);
-	}
-});
-
-test("explicit Chinese and English language edits route to proposals while explanation-only and refused changes stay chat", () =>
-{
-	for(const Request of ["请调整这段文风, 保留公式和路线", "润色这段语言", "Polish this proof, keep the route", "Please improve the wording", "Can you rephrase this paragraph?"])
-	{
-		assert.equal(edit_intent(Request), true, Request);
-	}
-	for(const Request of ["只解释如何润色, 不修改", "How can I polish this proof?", "Only explain how to improve the wording", "Explain how to polish this proof", "Can you explain how to rephrase this?", "What does rephrase mean?", "Don't polish this", "Do not adjust the style", "Don't edit; just explain how to rephrase"])
-	{
-		assert.equal(edit_intent(Request), false, Request);
-	}
-});
-test("adopting a previous note revision enters preview while explanations and refused edits remain chat", () =>
-{
-	for(const Text of ["将你这个笔记改动方案落地", "把上面的改稿落地", "应用上条改稿", "采用刚才的方案", "将修改建议应用到笔记", "把这段写回笔记", "apply your proposed changes"])
-	{
-		assert.equal(edit_intent(Text), true, Text);
-	}
-	for(const Text of ["不要将改动方案落地, 只解释", "先不要应用上条改稿", "只讨论如何落实方案", "采用上条方案会怎样?", "这是什么应用?", "什么是落地页?", "给我修改建议", "don't apply your changes"])
-	{
-		assert.equal(edit_intent(Text), false, Text);
-	}
-});
 async function fixture(Local = new Map<string, string>())
 {
 	const Store = new EditStore({ getItem: Key => Local.get(Key) ?? null, setItem: (Key, Value) => Local.set(Key, Value) }, "test");
@@ -56,12 +22,24 @@ async function fixture(Local = new Map<string, string>())
 	return { Store, Files, Source, Host, Sent, Writes, Local, Controller: new ChatEdits(Store, Host), protect: () => Protected = true };
 }
 
+test("automatic role inference is model-owned, persisted on replay, and distinct from older explicit role records", async () =>
+{
+	const F = await fixture(); await F.Controller.request("生成修改预览", F.Source, "captured", "auto");
+	const Task = F.Sent[0]; assert.equal(Task.Role, "note"); assert.equal(Task.EditRoleMode, "auto");
+	assert.match(task_prompt(Task), /不依赖标题关键词/); assert.match(task_prompt(Task), /完整答案最小修补/); assert.match(task_prompt(Task), /思路稿严格沿原路线/);
+	const Restart = await fixture(F.Local), Replay = Restart.Controller.replay(Task);
+	assert.equal(Replay.EditRoleMode, "auto"); assert.deepEqual(Replay.Source, Task.Source);
+	assert.throws(() => F.Store.change(Data => (Data.Records[0].Spec as any).EditRoleMode = "teacher"), /辨识方式/);
+	const G = await fixture(); await G.Controller.request("修改完整答案", G.Source, "captured", "complete-answer");
+	assert.equal(G.Sent[0].EditRoleMode, undefined); assert.equal(G.Sent[0].Role, "complete-answer");
+	assert.ok(!task_prompt(G.Sent[0]).includes("不依赖标题关键词"));
+});
+
 test("ordinary edit requests bind a host range, keep original context and stay inert until confirmation; restart, double click and safe undo work", async () =>
 {
-	const F = await fixture(); assert.equal(edit_intent("请修改这段证明, 最小改动"), true);
-	assert.equal(edit_intent("不要修改, 只解释哪里错了"), false); assert.equal(edit_intent("如何修改我的证明?"), false);
+	const F = await fixture();
 	await F.Controller.request("请修改这段证明", F.Source, "captured", "auto");
-	const Task = F.Sent[0]; assert.equal(Task.Role, "complete-answer"); assert.equal(Task.Source.Text, Before);
+	const Task = F.Sent[0]; assert.equal(Task.Role, "note"); assert.equal(Task.EditRoleMode, "auto"); assert.match(task_prompt(Task), /原文类型由你.*自行辨识/); assert.equal(Task.Source.Text, Before);
 	assert.equal(Task.WriteUnit.Text, Old); assert.equal(Task.Source.CapturedAt, "original-time");
 	assert.equal(JSON.parse(task_prompt(Task).split("任务:\n")[1]).Target.Before, null);
 	await F.Controller.accept_result(Task.Id, JSON.stringify(Output), true);
@@ -170,6 +148,9 @@ test("v1 records migrate into v2 without overwriting the old store, and resolved
 	const F = await fixture(); await F.Controller.request("修正", F.Source, "captured", "note"); await F.Controller.accept_result(F.Sent[0].Id, JSON.stringify(Output), true);
 	const OldData = { ...structuredClone(F.Store.Data), schemaVersion: 1 }, Raw = JSON.stringify(OldData), Local = new Map([["codex-sidebar-edits:v1:test", Raw]]);
 	const G = await fixture(Local); assert.equal(G.Store.Data.schemaVersion, 2); assert.deepEqual(G.Store.Data.Records, F.Store.Data.Records); assert.equal(Local.get("codex-sidebar-edits:v1:test"), Raw);
+	const Invalid = structuredClone(OldData); Invalid.Records[0].Spec.EditRoleMode = "auto";
+	const InvalidRaw = JSON.stringify(Invalid), InvalidLocal = new Map([["codex-sidebar-edits:v1:test", InvalidRaw]]);
+	await assert.rejects(fixture(InvalidLocal), /旧版修改记录损坏/); assert.equal(InvalidLocal.get("codex-sidebar-edits:v1:test"), InvalidRaw); assert.ok(!InvalidLocal.has("codex-sidebar-edits:v2:test"));
 	await G.Controller.confirm(G.Store.Data.Writes[0].Id); assert.ok(Local.has("codex-sidebar-edits:v2:test")); assert.equal(Local.get("codex-sidebar-edits:v1:test"), Raw);
 	G.Controller.clear(); assert.equal(Local.get("codex-sidebar-edits:v1:test"), ""); assert.equal(G.Store.Data.Records.length, 0);
 	const H = await fixture(); await H.Controller.request("修改", H.Source, "ai", "note"); await H.Controller.accept_result(H.Sent[0].Id, JSON.stringify({ ...Output, original: Old }), true);

@@ -8,7 +8,7 @@ export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatE
 	Root.dataset.studyStructured = "edit";
 	const Record = Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id);
 	Root.createEl("strong", { text: "笔记修改提案" });
-	Root.createDiv({ cls: "codex-message-context", text: `${Task.Source?.Path ?? "未知目标"} · ${Task.Role} · 原始快照 ${Task.Source?.CapturedAt ?? "未知"}` });
+	Root.createDiv({ cls: "codex-message-context", text: `${Task.Source?.Path ?? "未知目标"} · ${Task.EditRoleMode === "auto" ? "原文类型由 AI 辨识" : Task.Role} · 原始快照 ${Task.Source?.CapturedAt ?? "未知"}` });
 	if(!Record) { Root.createDiv({ text: "本设备没有这次修改基线, 不能采用远程设备或已清除的提案. 原会话保留, 请明确重新捕获发起新修改." }); return; }
 	const Plan = Edits!.Store.Data.Writes.find(Value => Value.TaskId === Task.Id);
 	const Target = Plan?.Target ?? Record.Spec.Target!, Range = Target.Range!;

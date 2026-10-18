@@ -11,7 +11,7 @@ const Browser = process.env.CODEX_LAYOUT_BROWSER;
 const AppCss = process.env.CODEX_LAYOUT_APP_CSS;
 if(!Browser || !AppCss) { throw new Error("Set CODEX_LAYOUT_BROWSER and CODEX_LAYOUT_APP_CSS (public Obsidian app.css)"); }
 const Directory = mkdtempSync(join(tmpdir(), "codex-sidebar-layout-"));
-await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { EditOptions } from "./src/edit/options"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
+await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { EditOptions } from "./src/edit/options"; export { ComposerActions } from "./src/edit/composer"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
 const Baseline = execFileSync("git", ["show", "665d76f:styles.css"], { encoding: "utf8" });
 const Styles = readFileSync("styles.css", "utf8");
 writeFileSync(join(Directory, "fixture.html"), `<!doctype html><html><meta charset="utf-8"><style>${readFileSync(AppCss, "utf8")}</style><style id="plugin"></style><body class="is-mobile is-tablet theme-dark"><div id="root" class="codex-sidebar" style="position:fixed;top:0;left:0;width:450px;height:519px"></div><script src="layout.js"></script><script>
@@ -49,10 +49,10 @@ function render(folded,css,height,width,mobile=true)
 	['Fast','上下文占用','行内补全'].forEach(t=>{const l=el(toggles,'label');const input=el(l,'input');input.type='checkbox';el(l,'span','',t);});
 	el(o.Body,'div','codex-usage','上下文 ~28%');
 	const send=folded?Layout.sidebar_panel(p,'codex-send-tools','提问与发送',mobile):{Body:p};
-	el(send.Body,'textarea').placeholder='随时提问...';
+	const input=el(send.Body,'textarea');input.placeholder='随时提问... Enter 提问, Shift+Enter 换行';
 	if(css===styles)window.editOptions=new Layout.EditOptions(send.Body,()=>{});
 	const actions=el(send.Body,'div','codex-compose-actions');
-	el(actions,'button','','发送');el(actions,'button','','停止');
+	window.submissions=[];if(css===styles)window.composerActions=new Layout.ComposerActions(actions,input,mode=>submissions.push(mode),()=>{});else{el(actions,'button','','发送');el(actions,'button','','停止');}
 	return {messageHeight:m.getBoundingClientRect().height,rootHeight:r.clientHeight,scrollHeight:r.scrollHeight,composerHeight:p.getBoundingClientRect().height};
 }
 window.styles=${JSON.stringify(Styles)};window.baseline=${JSON.stringify(Baseline)};</script></body></html>`);
@@ -96,16 +96,17 @@ try
 			Layout.reveal_sidebar_panel({Details:compose});input.focus();
 			const draftPreserved=input===compose.querySelector('textarea')&&input.value==='中文草稿 $[X,Y]$'&&input.selectionStart===2&&input.selectionEnd===4;
 			const edit=root.querySelector('.codex-edit-options');const editFolded=!edit.open;
-			const explicitModeVisible=editOptions.Mode.checkVisibility()&&!edit.contains(editOptions.Mode);
-			const followupRoutes=editOptions.refresh('将你这个笔记改动方案落地',false,'Original.md');
-			if(!explicitModeVisible||!followupRoutes)throw Error('The explicit preview mode must be visible and adopting a revision must route to preview');
-			edit.open=true;editOptions.Mode.value='edit';editOptions.refresh('修正本段',false,'Original.md');edit.open=false;edit.open=true;
-			const editPreserved=editOptions.Mode.value==='edit'&&[...edit.querySelectorAll('select')].every(s=>s.labels.length===1);editOptions.Mode.value='auto';editOptions.refresh('',false);edit.open=false;
+			const explicitActionsVisible=composerActions.Question.checkVisibility()&&composerActions.Preview.checkVisibility();
+			composerActions.refresh(false,false,false);composerActions.Preview.click();
+			input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',cancelable:true}));
+			const routes=submissions.join(',')==='edit,question';
+			edit.open=true;editOptions.Scope.value='captured';edit.open=false;edit.open=true;
+			const editPreserved=explicitActionsVisible&&routes&&editOptions.Scope.value==='captured'&&editOptions.values().Role==='auto'&&edit.querySelectorAll('select').length===1&&[...edit.querySelectorAll('select')].every(s=>s.labels.length===1);edit.open=false;
 			const focusRestored=document.activeElement===input;
 			options.open=true;const select=options.querySelector('select');select.value='gpt-6.1-sol';options.open=false;
 			navigation.querySelector('summary').click();const session=navigation.querySelector('select');const selectedSession=session.value;navigation.querySelector('summary').click();
 			root.scrollTop=root.scrollHeight;
-			const send=[...root.querySelectorAll('button')].find(e=>e.textContent==='发送');
+			const send=[...root.querySelectorAll('button')].find(e=>e.textContent==='生成修改预览');
 			const rect=send.getBoundingClientRect(),bounds=root.getBoundingClientRect();
 			return {theme:'${Theme}',width:${Width},height:${Height},before,after,defaultFolded,initiallyHidden,draftPreserved,editFolded,editPreserved,focusRestored,sendReachable:rect.bottom<=bounds.bottom&&rect.top>=bounds.top,preserved:select.value==='gpt-6.1-sol'&&session.value===selectedSession,contextClosed:!root.querySelector('.codex-context-tools').open,optionsClosed:!options.open,navigationClosed:!navigation.open,overflow:root.scrollWidth>root.clientWidth,hover:root.querySelectorAll('[title],[aria-label]').length};
 		})()`, returnByValue: true });
@@ -134,7 +135,8 @@ try
 		assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails)); const Row = Result.result.value; Rows.push(Row);
 		assert.ok(Row.defaults && Row.preserved && Row.selectionVisible && Row.rawPreserved && Row.foldPreserved && Row.messageHeight >= 120 && !Row.overflow && !Row.hover, JSON.stringify(Row));
 	}
-	await call("Runtime.evaluate", { expression: "render(true,styles,519,450)" });
+	await call("Emulation.setDeviceMetricsOverride", { width: 350, height: 740, deviceScaleFactor: 1, mobile: false });
+	await call("Runtime.evaluate", { expression: "document.body.className='theme-dark';render(true,styles,720,320,false)" });
 	const Shot = await call("Page.captureScreenshot", { format: "png" });
 	writeFileSync(join(Directory, "after.png"), Buffer.from(Shot.data, "base64"));
 	writeFileSync(join(Directory, "report.json"), JSON.stringify({ tier: "headless CSS fixture, not iPad device acceptance", rows: Rows }, null, 2));

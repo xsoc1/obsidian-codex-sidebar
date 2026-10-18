@@ -218,22 +218,11 @@
 	width: 100%;
 	min-width: 0;
 }
-.codex-send-tools > .codex-panel-body > .codex-edit-field
-{
-	flex-direction: row;
-	align-items: center;
-	margin: 0;
-	font-size: 12px;
-}
-.codex-send-tools > .codex-panel-body > .codex-edit-field > span { flex: 0 0 auto; }
-.codex-send-tools > .codex-panel-body > .codex-edit-field > select { flex: 1; width: 0; }
 @media (max-height: 700px)
 {
 	.codex-send-tools > .codex-panel-body > textarea { min-height: 64px; }
 }
 .codex-edit-export { min-height: 240px; }
-.codex-edit-intent { display: none; }
-.codex-edit-intent[hidden] { display: none; }
 .codex-edit-diff { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
 .codex-edit-actions { flex-wrap: wrap; }
 .codex-comparison-side { border-left: 2px solid var(--background-modifier-border); margin: 10px 0; padding: 6px 8px; min-width: 0; }

@@ -210,6 +210,61 @@ test("bridge restore retains locally linked note sessions and the intended activ
 	finally { P.onunload(); }
 });
 
+test("question actions never infer a preview from request text, including the former write-intent trigger", async () =>
+{
+	for(const Text of ["写一个简短的17题证明上去, 只需包含思路", "请修正这段证明", "解答"])
+	for(const Mode of [undefined, "question"])
+	{
+		const { Instance } = await mobile_fixture(bootstrap_http());
+		Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
+		try
+		{
+			assert.equal(await Instance.send_chat(Text, null, null, Mode ? { Mode } : {}), true);
+			assert.equal(Instance.Session.Messages.find((Value: any) => Value.Role === "user").Task, undefined);
+			assert.equal(Instance.Edits.Store.Data.Records.length, 0);
+		}
+		finally { Instance.onunload(); }
+	}
+});
+
+test("the actual composer handler preserves drafts and quotes on rejected or superseded submissions", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance, View = F.Views.get("codex-sidebar-view")!({});
+	const Calls: any[] = [], Quote = { SessionId: P.Session.Id, MessageId: "answer", SelectedText: "片段", SourceText: "$x=1$", SelectedTruncated: false, SourceTruncated: false };
+	View.Input = { value: "写入笔记" }; View.EditOptions = { values: () => ({ Scope: "ai", Role: "auto" }) }; View.refresh_quote = () => {};
+	P.AnswerQuote = Quote;
+	P.send_chat = async (...Args: any[]) => { Calls.push(Args); return false; };
+	try
+	{
+		await View.send_input("question"); assert.equal(View.Input.value, "写入笔记"); assert.equal(P.AnswerQuote, Quote);
+		assert.equal(Calls[0][3].Mode, "question"); assert.equal(Calls[0][2], Quote);
+		P.AnswerQuote = null; let Release!: (Value: boolean) => void;
+		P.send_chat = async (...Args: any[]) => { Calls.push(Args); return new Promise<boolean>(Resolve => Release = Resolve); };
+		const Pending = View.send_input("edit"); View.Input.value = "新的草稿"; Release(true); await Pending;
+		assert.equal(View.Input.value, "新的草稿"); assert.deepEqual(JSON.parse(JSON.stringify(Calls[1][3])), { Mode: "edit", Scope: "ai", Role: "auto" });
+		P.send_chat = async () => true; await View.send_input("question"); assert.equal(View.Input.value, "");
+	}
+	finally { P.onunload(); }
+});
+
+test("accepting and cancelling an answer quote immediately refreshes the explicit preview action", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance, View = F.Views.get("codex-sidebar-view")!({});
+	const States: boolean[] = []; let Cancel!: () => void;
+	View.Input = { value: "" }; View.ComposePanel = { Summary: { setText: () => {} } };
+	View.ComposeActions = { refresh: (_: boolean, __: boolean, Quoted: boolean) => States.push(Quoted) };
+	View.QuoteElement = { empty: () => {}, createDiv: () => {}, createEl: () => {} };
+	View.button = (_: any, Text: string, Callback: () => void) => { if(Text === "取消引用") { Cancel = Callback; } };
+	try
+	{
+		View.refresh_quote(); assert.equal(States.at(-1), false);
+		P.AnswerQuote = { SessionId: P.Session.Id, MessageId: "answer", SelectedText: "片段", SourceText: "$x$", SelectedTruncated: false, SourceTruncated: false };
+		View.refresh_quote(); assert.equal(States.at(-1), true); assert.match(View.Input.placeholder, /Enter 提问/);
+		Cancel(); assert.equal(P.AnswerQuote, null); assert.equal(States.at(-1), false);
+	}
+	finally { P.onunload(); }
+});
+
 test("ordinary mobile chat edits use the two-input skilled turn and the local confirmation writer; replay never changes to current focus", async () =>
 {
 	const Requests: any[] = [];
@@ -223,7 +278,7 @@ test("ordinary mobile chat edits use the two-input skilled turn and the local co
 	const Source: any = { Path: "scratch.md", Mode: "编辑", Kind: "选区", Text: Old, SelectedText: Old, Selection: { From, To: From + Old.length }, Mapping: "源文本", Heading: "证明", LineStart: 2, LineEnd: 2, Truncated: false, CapturedAt: "original-time", Version: await version_of(Before) };
 	try
 	{
-		assert.equal(await Instance.send_chat("请修正这段证明", Source, null, { Scope: "captured" }), true);
+		assert.equal(await Instance.send_chat("请修正这段证明", Source, null, { Mode: "edit", Scope: "captured" }), true);
 		const Turn = Requests.find(Value => Value.method === "turn/start");
 		assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing");
 		const Task = JSON.parse(Turn.params.input[0].text.split("任务:\n")[1]);
@@ -274,7 +329,7 @@ test("question-only chat and answer quotes do not acquire edit tasks; missing sk
 	const Source: any = { Path: "scratch.md", Mode: "阅读", Kind: "当前位置", Text: "原文", SelectedText: "", Mapping: "源块", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "t", Version: await version_of("原文") };
 	try
 	{
-		assert.equal(await F.Instance.send_chat("修改这里", Source, null), false);
+		assert.equal(await F.Instance.send_chat("修改这里", Source, null, { Mode: "edit" }), false);
 		assert.equal(F.Instance.Edits.Store.Data.Writes.length, 0);
 		assert.match(F.Instance.Status, /math-writing|技能/);
 	}
@@ -292,7 +347,7 @@ test("ordinary edits respect host read-only metadata before model submission", a
 	const Source: any = { Path: "scratch.md", Mode: "阅读", Kind: "当前位置", Text: "教师原题", SelectedText: "", Mapping: "源块", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "t", Version: await version_of("教师原题") };
 	try
 	{
-		assert.equal(await Instance.send_chat("帮我改一下", Source, null), false);
+		assert.equal(await Instance.send_chat("帮我改一下", Source, null, { Mode: "edit" }), false);
 		assert.equal(Requests.filter(Value => Value.method === "turn/start").length, 0);
 		assert.equal(Instance.Edits.Store.Data.Records.length, 0);
 		assert.match(Instance.Status, /只读/);
@@ -300,7 +355,7 @@ test("ordinary edits respect host read-only metadata before model submission", a
 	finally { Instance.onunload(); }
 });
 
-test("writing a short proof into the note in automatic mode produces a real preview before any client write", async () =>
+test("explicitly requesting a short proof preview produces a real preview before any client write", async () =>
 {
 	const Requests: any[] = [], Before = "# 原创微型第17题\n\n验证 $1+1=2$.\n\n#### 答案\n\n", Original = "#### 答案\n\n";
 	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
@@ -311,7 +366,7 @@ test("writing a short proof into the note in automatic mode produces a real prev
 	const Source: any = { Path: "scratch.md", Mode: "编辑", Kind: "选区", Text: "验证 $1+1=2$.", SelectedText: "验证 $1+1=2$.", Selection: { From: Before.indexOf("验证"), To: Before.indexOf("验证") + "验证 $1+1=2$.".length }, Mapping: "源文本", Heading: "第17题", LineStart: 2, LineEnd: 2, Truncated: false, CapturedAt: "original-time", Version: await version_of(Before) };
 	try
 	{
-		assert.equal(await Instance.send_chat("写一个简短的17题证明上去, 只需包含思路", Source, null, { Mode: "auto", Scope: "ai", Role: "auto" }), true);
+		assert.equal(await Instance.send_chat("写一个简短的17题证明上去, 只需包含思路", Source, null, { Mode: "edit", Scope: "ai", Role: "auto" }), true);
 		const User = Instance.Session.Messages.find((Value: any) => Value.Role === "user");
 		assert.equal(User.Task?.Action, "edit", "the writing request must enter the existing edit controller instead of plain chat");
 		const Turn = Requests.find(Value => Value.method === "turn/start");
@@ -336,7 +391,7 @@ test("writing a short proof into the note in automatic mode produces a real prev
 	finally { Instance.onunload(); }
 });
 
-test("adopting a previous proposal routes through an AI edit task even after an old read-only answer, keeping the host window and transport", async () =>
+test("the preview action adopts a previous proposal through an AI edit task even after an old read-only answer, keeping the host window and transport", async () =>
 {
 	const Requests: any[] = [], Before = "介绍段落\n\n计算 $1+1=3$.\n\n保留后文", Original = "$1+1=3$";
 	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
@@ -348,7 +403,7 @@ test("adopting a previous proposal routes through an AI edit task even after an 
 	try
 	{
 		Instance.Session.Messages.push({ Id: "old-readonly-reply", Role: "assistant", Text: "当前工具只读, 可把错误改为 $1+1=2$. 尚未写入." });
-		assert.equal(await Instance.send_chat("将你这个笔记改动方案落地", Source, null, { Mode: "auto", Scope: "ai" }), true);
+		assert.equal(await Instance.send_chat("将你这个笔记改动方案落地", Source, null, { Mode: "edit", Scope: "ai" }), true);
 		const Turn = Requests.find(Value => Value.method === "turn/start");
 		assert.match(Turn.params.input[0].text, /任务:\n/, "adopting a proposal must submit a structured edit task instead of read-only chat");
 		const Task = JSON.parse(Turn.params.input[0].text.split("任务:\n")[1]);

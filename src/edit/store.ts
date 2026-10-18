@@ -29,6 +29,7 @@ export function validate_edits(Data: EditData): void
 		const Task = Record.Spec, Target = Task?.Target;
 		if(!Task || typeof Task.Id !== "string" || Seen.has(Task.Id) || Task.Action !== "edit" || Task.Scope !== "note-edit" || typeof Task.Request !== "string" || Task.Request.length > 24000 || !Task.Source || !Task.WriteUnit || !Target || Target.Role !== "note" || Target.Operation !== "replace-range" || !valid_range(Target) || Target.Before!.length > 500000 || !/^[0-9a-f]{64}$/.test(Target.Version) || Target.Path !== Task.Source.Path || Target.Path !== Task.WriteUnit.Path || Task.WriteUnit.Text !== Target.Before!.slice(Target.Range!.From, Target.Range!.To) || !["note", "problem", "complete-answer", "outline", "lecture"].includes(Task.Role) || !["pending", "complete", "rejected", "cancelled"].includes(Record.Status)) { throw new Error("本设备修改目标或原文范围损坏"); }
 		note_path(Target.Path); Seen.add(Task.Id);
+		if(Task.EditRoleMode !== undefined && (Task.EditRoleMode !== "auto" || Task.Role !== "note")) { throw new Error("原文类型辨识方式无效"); }
 		if(Task.SchemaVersion !== 1 || (Task.EditMode !== undefined && Task.EditMode !== "ai") || Task.Source.Version !== Target.Version || Task.WriteUnit.Version !== Target.Version || Task.Source.Pdf || Task.WriteUnit.Pdf) { throw new Error("修改来源版本或类型无效"); }
 		if(Record.Output) { validate_edit_mode(Task, parse_edit(JSON.stringify(Record.Output))); }
 	}
@@ -55,7 +56,7 @@ export class EditStore
 		this.PreviousKey = `codex-sidebar-edits:v1:${Vault}`;
 		const Raw = Storage.getItem(this.Key), Previous = Raw ? null : Storage.getItem(this.PreviousKey);
 		this.Data = Raw ? JSON.parse(Raw) : Previous ? JSON.parse(Previous) : { schemaVersion: 2, DeviceId: crypto.randomUUID(), Records: [], Writes: [] };
-		if(Previous) { if((this.Data as { schemaVersion: number }).schemaVersion !== 1 || this.Data.Records.some(Value => Value.Spec.EditMode !== undefined || (Value.Output && "original" in Value.Output))) { throw new Error("旧版修改记录损坏, 不覆盖原记录"); } this.Data.schemaVersion = 2; }
+		if(Previous) { if((this.Data as { schemaVersion: number }).schemaVersion !== 1 || this.Data.Records.some(Value => Value.Spec.EditMode !== undefined || Value.Spec.EditRoleMode !== undefined || (Value.Output && "original" in Value.Output))) { throw new Error("旧版修改记录损坏, 不覆盖原记录"); } this.Data.schemaVersion = 2; }
 		validate_edits(this.Data);
 	}
 	change(Update: (Data: EditData) => void): void
