@@ -30,15 +30,18 @@ test("the explicit preview mode is visible without unfolding ranges and an AI sc
 	assert.equal(Options.Mode.parentElement!.parentElement, Root);
 	assert.equal((Options.Scope.parentElement!.parentElement as any).Tag, "details");
 	assert.equal(Options.Scope.value, "ai");
+	assert.equal(Options.refresh("写一个简短的17题证明上去, 只需包含思路", false, "personal.md"), true);
 	assert.equal(Options.refresh("将你这个笔记改动方案落地", false, "personal.md"), true);
 	const Hint = Root.children[0]; assert.equal(Hint.hidden, false); assert.match(Hint.textContent, /personal.md.*AI 自选范围/);
 	Options.Mode.value = "question";
+	assert.equal(Options.refresh("写一个简短的17题证明上去, 只需包含思路", false, "personal.md"), false);
 	assert.equal(Options.refresh("应用上条改稿", false, "personal.md"), false);
 	assert.match(Hint.textContent, /本轮为问答.*生成修改预览.*修改范围只在预览模式生效/);
 	Options.Mode.value = "edit";
 	assert.equal(Options.refresh("就按刚才那个来", false, "personal.md"), true);
 	assert.match(Hint.textContent, /确认后才写入/);
 	Options.Mode.value = "auto";
+	assert.equal(Options.refresh("写一个简短的17题证明上去, 只需包含思路", true, "personal.md"), false);
 	assert.equal(Options.refresh("应用上条改稿", true, "personal.md"), false);
 	Options.refresh("", false); assert.equal(Hint.hidden, true);
 	assert.ok(Root.children.every(Value => !Value.Attributes.title && !Value.Attributes["aria-label"]));

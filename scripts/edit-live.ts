@@ -18,9 +18,11 @@ async function run_live(): Promise<void>
 	const Cli = process.env.CODEX_EDIT_TEST_CLI;
 	const Scope = process.env.CODEX_EDIT_SCOPE === "ai" ? "ai" : "captured";
 	const Followup = process.env.CODEX_EDIT_FOLLOWUP === "1";
+	const Writing = process.env.CODEX_EDIT_WRITING === "1";
+	if(Writing && (Scope !== "ai" || Followup)) { throw new Error("Writing case requires AI scope and no followup override"); }
 	if(!Cli) { throw new Error("Set CODEX_EDIT_TEST_CLI to the installed CLI. No authentication file is read."); }
 	const Directory = mkdtempSync(join(tmpdir(), "codex-edit-live-"));
-	const Before = readFileSync("examples/study/Edit-mini.md", "utf8").replace(/\r\n/g, "\n");
+	const Before = readFileSync(Writing ? "examples/study/Write-proof-mini.md" : "examples/study/Edit-mini.md", "utf8").replace(/\r\n/g, "\n");
 	const Paragraph = Before.split("\n\n").find(Value => Value.startsWith("证明:"))!;
 	writeFileSync(join(Directory, "AGENTS.md"), "# Original note-edit acceptance\nRead only. Use the supplied original source snapshot. Do not access private notes or change files/config/authentication.\n");
 	const Texts = new Map<string, string>(), Done = new Map<string, any>(), Waiters = new Map<string, (Value: any) => void>();
@@ -72,19 +74,26 @@ async function run_live(): Promise<void>
 				await Controller.accept_result(Task.Id, Output, true); return true;
 			}
 		});
-		const Focus = Scope === "ai" ? Before.split("\n\n")[1] : Paragraph, From = Before.indexOf(Focus);
-		const Source: ContextSnapshot = { Path: "Edit-mini.md", Mode: "编辑", Kind: "选区", Mapping: "源文本", Text: Before, SelectedText: Focus, Selection: { From, To: From + Focus.length }, LineStart: 0, LineEnd: Before.split("\n").length - 1, Heading: "证明", CapturedAt: new Date().toISOString(), Version: await version_of(Before), Truncated: false };
-		const Request = Followup ? "将你这个笔记改动方案落地" : "请修正这份笔记中交换子计算的最后系数错误, 只作最小改动, 保留原句式和路线, 由你选择所需修改范围.";
-		assert.equal(edit_intent(Request), true); await Controller.request(Request, Source, Scope, "complete-answer");
+		const Focus = Writing ? "## 第17题" : Scope === "ai" ? Before.split("\n\n")[1] : Paragraph, From = Before.indexOf(Focus);
+		const Source: ContextSnapshot = { Path: Writing ? "Write-proof-mini.md" : "Edit-mini.md", Mode: "编辑", Kind: "选区", Mapping: "源文本", Text: Before, SelectedText: Focus, Selection: { From, To: From + Focus.length }, LineStart: 0, LineEnd: Before.split("\n").length - 1, Heading: Writing ? "第17题" : "证明", CapturedAt: new Date().toISOString(), Version: await version_of(Before), Truncated: false };
+		const Request = Writing ? "写一个简短的17题证明上去, 只需包含思路" : Followup ? "将你这个笔记改动方案落地" : "请修正这份笔记中交换子计算的最后系数错误, 只作最小改动, 保留原句式和路线, 由你选择所需修改范围.";
+		assert.equal(edit_intent(Request), true); await Controller.request(Request, Source, Scope, Writing ? "note" : "complete-answer");
 		writeFileSync(join(Directory, "model-output-private.json"), JSON.stringify({ before: Before, output: Output, task: Spec! }, null, 2));
 		assert.equal(Writes, 0); assert.equal(Current, Before); const Plan = Store.Data.Writes[0]; assert.ok(Plan);
-		assert.equal(Plan.After, Before.replace("[h,e]=he-eh=e", "[h,e]=he-eh=2e"));
+		if(Writing)
+		{
+			const Prefix = Before.slice(0, Before.indexOf("#### 答案") + "#### 答案".length), Suffix = Before.slice(Before.indexOf("## 第18题"));
+			assert.ok(Plan.After.startsWith(Prefix)); assert.ok(Plan.After.endsWith(Suffix));
+			const Answer = Plan.After.slice(Prefix.length, Plan.After.length - Suffix.length);
+			assert.ok(Answer.trim()); assert.match(Answer, /HE|EH/); assert.match(Answer, /2E/);
+		}
+		else { assert.equal(Plan.After, Before.replace("[h,e]=he-eh=e", "[h,e]=he-eh=2e")); }
 		await Promise.all([Controller.confirm(Plan.Id), Controller.confirm(Plan.Id)]); assert.equal(Writes, 1);
 		await Controller.undo(Plan.Id); assert.equal(Current, Before);
 		const Replay = Controller.replay(Spec!); Controller.register(Replay); await Controller.accept_result(Replay.Id, Output, true);
 		Current += "\n后续编辑"; await assert.rejects(Controller.confirm(Store.Data.Writes.at(-1)!.Id), /陈旧/);
 		if(Scope === "ai") { assert.ok(Plan.Target.Range!.From > Source.Selection!.To); }
-		const Report = { scope: Scope, followup: Followup, model: Model.model, effort: Effort, skillVersion: SkillVersion, inputs: 2, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", passed: ["real completed model edit", "runtime schema", "minimal coefficient correction", "zero pre-confirm writes", "duplicate confirm", "safe undo", "stale rejection"], host: "in-memory; native host checked separately" };
+		const Report = { scope: Scope, followup: Followup, writing: Writing, model: Model.model, effort: Effort, skillVersion: SkillVersion, inputs: 2, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", passed: ["real completed model edit", "runtime schema", Writing ? "proof in answer blank with unchanged question/neighbours" : "minimal coefficient correction", "zero pre-confirm writes", "duplicate confirm", "safe undo", "stale rejection"], host: "in-memory; native host checked separately" };
 		writeFileSync(join(Directory, "result-private.json"), JSON.stringify({ before: Before, output: Output, task: Spec!, report: Report }, null, 2));
 		process.stdout.write(JSON.stringify({ directory: Directory, report: Report }) + "\n");
 	}
