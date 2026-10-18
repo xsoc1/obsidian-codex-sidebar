@@ -9,6 +9,7 @@ import { valid_range, type WriteHost } from "../study/writer";
 import type { WritePlan } from "../study/store";
 import { search_window, resolve_edit_target, validate_edit_mode } from "./range";
 import { task_exposition } from "../exposition/rules";
+import { note_write_intent } from "./intent";
 
 export type EditRole = InputRole | "auto";
 export type EditScope = "ai" | "captured" | "note";
@@ -30,6 +31,7 @@ export function edit_intent(Text: string): boolean
 	const Apply = "(?:应用|采用|落实|落地|写回|写入)", Plan = "(?:改稿|改动方案|修改建议|修改方案|修订方案|笔记方案|上条方案|上面的方案|刚才的方案|这个方案|该方案)";
 	if(/(?:不要|不必|不用|不需要|别)(?:直接)?(?:修改|改写|重写|替换)|只(?:解释|分析|讨论|提建议)|^(?:如何|怎么|为什么|什么|请问如何|请问怎么)|(?:会怎样|可不可以|是否可以|能否|可以吗)[?？]?$|\b(?:do not|don't|dont|never)\s+(?:apply|implement|edit|fix|rewrite|revise|replace|delete|remove|insert)\b/i.test(Request)) { return false; }
 	if(new RegExp(`(?:不要|不必|不用|不需要|别)[^。.!！?？\n]{0,60}${Apply}`).test(Request)) { return false; }
+	if(note_write_intent(Request)) { return true; }
 	if(new RegExp(`${Apply}[^。.!！?？\n]{0,60}${Plan}|${Plan}[^。.!！?？\n]{0,60}${Apply}|(?:把|将)[^。.!！?？\n]{0,60}(?:方案|改稿)[^。.!！?？\n]{0,30}${Apply}|(?:写回|写入)[^。.!！?？\n]{0,30}(?:笔记|讲义|原文)`).test(Request) || /\b(?:apply|implement)\b.{0,60}\b(?:changes?|revisions?|proposal|patch)\b/i.test(Request)) { return true; }
 	if(/(?:修改|修正)(?:建议|方法)/.test(Request)) { return false; }
 	return LanguageEdit || /修改|修正|修订|改写|重写|润色|补全|补充|替换|删掉|删除|插入|移除|改成|改为|改一下|改掉|改好|改对|改一改|纠正|纠错|调整|简化|完善|\b(?:edit|fix|rewrite|revise|replace|delete|remove|insert)\b/i.test(Request);

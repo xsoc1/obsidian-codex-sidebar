@@ -300,6 +300,42 @@ test("ordinary edits respect host read-only metadata before model submission", a
 	finally { Instance.onunload(); }
 });
 
+test("writing a short proof into the note in automatic mode produces a real preview before any client write", async () =>
+{
+	const Requests: any[] = [], Before = "# 原创微型第17题\n\n验证 $1+1=2$.\n\n#### 答案\n\n", Original = "#### 答案\n\n";
+	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
+	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
+	let Current = Before, Writes = 0;
+	Instance.Edits.Host.read_current = async () => Current;
+	Instance.Edits.Host.compare_write = async (_: string, Expected: string, Next: string) => { assert.equal(Current, Expected); Current = Next; Writes++; };
+	const Source: any = { Path: "scratch.md", Mode: "编辑", Kind: "选区", Text: "验证 $1+1=2$.", SelectedText: "验证 $1+1=2$.", Selection: { From: Before.indexOf("验证"), To: Before.indexOf("验证") + "验证 $1+1=2$.".length }, Mapping: "源文本", Heading: "第17题", LineStart: 2, LineEnd: 2, Truncated: false, CapturedAt: "original-time", Version: await version_of(Before) };
+	try
+	{
+		assert.equal(await Instance.send_chat("写一个简短的17题证明上去, 只需包含思路", Source, null, { Mode: "auto", Scope: "ai", Role: "auto" }), true);
+		const User = Instance.Session.Messages.find((Value: any) => Value.Role === "user");
+		assert.equal(User.Task?.Action, "edit", "the writing request must enter the existing edit controller instead of plain chat");
+		const Turn = Requests.find(Value => Value.method === "turn/start");
+		assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing");
+		assert.equal(User.Task.EditMode, "ai"); assert.equal(User.Task.Source.CapturedAt, "original-time");
+		const Markdown = "#### 答案\n\n思路: 将两个单位相加, 得 $1+1=2$.\n\n";
+		const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", original: Original, markdown: Markdown, rationale: "只填充第17题答案留白, 保留题面和相邻内容" };
+		Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "proof-final", type: "agentMessage", phase: "final_answer", text: JSON.stringify(Output) } } });
+		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+		await new Promise(Resolve => setTimeout(Resolve, 20));
+		const Plan = Instance.Edits.Store.Data.Writes[0];
+		assert.ok(Plan); assert.equal(Plan.State, "preview"); assert.equal(Writes, 0); assert.equal(Current, Before);
+		await Promise.all([Instance.Edits.confirm(Plan.Id), Instance.Edits.confirm(Plan.Id)]);
+		assert.equal(Writes, 1); assert.equal(Current, Before.replace(Original, Markdown));
+		await Instance.Edits.undo(Plan.Id); assert.equal(Current, Before);
+		Instance.Capture.Snapshot = { ...Source, Path: "unrelated.md", Text: "different focus" };
+		await Instance.resend_message(User.Id);
+		const Replay = Instance.Session.Messages.findLast((Value: any) => Value.Role === "user");
+		assert.equal(Replay.Task.Action, "edit"); assert.notEqual(Replay.Task.Id, User.Task.Id);
+		assert.equal(Replay.Task.Source.Path, "scratch.md"); assert.equal(Replay.Task.Source.CapturedAt, "original-time");
+	}
+	finally { Instance.onunload(); }
+});
+
 test("adopting a previous proposal routes through an AI edit task even after an old read-only answer, keeping the host window and transport", async () =>
 {
 	const Requests: any[] = [], Before = "介绍段落\n\n计算 $1+1=3$.\n\n保留后文", Original = "$1+1=3$";

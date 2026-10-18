@@ -1,5 +1,7 @@
 # Codex Sidebar
 
+**0.12.1 本地修复候选**: 修正“写一个简短的17题证明上去, 只需包含思路”被当成普通问答的问题。“自动判断 + AI 自选”现会建立原有修改任务并生成待确认预览; 普通“解答”、否定写入、询问方法、仅问答及回答引用仍保留原行为。构建/116 项测试及一次原创材料真实 Codex 请求通过, 尚未替换日常安装或发布。[具体原因、分层验证与重发说明](docs/write-intent-validation.md)。
+
 **0.12.0 数学表达更新**: 共享规则按任务组织, 保留数学条件和原证明路线, 明确语言修改仍走差异预览与确认. 用户授权后已安装 Windows 日常插件, 原会话、快照、选择和设备记录保留; [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.12.0) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39086009506) 已完成, 六件公共资产及 ZIP 成员校验通过, 插件文件与 Windows 安装相同, Downloads 已同步公开包. 114 项测试、27 次有记录的真实请求与原生临时组件检查已完成, 各验证层和候选技能修订分别记录. 私有技能仍为原安装 0.2.0, 在用远程桥未重启. 详见 [版本说明](docs/releases/0.12.0.md)、[使用与迁移](docs/math-exposition.md) 和 [实际验证记录](docs/math-exposition-validation.md); [完整阅读示例](examples/exposition/README.md) 可直接打开.
 
 Obsidian 侧栏插件, 使用 Windows 本机 Codex 登录. 桌面可直接启动隐藏 CLI, iPad 可连接 Windows 独立远程 Agent. 点击 Obsidian 工具栏的机器人图标, 打开或收起聊天栏.

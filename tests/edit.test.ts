@@ -11,6 +11,18 @@ import { search_window } from "../src/edit/range";
 const Before = "# 原笔记\n\n保留前文.\n\n证明: $1+1=3$.\n\n保留后文和留白.\n";
 const Old = "证明: $1+1=3$.", New = "证明: $1+1=2$.";
 const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", markdown: New, rationale: "仅修正加法结果, 保留原句和路线." };
+test("requests to write a short numbered proof into the note enter preview", () =>
+{
+	for(const Request of ["写一个简短的17题证明上去, 只需包含思路", "请你直接写个证明上去", "帮我写一段解题思路进去", "把刚才的证明放进答案里", "在第17题答案处写一个简短证明", "往笔记里加一段说明", "请把上面的解答写到笔记中", "Please write a short proof into the answer section", "Can you put this into the note?", "Fill in the proof for exercise 17"])
+	{
+		assert.equal(edit_intent(Request), true, Request);
+	}
+	for(const Request of ["解答", "写一个简短证明给我看", "不要写一个证明上去, 只讲思路", "先别把证明放进答案", "如何把证明写进去?", "请解释“写一个证明上去”是什么意思", "写进去怎么操作?", "写入的原理是什么", "老师要求写一个证明上去", "例如: 写一个证明上去", "Don't write this into the note", "How do I fill in the proof?", "Explain how to put this into the note"])
+	{
+		assert.equal(edit_intent(Request), false, Request);
+	}
+});
+
 test("explicit Chinese and English language edits route to proposals while explanation-only and refused changes stay chat", () =>
 {
 	for(const Request of ["请调整这段文风, 保留公式和路线", "润色这段语言", "Polish this proof, keep the route", "Please improve the wording", "Can you rephrase this paragraph?"])
