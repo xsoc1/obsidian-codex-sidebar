@@ -1,6 +1,6 @@
 # 明确选择提问或修改预览
 
-日期: 2026-10-19. 版本: 0.13.0, 经明确授权安装 Windows 日常库, GitHub/BRAT 发布核验准备中.
+日期: 2026-10-19. 版本: 0.13.0, 已经明确授权安装 Windows 日常库并发布 GitHub/BRAT 预发布版本.
 
 ## 使用
 
@@ -34,3 +34,9 @@
 实际主侧栏的两个按钮、Enter/Shift+Enter/IME/Tab 合成事件、引用保护和明确路由通过. 提交及目标绑定在检查中被拦截, 不等于真实模型或文件写入验收; finally 恢复方法及临时输入, 设备状态相等. 原生 CLI 截图已查看, 旧选择器已消失, 两按钮可见. 首次长脚本直接传给 Obsidian CLI 时触发主进程 JSON 解析错误并阻塞; 关闭信息提示后用短入口读取脚本完成核验, 不是插件路由缺陷. 运行时渲染错误缓冲与基线相同, 不宣称零错误.
 
 在用远程桥、私有技能、认证文件、全局配置与真实笔记均未修改. 本版未新增部署阶段的模型请求, 未进行人工中文 IME 或 iPad 真机验收. 私有原始日志和回执留在仓库外. GitHub 结果在发布后按实际回读补记, 不覆盖旧标签/资产.
+
+## GitHub 公开交付
+
+不可变代码/标签为 `c5f27e71e6d1c3cfcca28ee8e24ed340720e9a02`, 与默认分支原子推送. [Actions 39145149204](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39145149204) 的安装依赖、构建、测试、打包和发布均成功. 匿名回读确认仓库公开、默认分支 codex/initial、标签目标一致, [0.13.0 release](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.13.0) 为 draft=false/prerelease=true, 六件资产齐全.
+
+六件资产实际下载大小与 SHA-256 均等于 GitHub digest. 四个独立插件文件与本机生成/Windows 安装相同; 插件 ZIP 仅含四个匹配文件, 桥 ZIP 仅含公共 bundle、启动/停止脚本和 iPad 指南, 目录白名单及全部成员字节通过. 两个公开 ZIP 已同步 Downloads 及两个源码工作树的 dist; 原候选包核对所属哈希后备份保留. 本次只追加发布结果, 不改旧标签或替换旧资产. 原会话和设备状态再次原生回读通过.
