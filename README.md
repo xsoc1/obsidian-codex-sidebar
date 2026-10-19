@@ -1,5 +1,7 @@
 # Codex Sidebar
 
+**本机界面调整, 尚未发布**: 按截图要求隐藏侧栏顶部的会话/最近模型/math-writing 状态汇总行, 不占空白位置. 下方笔记会话关联、独立思考中提示和错误通知保留. Windows 已仅更新这一条样式并即时生效, 版本仍为 0.13.1; 没有重载插件或更改会话/设置/连接. 原生布局和 12 组 headless 检查通过, 源码同步修正. GitHub 0.13.1 资产保持原样.
+
 **0.13.1**: 将按钮的省略标签“PDF 页...”改为完整的“选择 PDF 页”, 同步更新定位失败提示和使用指南. 原生 160/240/320px 工具栏文字完整; 构建、119 项测试和 12 组既有 headless 布局检查通过. 经明确授权安装 Windows 日常库, 重载后完整标签保留, 六个会话/设置/设备状态核对不变. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.13.1) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39214163784) 完成, 六件资产及两个 ZIP 校验通过, 插件与 Windows 安装相同, Downloads 已同步公开包. [修复及验证](docs/releases/0.13.1.md).
 
 **0.13.0**: 按用户决定移除“本轮方式”和“原文类型”, 使用固定的“提问”和“生成修改预览”两个按钮. Enter 固定提问, Shift+Enter 换行; 不再用输入关键词自动决定是否改稿. 原文类型由 AI 按片段辨识, 保留完整答案最小修补、思路沿原路线和教师原题只读等规则. 修改范围仍可选择, 写入仍需审核确认. 构建、119 项测试、12 组 headless 布局及一次原创材料真实 Codex 请求通过. 经明确授权安装 Windows 日常库, 原生按钮/键盘路由与数据保留检查通过. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.13.0) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39145149204) 完成, 六件公共资产及 ZIP 成员校验通过, 插件与 Windows 安装字节一致, Downloads 已同步公开包. iPad 本版未验收. [使用与验证记录](docs/explicit-compose.md).
