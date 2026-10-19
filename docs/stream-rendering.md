@@ -1,6 +1,6 @@
 # 流式回答的稳定渲染
 
-用户报告 Codex 回答时对话区抽动, 本轮先复现再修改渲染. 0.13.3 经明确授权安装 Windows 日常库, GitHub 标签发布结果另行回读登记.
+用户报告 Codex 回答时对话区抽动, 本轮先复现再修改渲染. 0.13.3 经明确授权安装 Windows 日常库, [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.13.3) 已完成公开回读及资产校验, 具体记录见 [版本说明](releases/0.13.3.md).
 
 ## 原因与修复
 
@@ -55,4 +55,4 @@ node scripts/check-sidebar-layout.mjs
 
 保存格式、TaskSpec、来源快照、历史分支、远程协议和权限均未变化. math-writing 仍由原路径每轮显式加载, 模型/思考档次/Fast 保留. 本版无需重启桥, 无学习记录迁移. 审核后的 Markdown 写回路径和安全检查未改变.
 
-本次已获用户明确安装/发布授权并完成上述 Windows 安装; 发布结果需单独回读. 更新前备份 manifest.json/main.js/main.js.map/styles.css, 仅替换四个文件并重载, 保留 data.json 和所有设备记录. 回退时恢复同一备份的四个文件并重载, 不回滚聊天/学习存储.
+本次已获用户明确安装/发布授权并完成上述 Windows 安装与公开回读. 更新前备份 manifest.json/main.js/main.js.map/styles.css, 仅替换四个文件并重载, 保留 data.json 和所有设备记录. 回退时恢复同一备份的四个文件并重载, 不回滚聊天/学习存储.
