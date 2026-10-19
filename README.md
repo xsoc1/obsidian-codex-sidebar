@@ -1,6 +1,6 @@
 # Codex Sidebar
 
-**本机界面调整, 尚未发布**: 按截图要求隐藏侧栏顶部的会话/最近模型/math-writing 状态汇总行, 不占空白位置. 下方笔记会话关联、独立思考中提示和错误通知保留. Windows 已仅更新这一条样式并即时生效, 版本仍为 0.13.1; 没有重载插件或更改会话/设置/连接. 原生布局和 12 组 headless 检查通过, 源码同步修正. GitHub 0.13.1 资产保持原样.
+**0.13.2**: 按截图要求隐藏侧栏顶部的会话/最近模型/math-writing 状态汇总行, 不占空白位置. 下方笔记会话关联、独立思考中提示和错误通知保留. 构建、119 项测试及既有 12 组 headless 布局检查通过. 经明确授权安装 Windows 日常库, 重载并移除临时样式后仍隐藏, 原会话/设置/设备记录保留. 正在准备 GitHub/BRAT 发布. [版本说明与分层验证](docs/releases/0.13.2.md).
 
 **0.13.1**: 将按钮的省略标签“PDF 页...”改为完整的“选择 PDF 页”, 同步更新定位失败提示和使用指南. 原生 160/240/320px 工具栏文字完整; 构建、119 项测试和 12 组既有 headless 布局检查通过. 经明确授权安装 Windows 日常库, 重载后完整标签保留, 六个会话/设置/设备状态核对不变. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.13.1) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39214163784) 完成, 六件资产及两个 ZIP 校验通过, 插件与 Windows 安装相同, Downloads 已同步公开包. [修复及验证](docs/releases/0.13.1.md).
 
