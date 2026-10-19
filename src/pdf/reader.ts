@@ -26,10 +26,10 @@ export function pdf_location(Root: HTMLElement, Kind: "选区" | "当前位置")
 	}
 	if(!Candidates.length)
 	{
-		if(Selected) { throw new Error("无法定位 PDF 选区页码, 请用 PDF 页... 指定页面"); }
+		if(Selected) { throw new Error("无法定位 PDF 选区页码, 请用“选择 PDF 页”指定页面"); }
 		const Input = Root.querySelector<HTMLInputElement>(".page-number-input, #pageNumber, .pdf-toolbar input[type=number]");
 		const Page = Number(Input?.value);
-		if(!Number.isInteger(Page) || Page < 1) { throw new Error("无法定位当前 PDF 页, 请用 PDF 页... 指定页面"); }
+		if(!Number.isInteger(Page) || Page < 1) { throw new Error("无法定位当前 PDF 页, 请用“选择 PDF 页”指定页面"); }
 		return { Pages: [Page], SelectedText: "", Truncated: false };
 	}
 	if(!Selected) { Candidates.sort((A, B) => B.Area - A.Area); }

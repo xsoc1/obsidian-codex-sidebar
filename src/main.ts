@@ -1367,7 +1367,7 @@ export default class CodexSidebarPlugin extends Plugin
 			const Snapshot = await this.Capture.capture("当前位置");
 			if(!Snapshot)
 			{
-				new Notice("请先打开 Markdown 或 PDF. 无法定位 PDF 页时可点击 PDF 页...");
+				new Notice("请先打开 Markdown 或 PDF. 无法定位 PDF 页时可点击“选择 PDF 页”");
 				return;
 			}
 			this.State.Settings.AttachContext = true;
@@ -1761,7 +1761,7 @@ class CodexView extends ItemView
 		this.ContextSummary = ContextPanel.Summary;
 		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
 		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
-		this.button(ContextBar, "PDF 页...", () => this.Owner.open_pdf());
+		this.button(ContextBar, "选择 PDF 页", () => this.Owner.open_pdf());
 		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
 		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
 		this.ContextElement = ContextPanel.Body.createDiv({ cls: "codex-context" });

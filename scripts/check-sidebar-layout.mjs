@@ -31,7 +31,7 @@ function render(folded,css,height,width,mobile=true)
 	window.selectionCard=new Layout.SelectionPreview(r,()=>selectionCard.update(null,true));
 	const c=Layout.sidebar_panel(r,'codex-context-tools','上下文与学习',true);
 	const a=el(c.Body,'div','codex-context-actions');
-	['捕获当前位置','解释选区','检查证明'].forEach(t=>el(a,'button','',t));
+	['捕获当前位置','选择 PDF 页','解释选区','检查证明'].forEach(t=>el(a,'button','',t));
 	el(c.Body,'div','codex-context','选区: 交换子的定义');
 	const study=el(c.Body,'details','codex-study-container');el(study,'summary','','数学学习工作台');
 	const m=el(r,'div','codex-messages');
