@@ -65,7 +65,7 @@
 	overflow: auto;
 	font-size: 11px;
 }
-.codex-messages { flex: 1; min-height: 80px; overflow-y: auto; overflow-x: hidden; }
+.codex-messages { flex: 1; min-height: 80px; overflow-y: auto; overflow-x: hidden; overflow-anchor: none; scroll-behavior: auto; }
 .codex-welcome { color: var(--text-muted); padding: 18px 2px; line-height: 1.6; }
 .codex-message { padding: 10px; margin-bottom: 10px; border-radius: 9px; border: 1px solid var(--background-modifier-border); }
 .codex-user { background: var(--background-secondary); }

@@ -34,6 +34,7 @@ import { unit_range } from "./study/document";
 import { render_edit, export_edits } from "./edit/panel";
 import { EditOptions } from "./edit/options";
 import { ComposerActions, type ComposeAction } from "./edit/composer";
+import { MessageList, type MessageNode } from "./message-list";
 import { SelectionPreview, selection_in_source } from "./selection-preview";
 import { NoteSessions, note_file_path } from "./note-sessions";
 
@@ -1678,6 +1679,7 @@ class CodexView extends ItemView
 	private StudyPanel: StudyPanel | null = null;
 	private StatusElement!: HTMLElement;
 	private ContextElement!: HTMLElement;
+	private ContextKey = "";
 	private SelectionPreview!: SelectionPreview;
 	private CompletionElement!: HTMLElement;
 	private MessagesElement!: HTMLElement;
@@ -1697,7 +1699,7 @@ class CodexView extends ItemView
 	private ActivityElement!: HTMLElement;
 	private ActivityLabel!: HTMLElement;
 	private ActivityTimer: ReturnType<typeof setInterval> | null = null;
-	private RenderComponent: Component | null = null;
+	private MessageList: MessageList | null = null;
 	private RenderTimer: ReturnType<typeof setTimeout> | null = null;
 	private LastRendered = "";
 	private Rendering = false;
@@ -2048,41 +2050,48 @@ class CodexView extends ItemView
 		}
 		this.SessionsElement.value = Session.Id;
 		this.SessionsElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || !!Notes?.Switching;
-		this.ContextElement.empty();
 		const Snapshot = this.Owner.Capture.Snapshot;
 		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
 		this.refresh_compose_summary();
 		this.ContextSummary?.setText(Snapshot ? `上下文与学习 · ${Snapshot.Kind}${Snapshot.Truncated ? " (已截断)" : ""}` : "上下文与学习");
-		if(Snapshot)
+		const ContextKey = JSON.stringify(Snapshot);
+		if(ContextKey !== this.ContextKey)
 		{
-			const Label = this.ContextElement.createEl("label", { cls: "codex-context-label" });
-			const Checkbox = Label.createEl("input", { type: "checkbox" });
-			Checkbox.checked = this.Owner.State.Settings.AttachContext;
-			Checkbox.addEventListener("change", () =>
+			this.ContextKey = ContextKey; this.ContextElement.empty();
+			if(Snapshot)
 			{
-				this.Owner.State.Settings.AttachContext = Checkbox.checked;
-				this.SelectionPreview.update(this.Owner.Capture.Snapshot, Checkbox.checked);
-				void this.Owner.persist();
-			});
-			Label.createSpan({ text: `附带 ${Snapshot.Kind} (${Snapshot.Mode}, ${Snapshot.Mapping})` });
-			const Details = this.ContextElement.createEl("details");
-			Details.createEl("summary", { text: `${Snapshot.Path}${Snapshot.LineStart !== null ? `:${Snapshot.LineStart + 1}` : ""}` });
-			Details.createDiv({ text: Snapshot.Heading || "未定位标题", cls: "codex-context-heading" });
-			Details.createEl("pre", { text: Snapshot.Text });
-			pdf_preview(Details, Snapshot, this.Owner.PdfImages);
-			if(Snapshot.Truncated)
-			{
-				Details.createDiv({ text: "内容已截断到上下文长度限制" });
+				const Label = this.ContextElement.createEl("label", { cls: "codex-context-label" });
+				const Checkbox = Label.createEl("input", { type: "checkbox" });
+				Checkbox.checked = this.Owner.State.Settings.AttachContext;
+				Checkbox.addEventListener("change", () =>
+				{
+					this.Owner.State.Settings.AttachContext = Checkbox.checked;
+					this.SelectionPreview.update(this.Owner.Capture.Snapshot, Checkbox.checked);
+					void this.Owner.persist();
+				});
+				Label.createSpan({ text: `附带 ${Snapshot.Kind} (${Snapshot.Mode}, ${Snapshot.Mapping})` });
+				const Details = this.ContextElement.createEl("details");
+				Details.createEl("summary", { text: `${Snapshot.Path}${Snapshot.LineStart !== null ? `:${Snapshot.LineStart + 1}` : ""}` });
+				Details.createDiv({ text: Snapshot.Heading || "未定位标题", cls: "codex-context-heading" });
+				Details.createEl("pre", { text: Snapshot.Text });
+				pdf_preview(Details, Snapshot, this.Owner.PdfImages);
+				if(Snapshot.Truncated)
+				{
+					Details.createDiv({ text: "内容已截断到上下文长度限制" });
+				}
+				this.button(this.ContextElement, "清除上下文", () =>
+				{
+					this.Owner.clear_context();
+				});
 			}
-			this.button(this.ContextElement, "清除上下文", () =>
+			else
 			{
-				this.Owner.clear_context();
-			});
+				this.ContextElement.setText("在笔记中选中文字, 或捕获当前阅读位置");
+			}
 		}
-		else
-		{
-			this.ContextElement.setText("在笔记中选中文字, 或捕获当前阅读位置");
-		}
+		const ContextCheckbox = this.ContextElement.querySelector<HTMLInputElement>(".codex-context-label input");
+		if(ContextCheckbox) { ContextCheckbox.checked = this.Owner.State.Settings.AttachContext; }
+
 		if(!this.RenderTimer)
 		{
 			this.RenderTimer = setTimeout(() =>
@@ -2096,138 +2105,135 @@ class CodexView extends ItemView
 
 	private async render_messages(): Promise<void>
 	{
-		if(this.Rendering || !this.Opened)
-		{
-			return;
-		}
-		const Messages = this.Owner.Session.Messages;
-		if(this.EditingSession !== this.Owner.Session.Id)
-		{
-			this.EditingId = "";
-		}
+		if(this.Rendering || !this.Opened) { return; }
+		const Session = this.Owner.Session, Messages = Session.Messages.map(Message => ({ ...Message }));
+		if(this.EditingSession !== Session.Id) { this.EditingId = ""; }
 		const Signature = this.message_signature();
-		if(Signature === this.LastRendered)
-		{
-			return;
-		}
+		if(Signature === this.LastRendered && this.MessageList) { return; }
 		this.Rendering = true;
 		const Version = ++this.Version;
-		const AtBottom = this.MessagesElement.scrollHeight - this.MessagesElement.scrollTop - this.MessagesElement.clientHeight < 80;
-		const OldScroll = this.MessagesElement.scrollTop;
-		this.RenderComponent?.unload();
-		const RenderComponent = new Component();
-		this.RenderComponent = RenderComponent;
-		RenderComponent.load();
-		this.MessagesElement.empty();
+		this.MessageList ??= new MessageList(this.MessagesElement);
 		try
 		{
-			if(!Messages.length)
+			const Items = Messages.map(Message =>
 			{
-				this.MessagesElement.createDiv({ cls: "codex-welcome", text: "可以直接提问, 或选中笔记内容后点击解释选区 / 检查证明. 阅读模式会附带原始 Markdown 源块." });
-			}
-			for(const Message of Messages)
+				const Task = structured_task(Messages, Message), Record = Task?.Action === "edit" ? this.Owner.Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id) : null;
+				const EditState = Task?.Action === "edit" ? [this.Owner.Edits?.Error, Record?.Status, Record?.Error, this.Owner.Edits?.Store.Data.Writes.filter(Value => Value.TaskId === Task.Id).map(Value => [Value.Id, Value.State, Value.Error])] : null;
+				return { Id: Message.Id, Key: JSON.stringify([Message, Message.Role === "user" ? [this.Owner.Busy, this.EditingId === Message.Id] : null, EditState]), Render: () => this.render_card(Message, Messages) };
+			});
+			if(!Items.length)
 			{
-				if(!this.Opened || Version !== this.Version)
+				Items.push({ Id: "welcome", Key: "welcome", Render: async () =>
 				{
-					return;
-				}
-				const Card = this.MessagesElement.createDiv({ cls: `codex-message codex-${Message.Role}` });
-				const Structured = structured_task(Messages, Message);
-				Card.dataset.messageId = Message.Id;
-				const Header = Card.createDiv({ cls: "codex-message-label" });
-				Header.createSpan({ text: Message.Role === "user" ? "你" : Message.Role === "assistant" ? "Codex" : Message.Role === "reasoning" ? "思考摘要" : "状态" });
-				if(Message.Role === "assistant")
-				{
-					this.button(Header, Structured ? "复制原始输出 (可能含答案)" : "复制", () =>
-					{
-						if(!navigator.clipboard?.writeText)
-						{
-							new Notice("当前环境无法访问剪贴板, 请选中文字后使用系统复制");
-							return;
-						}
-						void navigator.clipboard.writeText(Message.Text).then(() => { if(Structured) { this.Owner.Study?.reveal_raw(Structured); this.Owner.refresh(); } }).catch(() => new Notice("复制失败, 请使用系统复制"));
-					});
-				}
-				if(Message.Role === "user")
-				{
-					this.button(Header, "编辑", () =>
-					{
-						if(this.Owner.Busy)
-						{
-							return;
-						}
-						this.EditingId = Message.Id;
-						this.EditingSession = this.Owner.Session.Id;
-						this.EditText = Message.Text;
-						this.refresh();
-					}).disabled = this.Owner.Busy;
-					this.button(Header, "重新发送", () => void this.Owner.resend_message(Message.Id)).disabled = this.Owner.Busy;
-				}
-				if(Message.ContextLabel)
-				{
-					Card.createDiv({ cls: "codex-message-context", text: Message.ContextLabel });
-				}
-				const Content = Message.Role === "reasoning" ? Card.createEl("details") : Card;
-				if(Message.Role === "reasoning")
-				{
-					Content.createEl("summary", { text: "查看 Codex 返回的思考摘要" });
-				}
-				const Body = Content.createDiv({ cls: "codex-message-body markdown-rendered" });
-				if(Message.Role === "user" && this.EditingId === Message.Id)
-				{
-					const Editor = Body.createEl("textarea", { cls: "codex-edit-message" });
-					accessible_name(Editor, "编辑已发送内容");
-					Editor.value = this.EditText;
-					Editor.addEventListener("input", () => { this.EditText = Editor.value; });
-					const Actions = Body.createDiv({ cls: "codex-edit-actions" });
-					this.button(Actions, "保存并重发", () =>
-					{
-						if(this.Owner.Busy || !this.EditText.trim() || this.EditingSession !== this.Owner.Session.Id)
-						{
-							return;
-						}
-						const Text = this.EditText;
-						this.EditingId = "";
-						void this.Owner.resend_message(Message.Id, Text);
-					}).disabled = this.Owner.Busy;
-					this.button(Actions, "取消", () => { this.EditingId = ""; this.refresh(); });
-					Body.createDiv({ cls: "codex-message-context", text: "将使用原消息上下文创建分支, 原会话保留." });
-				}
-				else if(Structured?.Action === "edit")
-				{
-					await render_edit(this.app, Body, this.Owner.Edits, Structured, RenderComponent, () => this.Owner.refresh());
-					const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始修改输出" }); Raw.createEl("pre", { text: Message.Text });
-				}
-				else if(Structured)
-				{
-					Body.dataset.studyStructured = "true";
-					Body.createEl("p", { text: Message.CompletionStatus === "completed" ? "工作台任务已回复. 练习、反馈或稿件在上方工作台中查看; 格式未通过时显示具体原因." : "正在生成工作台内容..." });
-					const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始输出 (可能包含全部提示和答案)" });
-					Raw.createEl("pre", { text: Message.Text });
-					Raw.addEventListener("toggle", () => { if(Raw.open) { this.Owner.Study?.reveal_raw(Structured); this.Owner.refresh(); } });
-				}
-				else if(Message.Role === "assistant" || Message.Role === "reasoning")
-				{
-					const WorkTask = Messages.find(Value => Value.Role === "user" && Value.TurnId === Message.TurnId)?.Task;
-					if(WorkTask && !safe_math_markdown(Message.Text)) { Body.createEl("pre", { text: Message.Text }); }
-					else { await MarkdownRenderer.render(this.app, Message.Text || "...", Body, this.Owner.Capture.LastView?.file?.path ?? "", RenderComponent); }
-				}
-				else
-				{
-					Body.setText(Message.Task ? question_label(Message.Task) : Message.Text);
-				}
+					const Element = this.MessagesElement.ownerDocument.createElement("div"); Element.className = "codex-welcome";
+					Element.textContent = "可以直接提问, 或选中笔记内容后点击解释选区 / 检查证明. 阅读模式会附带原始 Markdown 源块.";
+					return { Element, Dispose: () => {} };
+				} });
 			}
-			this.LastRendered = Signature;
-			this.MessagesElement.scrollTop = AtBottom ? this.MessagesElement.scrollHeight : OldScroll;
+			if(await this.MessageList.update(Session.Id, Items, () => this.Opened && Version === this.Version && this.Owner.Session.Id === Session.Id)) { this.LastRendered = Signature; }
+			else if(this.Opened) { this.refresh(); }
 		}
 		finally
 		{
 			this.Rendering = false;
-			if(this.Opened && Signature !== this.message_signature())
-			{
-				this.refresh();
-			}
+			if(this.Opened && Signature !== this.message_signature()) { this.refresh(); }
 		}
+	}
+
+	private async render_card(Message: ChatMessage, Messages: ChatMessage[]): Promise<MessageNode>
+	{
+		const RenderComponent = new Component(); RenderComponent.load();
+		try
+		{
+			const Card = this.MessagesElement.ownerDocument.createElement("div");
+			Card.className = `codex-message codex-${Message.Role}`;
+			const Structured = structured_task(Messages, Message);
+			Card.dataset.messageId = Message.Id;
+			const Header = Card.createDiv({ cls: "codex-message-label" });
+			Header.createSpan({ text: Message.Role === "user" ? "你" : Message.Role === "assistant" ? "Codex" : Message.Role === "reasoning" ? "思考摘要" : "状态" });
+			if(Message.Role === "assistant")
+			{
+				this.button(Header, Structured ? "复制原始输出 (可能含答案)" : "复制", () =>
+				{
+					if(!navigator.clipboard?.writeText)
+					{
+						new Notice("当前环境无法访问剪贴板, 请选中文字后使用系统复制");
+						return;
+					}
+					void navigator.clipboard.writeText(Message.Text).then(() => { if(Structured) { this.Owner.Study?.reveal_raw(Structured); this.Owner.refresh(); } }).catch(() => new Notice("复制失败, 请使用系统复制"));
+				});
+			}
+			if(Message.Role === "user")
+			{
+				this.button(Header, "编辑", () =>
+				{
+					if(this.Owner.Busy)
+					{
+						return;
+					}
+					this.EditingId = Message.Id;
+					this.EditingSession = this.Owner.Session.Id;
+					this.EditText = Message.Text;
+					this.refresh();
+				}).disabled = this.Owner.Busy;
+				this.button(Header, "重新发送", () => void this.Owner.resend_message(Message.Id)).disabled = this.Owner.Busy;
+			}
+			if(Message.ContextLabel)
+			{
+				Card.createDiv({ cls: "codex-message-context", text: Message.ContextLabel });
+			}
+			const Content = Message.Role === "reasoning" ? Card.createEl("details") : Card;
+			if(Message.Role === "reasoning")
+			{
+				Content.createEl("summary", { text: "查看 Codex 返回的思考摘要" });
+			}
+			const Body = Content.createDiv({ cls: "codex-message-body markdown-rendered" });
+			if(Message.Role === "user" && this.EditingId === Message.Id)
+			{
+				const Editor = Body.createEl("textarea", { cls: "codex-edit-message" });
+				accessible_name(Editor, "编辑已发送内容");
+				Editor.value = this.EditText;
+				Editor.addEventListener("input", () => { this.EditText = Editor.value; });
+				const Actions = Body.createDiv({ cls: "codex-edit-actions" });
+				this.button(Actions, "保存并重发", () =>
+				{
+					if(this.Owner.Busy || !this.EditText.trim() || this.EditingSession !== this.Owner.Session.Id)
+					{
+						return;
+					}
+					const Text = this.EditText;
+					this.EditingId = "";
+					void this.Owner.resend_message(Message.Id, Text);
+				}).disabled = this.Owner.Busy;
+				this.button(Actions, "取消", () => { this.EditingId = ""; this.refresh(); });
+				Body.createDiv({ cls: "codex-message-context", text: "将使用原消息上下文创建分支, 原会话保留." });
+			}
+			else if(Structured?.Action === "edit")
+			{
+				await render_edit(this.app, Body, this.Owner.Edits, Structured, RenderComponent, () => this.Owner.refresh());
+				const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始修改输出" }); Raw.createEl("pre", { text: Message.Text });
+			}
+			else if(Structured)
+			{
+				Body.dataset.studyStructured = "true";
+				Body.createEl("p", { text: Message.CompletionStatus === "completed" ? "工作台任务已回复. 练习、反馈或稿件在上方工作台中查看; 格式未通过时显示具体原因." : "正在生成工作台内容..." });
+				const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始输出 (可能包含全部提示和答案)" });
+				Raw.createEl("pre", { text: Message.Text });
+				Raw.addEventListener("toggle", () => { if(Raw.open) { this.Owner.Study?.reveal_raw(Structured); this.Owner.refresh(); } });
+			}
+			else if(Message.Role === "assistant" || Message.Role === "reasoning")
+			{
+				const WorkTask = Messages.find(Value => Value.Role === "user" && Value.TurnId === Message.TurnId)?.Task;
+				if(WorkTask && !safe_math_markdown(Message.Text)) { Body.createEl("pre", { text: Message.Text }); }
+				else { await MarkdownRenderer.render(this.app, Message.Text || "...", Body, this.Owner.Capture.LastView?.file?.path ?? "", RenderComponent); }
+			}
+			else
+			{
+				Body.setText(Message.Task ? question_label(Message.Task) : Message.Text);
+			}
+			return { Element: Card, Dispose: () => RenderComponent.unload() };
+		}
+		catch(ErrorValue) { RenderComponent.unload(); throw ErrorValue; }
 	}
 
 	private refresh_completion(): void
@@ -2268,13 +2274,14 @@ class CodexView extends ItemView
 		if(this.RenderTimer)
 		{
 			clearTimeout(this.RenderTimer);
+			this.RenderTimer = null;
 		}
 		if(this.ActivityTimer)
 		{
 			clearInterval(this.ActivityTimer);
 			this.ActivityTimer = null;
 		}
-		this.RenderComponent?.unload();
+		this.MessageList?.dispose(); this.MessageList = null; this.ContextKey = "";
 		this.Owner.refresh();
 	}
 

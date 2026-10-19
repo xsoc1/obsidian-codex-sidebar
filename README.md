@@ -1,5 +1,7 @@
 # Codex Sidebar
 
+**0.13.3 本地候选**: 修复回答时对话区闪动和滚动回跳. 流式更新仅准备变化的消息卡片, 完成后同步替换, 历史消息和文字选区保留; 向上阅读后保持位置, 底部继续跟随, 公式/图片延迟排版也按同一规则处理. 相同上下文不再反复重建预览. 构建、124 项测试、24 个实际 CodexView 浏览器流式场景、4 个上下文场景及 12 个既有布局场景通过; 原生 Markdown/MathJax 临时组件的五次更新无高度塌缩、51 个公式节点无解析错误. Windows 日常安装仍为 0.13.2, 未安装或发布此候选, iPad 真机/真实模型流式验收未做. [原因、复验与验证边界](docs/stream-rendering.md), [候选说明](docs/releases/0.13.3.md).
+
 **0.13.2**: 按截图要求隐藏侧栏顶部的会话/最近模型/math-writing 状态汇总行, 不占空白位置. 下方笔记会话关联、独立思考中提示和错误通知保留. 构建、119 项测试及既有 12 组 headless 布局检查通过. 经明确授权安装 Windows 日常库, 重载并移除临时样式后仍隐藏, 原会话/设置/设备记录保留. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.13.2) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39215376906) 完成, 六件资产及两个 ZIP 校验通过, 插件与 Windows 安装一致, Downloads 已同步公开包. [版本说明与分层验证](docs/releases/0.13.2.md).
 
 **0.13.1**: 将按钮的省略标签“PDF 页...”改为完整的“选择 PDF 页”, 同步更新定位失败提示和使用指南. 原生 160/240/320px 工具栏文字完整; 构建、119 项测试和 12 组既有 headless 布局检查通过. 经明确授权安装 Windows 日常库, 重载后完整标签保留, 六个会话/设置/设备状态核对不变. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.13.1) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39214163784) 完成, 六件资产及两个 ZIP 校验通过, 插件与 Windows 安装相同, Downloads 已同步公开包. [修复及验证](docs/releases/0.13.1.md).
