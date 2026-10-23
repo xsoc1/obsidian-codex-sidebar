@@ -13,4 +13,4 @@
 - `node scripts/check-stream-layout.mjs`: 实际 CodexView 与异步 SDK fixture 的 24 个流式场景、4 个上下文场景通过. 保留消息节点复用、阅读锚点和非平滑滚动; 不添加高度/位移动画.
 - Headless 截图使用原创矩阵交换子例子, 已抽查深色桌面与浅色窄栏. 数学长内容 fixture 不是原生 MathJax, 键盘事件不是手工中文输入法验收. 没有追加真实模型请求或 iPad 真机测试.
 
-Windows 安装和 GitHub 发布只在实际完成并回读后写入版本说明. 原始截图、会话备份和部署收据留在 Git 之外.
+Windows 安装和 GitHub 发布已完成并回读, 19 个会话及设备/界面状态保留; 具体资产、流水线和原生检查见 [版本说明](releases/0.15.0.md). 原始截图、会话备份和部署收据留在 Git 之外.

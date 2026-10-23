@@ -1,6 +1,6 @@
 # Codex Sidebar
 
-**0.15.0**: 优化侧栏阅读布局: 减少外围留白与回答边框, 正文跟随 Obsidian 字号, 统一折叠标签和输入区; 窄栏自动纵向排列模型选择, 两个主操作保留完整文字. 构建及 127 项测试、明暗/窄栏布局和流式 SDK fixture 检查通过. 已授权安装 Windows, 当前 19 个会话、来源/设置/设备与折叠状态保留, 七个模型及技能正常; 原生折叠阅读区增加约 36px. GitHub 发布已授权, 结果待回读登记. [使用、验证与回退](docs/ui-layout.md), [版本说明](docs/releases/0.15.0.md). iPad 真机未验收.
+**0.15.0**: 优化侧栏阅读布局: 减少外围留白与回答边框, 正文跟随 Obsidian 字号, 统一折叠标签和输入区; 窄栏自动纵向排列模型选择, 两个主操作保留完整文字. 构建及 127 项测试、明暗/窄栏布局和流式 SDK fixture 检查通过. 已授权安装 Windows, 当前 19 个会话、来源/设置/设备与折叠状态保留, 七个模型及技能正常; 原生折叠阅读区增加约 36px. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.15.0) 与 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39982325785) 成功, 六件公共资产及两份 ZIP 校验通过, 插件与 Windows 安装一致, Downloads 已同步公开包. [使用、验证与回退](docs/ui-layout.md), [版本说明](docs/releases/0.15.0.md). iPad 真机未验收.
 
 **0.14.0**: 回答选段追问默认先解释疑点, 再把解释融入原说明完整重述, 保留前后逻辑、公式与有效证明路线. 截断或未完成的来源只整合已捕获部分, 原历史和笔记保留. 构建及 127 项测试通过; 两份原创数学样本的真实 Codex 回复已核读. 经明确授权安装 Windows, 最新快照的 15 个会话、来源/设置/设备/折叠状态保留, 原生引用入口验证通过, 保持安装前的连接关闭状态. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.14.0) 与 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39978580381) 完成, 六件公共资产及两份 ZIP 校验通过, 与 Windows 安装相同, Downloads 已同步公开包. iPad 真机未验收. [使用与验证边界](docs/integrated-followups.md), [版本说明](docs/releases/0.14.0.md).
 
