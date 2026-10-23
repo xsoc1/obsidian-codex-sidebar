@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { answer_quote } from "../src/quote";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -303,6 +304,39 @@ test("ordinary mobile chat edits use the two-input skilled turn and the local co
 		assert.ok(Required.every(Name => ["obsidian", "@codemirror/state", "@codemirror/view"].includes(Name)));
 	}
 	finally { Instance.onunload(); }
+});
+
+test("integrated follow-ups use saved math snapshots on mobile send and resend without editing notes or original answers", async () =>
+{
+	const Requests: any[] = [];
+	const { Instance: P } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
+	P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture"; P.Remote.Transport = "native";
+	const Source = "起点: $x^2$.\n\n$$\\int_0^1 x^2\\,dx=\\frac13$$\n\n结论: 积分为正.";
+	const Original = { Id: "answer", Role: "assistant", Text: Source, CompletionStatus: "completed" };
+	P.Session.Messages.push(Original);
+	const OriginalSession = P.Session;
+	const Quote = answer_quote(P.Session.Id, "answer", "∫₀¹ x² dx", Source, "completed");
+	try
+	{
+		assert.equal(await P.send_chat("为什么这里除以3?", null, Quote), true);
+		const Sent = P.Session.Messages.findLast((Value: any) => Value.Role === "user");
+		const Turn = Requests.find(Value => Value.method === "turn/start");
+		assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing");
+		assert.equal(Turn.params.input[0].text, Sent.Prompt); assert.match(Sent.Prompt, /整合后的完整说明/);
+		assert.equal(Sent.Quote.SourceText, Source); assert.equal(Sent.Task, undefined); assert.equal(Sent.Context, null);
+		Quote.SourceText = "later mutation";
+		P.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+		P.Capture.Snapshot = { Path: "other-note.md", Text: "unrelated-new-focus" };
+		assert.equal(await P.resend_message(Sent.Id, "这一步如何连接结论?"), true);
+		const Replay = P.Session.Messages.findLast((Value: any) => Value.Role === "user");
+		assert.equal(Replay.Quote.SourceText, Source); assert.equal(Replay.Quote.FollowupMode, "integrated-v1");
+		assert.equal(Replay.Context, null); assert.match(Replay.Prompt, /^这一步如何连接结论\?/);
+		assert.match(Replay.Prompt, /整合后的完整说明/); assert.ok(!Replay.Prompt.includes("unrelated-new-focus"));
+		assert.equal(OriginalSession.Messages.find((Value: any) => Value.Id === "answer").Text, Source);
+		assert.equal(OriginalSession.Messages.find((Value: any) => Value.Id === Sent.Id).Text, "为什么这里除以3?");
+		assert.equal(P.Edits.Store.Data.Records.length, 0); assert.equal(P.Edits.Store.Data.Writes.length, 0);
+	}
+	finally { P.onunload(); }
 });
 
 test("question-only chat and answer quotes do not acquire edit tasks; missing skills prevent submission", async () =>

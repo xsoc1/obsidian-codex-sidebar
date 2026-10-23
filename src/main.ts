@@ -4,7 +4,8 @@ import {
 } from "obsidian";
 import { ContextCapture } from "./context";
 import { build_prompt, DefaultInstructions, client_instructions, migrate_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
-import { answer_quote } from "./quote";
+import { answer_quote, answer_status } from "./quote";
+import { followup_summary } from "./followup";
 import { branch_prefix, history_items, type ChatMessage } from "./history";
 import type { CompletionService, CompletionInput } from "./completion";
 import { InlineCompletions } from "./inline";
@@ -1856,7 +1857,7 @@ class CodexView extends ItemView
 		const Card = Body?.closest<HTMLElement>(".codex-message");
 		const Message = this.Owner.Session.Messages.find(Value => Value.Id === Card?.dataset.messageId && Value.Role === "assistant");
 		this.SelectedAnswer = RangeValue && !RangeValue.collapsed && Body && !Body.dataset.studyStructured && this.MessagesElement.contains(Body) && Message && SelectionValue!.toString().trim()
-			? answer_quote(this.Owner.Session.Id, Message.Id, SelectionValue!.toString(), Message.Text) : null;
+			? answer_quote(this.Owner.Session.Id, Message.Id, SelectionValue!.toString(), Message.Text, answer_status(Message, this.Owner.TurnId, this.Owner.Busy)) : null;
 		this.refresh_quote();
 		this.StudyPanel?.refresh();
 	}
@@ -1898,7 +1899,7 @@ class CodexView extends ItemView
 		}
 		else
 		{
-			this.QuoteElement.createDiv({ text: "围绕这段回答追问, 原回答的数学公式一并保留.", cls: "codex-message-context" });
+			this.QuoteElement.createDiv({ text: followup_summary(Quote), cls: "codex-message-context" });
 			this.button(this.QuoteElement, "取消引用", () => { this.Owner.AnswerQuote = null; this.refresh_quote(); void this.Owner.NoteSessions?.flush(); });
 		}
 		if(Quote.SelectedTruncated || Quote.SourceTruncated)
