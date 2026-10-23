@@ -1,5 +1,7 @@
 # Codex Sidebar
 
+**0.15.0**: 优化侧栏阅读布局: 减少外围留白与回答边框, 正文跟随 Obsidian 字号, 统一折叠标签和输入区; 窄栏自动纵向排列模型选择, 两个主操作保留完整文字. 构建及 127 项测试、明暗/窄栏布局和流式 SDK fixture 检查通过. 已授权安装 Windows, 当前 19 个会话、来源/设置/设备与折叠状态保留, 七个模型及技能正常; 原生折叠阅读区增加约 36px. GitHub 发布已授权, 结果待回读登记. [使用、验证与回退](docs/ui-layout.md), [版本说明](docs/releases/0.15.0.md). iPad 真机未验收.
+
 **0.14.0**: 回答选段追问默认先解释疑点, 再把解释融入原说明完整重述, 保留前后逻辑、公式与有效证明路线. 截断或未完成的来源只整合已捕获部分, 原历史和笔记保留. 构建及 127 项测试通过; 两份原创数学样本的真实 Codex 回复已核读. 经明确授权安装 Windows, 最新快照的 15 个会话、来源/设置/设备/折叠状态保留, 原生引用入口验证通过, 保持安装前的连接关闭状态. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.14.0) 与 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39978580381) 完成, 六件公共资产及两份 ZIP 校验通过, 与 Windows 安装相同, Downloads 已同步公开包. iPad 真机未验收. [使用与验证边界](docs/integrated-followups.md), [版本说明](docs/releases/0.14.0.md).
 
 **0.13.3**: 修复回答时对话区闪动和滚动回跳. 流式更新仅准备变化的消息卡片, 完成后同步替换, 历史消息和文字选区保留; 向上阅读后保持位置, 底部继续跟随, 公式/图片延迟排版也按同一规则处理. 相同上下文不再反复重建预览. 构建、124 项测试、24 个实际 CodexView 浏览器流式场景、4 个上下文场景及 12 个既有布局场景通过; 原生 Markdown/MathJax 临时组件的五次更新无高度塌缩、51 个公式节点无解析错误. 经明确授权安装 Windows 日常库, 八个原会话/来源快照/设置/设备和折叠状态保留, 七个模型与技能正常. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.13.3) 和 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/39276685970) 完成, 六件资产及两个 ZIP 校验通过, 插件与 Windows 安装相同, Downloads 已同步公开包. iPad 真机/真实模型流式验收未做. [原因、复验与验证边界](docs/stream-rendering.md), [版本说明](docs/releases/0.13.3.md).

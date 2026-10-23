@@ -13,12 +13,14 @@ if(!Browser || !AppCss) { throw new Error("Set CODEX_LAYOUT_BROWSER and CODEX_LA
 const Directory = mkdtempSync(join(tmpdir(), "codex-sidebar-layout-"));
 await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { EditOptions } from "./src/edit/options"; export { ComposerActions } from "./src/edit/composer"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
 const Baseline = execFileSync("git", ["show", "665d76f:styles.css"], { encoding: "utf8" });
+// Keep the original folding comparison above; UI polish compares the same current DOM.
+const PolishBaseline = execFileSync("git", ["show", "9d80263:styles.css"], { encoding: "utf8" });
 const Styles = readFileSync("styles.css", "utf8");
 writeFileSync(join(Directory, "fixture.html"), `<!doctype html><html><meta charset="utf-8"><style>${readFileSync(AppCss, "utf8")}</style><style id="plugin"></style><body class="is-mobile is-tablet theme-dark"><div id="root" class="codex-sidebar" style="position:fixed;top:0;left:0;width:450px;height:519px"></div><script src="layout.js"></script><script>
 function el(parent,tag,cls,text){const e=document.createElement(tag);e.className=cls||'';if(text)e.textContent=text;parent.appendChild(e);return e;}
 HTMLElement.prototype.createEl=function(tag,o={}){const e=el(this,tag,o.cls,o.text);if(o.value!==undefined)e.value=o.value;Object.entries(o.attr||{}).forEach(([k,v])=>e.setAttribute(k,v));return e;};
 HTMLElement.prototype.createDiv=function(o){return this.createEl('div',o);};HTMLElement.prototype.createSpan=function(o){return this.createEl('span',o);};HTMLElement.prototype.setText=function(t){this.textContent=t;};
-function render(folded,css,height,width,mobile=true)
+function render(folded,css,height,width,mobile=true,currentComposer=css===styles)
 {
 	document.getElementById('plugin').textContent=css;
 	const r=document.getElementById('root');
@@ -50,12 +52,64 @@ function render(folded,css,height,width,mobile=true)
 	el(o.Body,'div','codex-usage','上下文 ~28%');
 	const send=folded?Layout.sidebar_panel(p,'codex-send-tools','提问与发送',mobile):{Body:p};
 	const input=el(send.Body,'textarea');input.placeholder='随时提问... Enter 提问, Shift+Enter 换行';
-	if(css===styles)window.editOptions=new Layout.EditOptions(send.Body,()=>{});
+	if(currentComposer)window.editOptions=new Layout.EditOptions(send.Body,()=>{});
 	const actions=el(send.Body,'div','codex-compose-actions');
-	window.submissions=[];if(css===styles)window.composerActions=new Layout.ComposerActions(actions,input,mode=>submissions.push(mode),()=>{});else{el(actions,'button','','发送');el(actions,'button','','停止');}
+	window.submissions=[];if(currentComposer)window.composerActions=new Layout.ComposerActions(actions,input,mode=>submissions.push(mode),()=>{});else{el(actions,'button','','发送');el(actions,'button','','停止');}
 	return {messageHeight:m.getBoundingClientRect().height,rootHeight:r.clientHeight,scrollHeight:r.scrollHeight,composerHeight:p.getBoundingClientRect().height};
 }
-window.styles=${JSON.stringify(Styles)};window.baseline=${JSON.stringify(Baseline)};</script></body></html>`);
+function render_polish(css,height,width,mobile)
+{
+	render(true,css,height,width,mobile,true);
+	const root=document.getElementById('root');
+	root.scrollTop=0;
+	for(const panel of root.querySelectorAll('.codex-navigation,.codex-context-tools,.codex-options,.codex-send-tools'))panel.open=false;
+	const messages=root.querySelector('.codex-messages');messages.replaceChildren();
+	const user=el(messages,'div','codex-message codex-user');el(user,'div','codex-message-label','你');el(user,'div','codex-message-body','为什么矩阵交换子仍然是线性的？');
+	const card=el(messages,'div','codex-message codex-assistant');el(card,'div','codex-message-label','Codex');
+	const body=el(card,'div','codex-message-body');
+	el(body,'h3','','先看定义，再连接计算');
+	el(body,'p','','固定矩阵 X 后，交换子为 [X,Y] = XY − YX。要理解第二个变量的线性，只需把加法和数乘分别代入。');
+	el(body,'p','','矩阵乘法的分配律给出 [X,Y+Z] = [X,Y] + [X,Z]；数乘同理。这一步保留原来的条件，也说明了下一步为什么能逐项计算。');
+	el(body,'p','','例如 E₁₂E₂₁ = E₁₁，而 E₂₁E₁₂ = E₂₂，所以 [E₁₂,E₂₁] = E₁₁ − E₂₂。');
+	return root;
+}
+function reading_metrics()
+{
+	const root=document.getElementById('root'),messages=root.querySelector('.codex-messages'),body=root.querySelector('.codex-assistant .codex-message-body');
+	return {height:messages.getBoundingClientRect().height,width:body.getBoundingClientRect().width,rootWidth:root.clientWidth,scrollWidth:root.scrollWidth};
+}
+function long_content()
+{
+	const body=document.querySelector('.codex-assistant .codex-message-body');
+	const math=el(body,'div','math-block');const formula=el(math,'span','','[X,[Y,Z]] + [Y,[Z,X]] + [Z,[X,Y]] = 0');formula.style.cssText='display:inline-block;width:1200px;white-space:nowrap';
+	const pre=el(body,'pre');el(pre,'code','','original_example = '+ 'matrix_product_'.repeat(90));
+	const table=el(body,'table');const row=el(el(table,'tbody'),'tr');
+	for(let i=0;i<12;i++){const cell=el(row,'td','','X'+i+'Y'+i+' − Y'+i+'X'+i);cell.style.minWidth='110px';}
+	return [math,pre,table];
+}
+function complete_button(button)
+{
+	const range=document.createRange();range.selectNodeContents(button);
+	const bounds=button.getBoundingClientRect(),text=[...range.getClientRects()],style=getComputedStyle(button);
+	return {text:button.textContent,visible:button.checkVisibility(),width:bounds.width,height:bounds.height,textLines:new Set(text.map(rect=>Math.round(rect.top))).size,paddingLeft:style.paddingLeft,paddingRight:style.paddingRight,fontSize:style.fontSize,whiteSpace:style.whiteSpace,complete:button.scrollWidth<=button.clientWidth+1&&button.scrollHeight<=button.clientHeight+1&&text.every(rect=>rect.left>=bounds.left-1&&rect.right<=bounds.right+1&&rect.top>=bounds.top-1&&rect.bottom<=bounds.bottom+1)};
+}
+function reachable_button(button)
+{
+	button.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+	if(!button.checkVisibility())return false;
+	const bounds=button.getBoundingClientRect();
+	for(let parent=button.parentElement;parent;parent=parent.parentElement)
+	{
+		const style=getComputedStyle(parent),rect=parent.getBoundingClientRect();
+		const left=rect.left+parent.clientLeft,top=rect.top+parent.clientTop;
+		const root=parent.id==='root';
+		if((root||['hidden','clip','auto','scroll'].includes(style.overflowX))&&(bounds.left<left-1||bounds.right>left+parent.clientWidth+1))return false;
+		if((root||['hidden','clip','auto','scroll'].includes(style.overflowY))&&(bounds.top<top-1||bounds.bottom>top+parent.clientHeight+1))return false;
+		if(root)break;
+	}
+	return true;
+}
+window.styles=${JSON.stringify(Styles)};window.baseline=${JSON.stringify(Baseline)};window.polishBaseline=${JSON.stringify(PolishBaseline)};</script></body></html>`);
 const Child = spawn(Browser, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${join(Directory, "profile")}`, "--no-first-run", "--disable-extensions", "about:blank"], { windowsHide: true, stdio: "ignore" });
 let Socket;
 try
@@ -135,11 +189,113 @@ try
 		assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails)); const Row = Result.result.value; Rows.push(Row);
 		assert.ok(Row.defaults && Row.preserved && Row.selectionVisible && Row.rawPreserved && Row.foldPreserved && Row.messageHeight >= 120 && !Row.overflow && !Row.hover, JSON.stringify(Row));
 	}
+	const PolishRows = [];
+	for(const Theme of ["theme-dark", "theme-light"])
+	for(const Mobile of [false, true])
+	for(const Width of [240,320,450,612])
+	{
+		const Height = Width === 240 ? 520 : 720;
+		const Surface = Mobile ? "mobile" : "desktop";
+		await call("Emulation.setDeviceMetricsOverride", { width: Math.max(Width,512), height: Height + 20, deviceScaleFactor: 1, mobile: false });
+		const Before = await call("Runtime.evaluate", { expression: `(()=>{
+			document.body.className='${Mobile ? "is-mobile is-tablet " : ""}${Theme}';
+			render_polish(polishBaseline,${Height},${Width},${Mobile});
+			window.polishInput=document.querySelector('.codex-send-tools textarea');polishInput.value='中文草稿与 $[X,Y]$';polishInput.setSelectionRange(2,4);
+			window.polishScope=editOptions.Scope;polishScope.value='captured';
+			window.polishBefore=reading_metrics();return polishBefore;
+		})()`, returnByValue: true });
+		assert.ok(!Before.exceptionDetails, JSON.stringify(Before.exceptionDetails));
+		const Capture = Width === (Mobile ? 320 : 612);
+		if(Capture)
+		{
+			const Shot = await call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: Width, height: Height, scale: 1 } });
+			writeFileSync(join(Directory, `before-${Surface}-${Theme}.png`), Buffer.from(Shot.data, "base64"));
+		}
+		const Comparison = await call("Runtime.evaluate", { expression: `(()=>{
+			document.getElementById('plugin').textContent=styles;
+			const root=document.getElementById('root');
+			return {before:polishBefore,after:reading_metrics(),sameNodes:polishInput===root.querySelector('.codex-send-tools textarea')&&polishScope===editOptions.Scope,draftPreserved:polishInput.value==='中文草稿与 $[X,Y]$'&&polishInput.selectionStart===2&&polishInput.selectionEnd===4,scopePreserved:polishScope.value==='captured',foldsPreserved:[...root.querySelectorAll('.codex-navigation,.codex-context-tools,.codex-options,.codex-send-tools')].every(panel=>!panel.open)};
+		})()`, returnByValue: true });
+		assert.ok(!Comparison.exceptionDetails, JSON.stringify(Comparison.exceptionDetails));
+		const Sizes = Comparison.result.value;
+		assert.ok(Sizes.after.width + 0.5 >= Sizes.before.width && Sizes.after.height + 0.5 >= Sizes.before.height, `Folded reading area regressed: ${JSON.stringify({ Theme, Mobile, Width, ...Sizes })}`);
+		assert.ok(Sizes.sameNodes && Sizes.draftPreserved && Sizes.scopePreserved && Sizes.foldsPreserved, JSON.stringify(Sizes));
+		if(Capture)
+		{
+			const Shot = await call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: Width, height: Height, scale: 1 } });
+			writeFileSync(join(Directory, `after-${Surface}-${Theme}.png`), Buffer.from(Shot.data, "base64"));
+		}
+		const Result = await call("Runtime.evaluate", { expression: `(async()=>{
+			const root=document.getElementById('root');
+			const stress=long_content();
+			const localOverflow=stress.map(item=>({tag:item.tagName,className:item.className,width:item.clientWidth,scrollWidth:item.scrollWidth,parentWidth:item.parentElement.clientWidth,overflow:getComputedStyle(item).overflowX}));
+			const stressContained=root.scrollWidth<=root.clientWidth+1&&localOverflow.every(item=>item.width<=item.parentWidth+1&&item.scrollWidth>item.width&&['auto','scroll'].includes(item.overflow));
+			for(const panel of root.querySelectorAll('details'))panel.open=true;
+			composerActions.refresh(false,false,false);
+			const buttons=[...root.querySelectorAll('.codex-header button,.codex-context-actions button,.codex-compose-actions button')].map(complete_button);
+			const actions=[composerActions.Question,composerActions.Preview,composerActions.Stop];
+			const before=actions.map(button=>{const r=button.getBoundingClientRect();return [r.x,r.y,r.width,r.height];});
+			composerActions.refresh(true,true,false);
+			const stableActions=actions.every((button,index)=>{const r=button.getBoundingClientRect();return [r.x,r.y,r.width,r.height].every((v,k)=>Math.abs(v-before[index][k])<0.5);});
+			composerActions.refresh(false,false,false);
+			const actionsReachable=actions.every(reachable_button);
+			const allButtonsReachable=[...root.querySelectorAll('.codex-header button,.codex-context-actions button,.codex-compose-actions button')].every(reachable_button);
+			const controls=root.querySelector('.codex-controls');const labels=[...controls.querySelectorAll('label')];
+			const modelSingleColumn=labels[1].getBoundingClientRect().top>labels[0].getBoundingClientRect().top+1;
+			window.submissions=[];
+			const ime=new KeyboardEvent('keydown',{key:'Enter',isComposing:true,cancelable:true});polishInput.dispatchEvent(ime);
+			const shift=new KeyboardEvent('keydown',{key:'Enter',shiftKey:true,cancelable:true});polishInput.dispatchEvent(shift);
+			const tab=new KeyboardEvent('keydown',{key:'Tab',cancelable:true});polishInput.dispatchEvent(tab);
+			const question=new KeyboardEvent('keydown',{key:'Enter',cancelable:true});polishInput.dispatchEvent(question);
+			const keyboardPreserved=!ime.defaultPrevented&&!shift.defaultPrevented&&!tab.defaultPrevented&&question.defaultPrevented&&submissions.join(',')==='question';
+			const saved=new Map(),store={getItem:key=>saved.get(key)??null,setItem:(key,value)=>saved.set(key,value)};
+			const holder=el(document.body,'div');holder.style.cssText='position:fixed;left:-9999px';
+			const first=Layout.sidebar_panel(holder,'codex-options','保存展开状态',true,{Storage:store,Key:'fixture-fold'});first.Details.open=true;
+			await new Promise(resolve=>setTimeout(resolve,0));
+			const restored=Layout.sidebar_panel(holder,'codex-options','恢复展开状态',true,{Storage:store,Key:'fixture-fold'});
+			const savedFoldRestored=restored.Details.open&&saved.get('fixture-fold')==='open';holder.remove();
+			window.polishSpinner=el(root,'div','codex-spinner');polishSpinner.style.position='absolute';polishSpinner.style.left='-9999px';
+			composerActions.Question.focus();
+			return {buttons,stableActions,actionsReachable,allButtonsReachable,localOverflow,stressContained,modelSingleColumn,keyboardPreserved,savedFoldRestored,overflow:root.scrollWidth>root.clientWidth+1,hover:root.querySelectorAll('[title],[aria-label]').length};
+		})()`, returnByValue: true, awaitPromise: true });
+		assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails));
+		await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+		await call("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+		const Focus = await call("Runtime.evaluate", { expression: `(()=>{const button=composerActions.Preview,style=getComputedStyle(button);return {target:document.activeElement===button,visible:button.matches(':focus-visible'),outline:style.outlineStyle,width:parseFloat(style.outlineWidth),shadow:style.boxShadow};})()`, returnByValue: true });
+		await call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+		const Motion = await call("Runtime.evaluate", { expression: "({reduced:matchMedia('(prefers-reduced-motion: reduce)').matches,animation:getComputedStyle(polishSpinner).animationName,scroll:getComputedStyle(document.querySelector('.codex-messages')).scrollBehavior})", returnByValue: true });
+		await call("Emulation.setEmulatedMedia", { features: [] });
+		const Row = { surface: Surface, theme: Theme, width: Width, height: Height, ...Sizes, ...Result.result.value, focus: Focus.result.value, motion: Motion.result.value };
+		PolishRows.push(Row);
+		assert.ok(Row.buttons.every(Button => Button.complete && Button.visible) && Row.buttons.some(Button => Button.text === "选择 PDF 页") && Row.buttons.some(Button => Button.text === "生成修改预览"), `Incomplete button: ${JSON.stringify(Row)}`);
+		assert.ok(Row.stableActions && Row.actionsReachable && Row.allButtonsReachable && Row.stressContained && Row.keyboardPreserved && Row.savedFoldRestored && !Row.overflow && !Row.hover, JSON.stringify(Row));
+		if(Width === 240) { assert.ok(Row.modelSingleColumn, "Narrow sidebar should stack model selectors"); }
+		assert.ok(Row.focus.target && Row.focus.visible && ((Row.focus.outline !== "none" && Row.focus.width > 0) || Row.focus.shadow !== "none"), JSON.stringify(Row.focus));
+		assert.ok(Row.motion.reduced && Row.motion.animation === "none" && Row.motion.scroll === "auto", JSON.stringify(Row.motion));
+		if((!Mobile && Width === 612 && Theme === "theme-dark") || (Mobile && Width === 240 && Theme === "theme-light"))
+		{
+			await call("Emulation.setDeviceMetricsOverride", { width: Math.max(Width,512), height: 740, deviceScaleFactor: 1, mobile: false });
+			const Expanded = await call("Runtime.evaluate", { expression: `(()=>{
+				const root=render_polish(styles,720,${Width},${Mobile});
+				root.querySelector('.codex-options').open=true;root.querySelector('.codex-send-tools').open=true;
+				const input=root.querySelector('.codex-send-tools textarea');input.value='解释这里的分配律，并完整连接前后的计算。';
+				composerActions.refresh(false,false,false);root.scrollTop=root.scrollHeight;
+				const bounds=root.getBoundingClientRect();
+				const controls=[...root.querySelectorAll('.codex-controls select'),input,composerActions.Question,composerActions.Preview,composerActions.Stop];
+				return {height:720,controlsVisible:controls.every(control=>{const r=control.getBoundingClientRect();return control.checkVisibility()&&r.top>=bounds.top-1&&r.bottom<=bounds.bottom+1&&r.left>=bounds.left-1&&r.right<=bounds.right+1;}),buttons:[composerActions.Question,composerActions.Preview,composerActions.Stop].map(complete_button)};
+			})()`, returnByValue: true });
+			assert.ok(!Expanded.exceptionDetails, JSON.stringify(Expanded.exceptionDetails));
+			Row.expanded = Expanded.result.value;
+			assert.ok(Row.expanded.controlsVisible && Row.expanded.buttons.every(Button => Button.complete) && Row.expanded.buttons[0].textLines === 1, JSON.stringify(Row.expanded));
+			const Shot = await call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: Width, height: 720, scale: 1 } });
+			writeFileSync(join(Directory, `expanded-${Surface}-${Width}-${Theme}.png`), Buffer.from(Shot.data, "base64"));
+		}
+	}
 	await call("Emulation.setDeviceMetricsOverride", { width: 350, height: 740, deviceScaleFactor: 1, mobile: false });
 	await call("Runtime.evaluate", { expression: "document.body.className='theme-dark';render(true,styles,720,320,false)" });
 	const Shot = await call("Page.captureScreenshot", { format: "png" });
 	writeFileSync(join(Directory, "after.png"), Buffer.from(Shot.data, "base64"));
-	writeFileSync(join(Directory, "report.json"), JSON.stringify({ tier: "headless CSS fixture, not iPad device acceptance", rows: Rows }, null, 2));
-	console.log(JSON.stringify({ directory: Directory, rows: Rows }, null, 2));
+	writeFileSync(join(Directory, "report.json"), JSON.stringify({ tier: "headless CSS fixture with simulated wide math, not native MathJax, manual IME or iPad device acceptance", baseline: "0.14.0 / 9d80263", rows: Rows, polishRows: PolishRows }, null, 2));
+	console.log(JSON.stringify({ directory: Directory, legacyCases: Rows.length, polishCases: PolishRows.length, rows: Rows, polishRows: PolishRows }, null, 2));
 }
 finally { Socket?.close(); Child.kill(); }
