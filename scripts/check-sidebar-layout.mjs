@@ -11,7 +11,7 @@ const Browser = process.env.CODEX_LAYOUT_BROWSER;
 const AppCss = process.env.CODEX_LAYOUT_APP_CSS;
 if(!Browser || !AppCss) { throw new Error("Set CODEX_LAYOUT_BROWSER and CODEX_LAYOUT_APP_CSS (public Obsidian app.css)"); }
 const Directory = mkdtempSync(join(tmpdir(), "codex-sidebar-layout-"));
-await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { EditOptions } from "./src/edit/options"; export { ComposerActions } from "./src/edit/composer"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
+await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { observe_sidebar_footer } from "./src/sidebar-footer"; export { EditOptions } from "./src/edit/options"; export { ComposerActions } from "./src/edit/composer"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
 const Baseline = execFileSync("git", ["show", "665d76f:styles.css"], { encoding: "utf8" });
 // Keep the original folding comparison above; UI polish compares the same current DOM.
 const PolishBaseline = execFileSync("git", ["show", "9d80263:styles.css"], { encoding: "utf8" });
@@ -291,11 +291,38 @@ try
 			writeFileSync(join(Directory, `expanded-${Surface}-${Width}-${Theme}.png`), Buffer.from(Shot.data, "base64"));
 		}
 	}
+	const FooterRows = [];
+	for(const Theme of ["theme-dark", "theme-light"])
+	for(const Width of [240,540])
+	{
+		await call("Emulation.setDeviceMetricsOverride", { width: Width, height: 620, deviceScaleFactor: 1, mobile: false });
+		const Result = await call("Runtime.evaluate", { expression: `(async()=>{
+			document.body.className='${Theme}';render_polish(styles,620,${Width},false);
+			const root=document.getElementById('root'),send=root.querySelector('.codex-send-tools');send.open=true;
+			const bar=el(document.body,'div','status-bar','6 条反向链接 · 原创测试');
+			bar.style.cssText='position:fixed;bottom:0;right:0;width:480px;height:27px;box-sizing:border-box;z-index:15';
+			const close=Layout.observe_sidebar_footer(root);
+			const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+			const measure=()=>{root.scrollTop=root.scrollHeight;const footer=bar.getBoundingClientRect();return [...root.querySelectorAll('.codex-compose-actions button')].map(button=>{const r=button.getBoundingClientRect();const x=Math.max(r.left,footer.left),right=Math.min(r.right,footer.right);return {text:button.textContent,bottom:r.bottom,footerTop:footer.top,occluded:x<right&&r.bottom>footer.top&&r.top<footer.bottom};});};
+			await settle();const visible=measure();bar.style.height='48px';await settle();const taller=measure();
+			bar.style.display='none';await settle();const hiddenPadding=parseFloat(getComputedStyle(root).paddingBottom);
+			bar.style.display='flex';await settle();const shown=measure();
+			bar.style.left='${Width+10}px';bar.style.right='auto';await settle();const separatePadding=parseFloat(getComputedStyle(root).paddingBottom);
+			bar.remove();await settle();const removedPadding=parseFloat(getComputedStyle(root).paddingBottom);
+			const replacement=el(document.body,'div','status-bar','新的状态栏');replacement.style.cssText='position:fixed;bottom:0;right:0;width:480px;height:27px;z-index:15';await settle();const recreatedPadding=parseFloat(getComputedStyle(root).paddingBottom);
+			close();replacement.style.height='48px';await settle();const disposed=!root.style.getPropertyValue('--codex-footer-inset');replacement.remove();
+			return {visible,taller,shown,hiddenPadding,separatePadding,removedPadding,recreatedPadding,disposed};
+		})()`, returnByValue: true, awaitPromise: true });
+		assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails));
+		const Row={theme:Theme,width:Width,...Result.result.value};FooterRows.push(Row);
+		assert.ok([...Row.visible,...Row.taller,...Row.shown].every(Button=>!Button.occluded), `Status bar occludes send actions: ${JSON.stringify(Row)}`);
+		assert.equal(Row.hiddenPadding,12);assert.equal(Row.separatePadding,12);assert.equal(Row.removedPadding,12);assert.equal(Row.recreatedPadding,39);assert.ok(Row.disposed);
+	}
 	await call("Emulation.setDeviceMetricsOverride", { width: 350, height: 740, deviceScaleFactor: 1, mobile: false });
 	await call("Runtime.evaluate", { expression: "document.body.className='theme-dark';render(true,styles,720,320,false)" });
 	const Shot = await call("Page.captureScreenshot", { format: "png" });
 	writeFileSync(join(Directory, "after.png"), Buffer.from(Shot.data, "base64"));
-	writeFileSync(join(Directory, "report.json"), JSON.stringify({ tier: "headless CSS fixture with simulated wide math, not native MathJax, manual IME or iPad device acceptance", baseline: "0.14.0 / 9d80263", rows: Rows, polishRows: PolishRows }, null, 2));
-	console.log(JSON.stringify({ directory: Directory, legacyCases: Rows.length, polishCases: PolishRows.length, rows: Rows, polishRows: PolishRows }, null, 2));
+	writeFileSync(join(Directory, "report.json"), JSON.stringify({ tier: "headless CSS fixture with simulated wide math, not native MathJax, manual IME or iPad device acceptance", baseline: "0.14.0 / 9d80263", rows: Rows, polishRows: PolishRows, footerRows: FooterRows }, null, 2));
+	console.log(JSON.stringify({ directory: Directory, legacyCases: Rows.length, polishCases: PolishRows.length, footerCases: FooterRows.length, rows: Rows, polishRows: PolishRows, footerRows: FooterRows }, null, 2));
 }
 finally { Socket?.close(); Child.kill(); }

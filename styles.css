@@ -5,7 +5,7 @@
 	flex-direction: column;
 	gap: 6px;
 	padding: 10px !important;
-	padding-bottom: 12px !important;
+	padding-bottom: calc(12px + var(--codex-footer-inset, 0px)) !important;
 	height: 100%;
 	min-height: 0;
 	min-width: 0;
@@ -117,7 +117,7 @@
 .codex-compose-actions button.mod-cta { font-weight: 600; }
 .codex-compose-actions button:disabled { opacity: 0.5; }
 .codex-sidebar-ribbon.is-active { color: var(--interactive-accent); }
-.is-mobile .codex-sidebar { padding-bottom: max(16px, env(safe-area-inset-bottom)) !important; }
+.is-mobile .codex-sidebar { padding-bottom: calc(max(16px, env(safe-area-inset-bottom)) + var(--codex-footer-inset, 0px)) !important; }
 .is-mobile .codex-sidebar button { min-height: 36px; }
 .is-mobile .codex-compose-actions button { padding-left: 8px; padding-right: 8px; }
 .is-mobile .codex-composer textarea { min-height: 72px; }

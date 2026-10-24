@@ -10,6 +10,7 @@ import { branch_prefix, history_items, type ChatMessage } from "./history";
 import type { CompletionService, CompletionInput } from "./completion";
 import { InlineCompletions } from "./inline";
 import { sidebar_panel, reveal_sidebar_panel, type SidebarPanel } from "./sidebar-layout";
+import { observe_sidebar_footer } from "./sidebar-footer";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcMessage } from "./rpc";
 import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } from "./remote";
@@ -1705,6 +1706,7 @@ class CodexView extends ItemView
 	private LastRendered = "";
 	private Rendering = false;
 	private Opened = false;
+	private ReleaseFooter: (() => void) | null = null;
 	private Version = 0;
 	private EditingId = "";
 	private EditingSession = "";
@@ -1736,6 +1738,8 @@ class CodexView extends ItemView
 		const Root = this.contentEl;
 		Root.empty();
 		Root.addClass("codex-sidebar");
+		this.ReleaseFooter?.();
+		this.ReleaseFooter = observe_sidebar_footer(Root);
 		const Mobile = Platform.isMobile || Root.ownerDocument.body.classList.contains("is-mobile");
 		const Panel = (Parent: HTMLElement, ClassName: string, Label: string) => sidebar_panel(Parent, ClassName, Label, Mobile, { Storage: localStorage, Key: `codex-sidebar-folds:v1:${this.app.vault.getName()}:${ClassName}` });
 		const Navigation = Panel(Root, "codex-navigation", "会话与连接");
@@ -2269,6 +2273,7 @@ class CodexView extends ItemView
 
 	async onClose(): Promise<void>
 	{
+		this.ReleaseFooter?.(); this.ReleaseFooter = null;
 		this.StudyPanel?.close(); this.StudyPanel = null;
 		this.Opened = false;
 		this.Version++;
