@@ -26,4 +26,10 @@ README 界面图片使用原创矩阵示例和真实视图容器的 SDK fixture,
 
 候选四文件 ZIP 成员/逐字节和本机路径标记检查通过, SHA-256 为 `446de0643a1211bd42649968a68f85276fba79ad3cbba882a9a36ce52f42876b`. 公开发布的 ZIP 可能因打包元数据不同具有不同哈希, 成员字节仍须一致.
 
-GitHub 正式发布已授权, CI、非 prerelease/Latest 状态及公开资产结果在实际回读后补充. 未做 iPad 真机、手工中文 IME、帧率或耗电测试, 不将这些自动检查当成相应验收.
+GitHub 正式发布已完成. 代码与不可变标签 `1.0.0` 指向 `75d0573b76a0379e0766a73ae4c60f3da8e2dc60`, 与默认分支一起原子推送. [Actions 40175333835](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40175333835) 的依赖安装、构建、117 项测试、打包和发布全部成功. 匿名接口确认 [1.0.0](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/1.0.0) 为 draft=false、prerelease=false, `/releases/latest` 返回 1.0.0.
+
+六件公开资产下载后的大小、SHA-256 与 GitHub digest 一致. 四件插件单文件与主源码构建、开发工作树及 Windows 安装逐字节相等. 插件 ZIP 仅含四个构建文件, 桥 ZIP 仅含固定四文件及 scripts 目录, 成员及字节均匹配. 公开插件 ZIP SHA-256 为 `50e2b6234ae15142ddf5b5041fc60e5f270c8aa4ce2f40fbc8be92cecef8d3be`, 桥 ZIP 为 `dd1eab8371e2010a541d3f531e9bd9f3bf57ac511cde992a9b5de68da9c720a1`. 已备份已知候选包并将公开两包同步到主源码 dist、开发树 dist 和 Downloads, 六份副本一致.
+
+公开 README 与原创界面图已通过匿名内容接口回读, 字节等于发布提交. README 继续保持插件功能/安装/使用介绍, 本次部署记录与哈希没有添加到首页. 本补记只更新验证文档与项目记录, 不重打标签或替换公开资产.
+
+未做 iPad 真机、手工中文 IME、帧率或耗电测试, 不将这些自动检查当成相应验收.
