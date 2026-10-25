@@ -46,13 +46,30 @@ try
 		assert.ok(Object.values(Surface.context).every(Boolean), "Unchanged source preview is rebuilt or its checkbox is stale");
 		assert.ok(Object.values(Surface.sidebar).every(Boolean), "Actual sidebar retained removed controls or ignored the saved edit range");
 	}
-	for(const Width of [320, 540])
+	for(const Width of [320, 420, 540])
 	{
 		await call("Emulation.setDeviceMetricsOverride", { width: Width, height: 720, deviceScaleFactor: 1, mobile: false });
 		const Result = await call("Runtime.evaluate", { expression: `document.body.className='theme-dark';run_simplified_sidebar_case(true,${Width})`, awaitPromise: true, returnByValue: true });
 		assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails));
+		if(Width === 420)
+		{
+			await call("Runtime.evaluate", { expression: `(()=>{
+				const root=document.getElementById('simplified-sidebar-fixture');
+				for(const cls of ['codex-navigation','codex-context-tools'])root.querySelector('.'+cls).open=false;
+				root.querySelector('.codex-options>summary').textContent='模型与选项 · gpt-6.1-sol / xhigh';
+				root.querySelector('textarea').value='可以再解释一下这一步吗？';
+				const body=root.querySelector('.codex-message-body');body.replaceChildren();
+				body.createEl('h3',{text:'从矩阵乘法理解交换子'});
+				body.createEl('p',{text:'固定矩阵 X 后，交换子为 [X,Y] = XY − YX。把加法与数乘分别代入，就能验证它关于 Y 的线性。'});
+				body.createEl('p',{text:'例如，先计算两个矩阵单位的乘积：'});
+				const math=body.createDiv({cls:'math-block',text:'E₁₂E₂₁ = E₁₁， E₂₁E₁₂ = E₂₂'});math.style.cssText='text-align:center;padding:14px 0;font-family:serif';
+				body.createEl('p',{text:'因此 [E₁₂,E₂₁] = E₁₁ − E₂₂。这个例子也说明，交换子通常不为零。'});
+				body.createEl('blockquote',{text:'先完成一次具体计算，再回到一般性质，公式之间的联系就更清楚。'});
+			})()` });
+		}
 		const Shot = await call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: Width, height: 720, scale: 1 } });
 		writeFileSync(join(Directory, `simplified-sidebar-${Width}.png`), Buffer.from(Shot.data, "base64"));
+		if(Width === 420) { writeFileSync(join(Directory, "sidebar-glass.png"), Buffer.from(Shot.data, "base64")); }
 		await call("Runtime.evaluate", { expression: "document.getElementById('simplified-sidebar-fixture').remove()" });
 	}
 }

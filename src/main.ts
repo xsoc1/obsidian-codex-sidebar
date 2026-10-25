@@ -1680,7 +1680,8 @@ class CodexView extends ItemView
 		this.ReleaseFooter = observe_sidebar_footer(Root);
 		const Mobile = Platform.isMobile || Root.ownerDocument.body.classList.contains("is-mobile");
 		const Panel = (Parent: HTMLElement, ClassName: string, Label: string) => sidebar_panel(Parent, ClassName, Label, Mobile, { Storage: localStorage, Key: `codex-sidebar-folds:v1:${this.app.vault.getName()}:${ClassName}` });
-		const Navigation = Panel(Root, "codex-navigation", "会话与连接");
+		const Toolbar = Root.createDiv({ cls: "codex-toolbar" });
+		const Navigation = Panel(Toolbar, "codex-navigation", "会话与连接");
 		this.NavigationSummary = Navigation.Summary;
 		const Header = Navigation.Body.createDiv({ cls: "codex-header" });
 		Header.createEl("strong", { text: "Codex" });
@@ -1695,7 +1696,7 @@ class CodexView extends ItemView
 		});
 		this.StatusElement = Root.createDiv({ cls: "codex-status" });
 		this.SelectionPreview = new SelectionPreview(Root, () => this.Owner.clear_context());
-		const ContextPanel = Panel(Root, "codex-context-tools", "上下文");
+		const ContextPanel = Panel(Toolbar, "codex-context-tools", "上下文");
 		this.ContextSummary = ContextPanel.Summary;
 		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
 		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
@@ -1711,7 +1712,7 @@ class CodexView extends ItemView
 		this.ActivityLabel = this.ActivityElement.createSpan();
 		const Composer = Root.createDiv({ cls: "codex-composer" });
 		this.QuoteElement = Composer.createDiv({ cls: "codex-answer-quote" });
-		const OptionsPanel = Panel(Composer, "codex-options", "模型与选项");
+		const OptionsPanel = Panel(Toolbar, "codex-options", "模型与选项");
 		this.OptionsSummary = OptionsPanel.Summary;
 		const Controls = OptionsPanel.Body.createDiv({ cls: "codex-controls" });
 		const ModelLabel = Controls.createEl("label");

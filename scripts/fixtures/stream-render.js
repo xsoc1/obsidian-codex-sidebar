@@ -49,7 +49,9 @@ window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
 			await View.render_messages();
 		}
 		const Actions = [...Root.querySelectorAll('.codex-compose-actions button')].map(Value => Value.textContent);
-		return { retiredAbsent: RetiredAbsent, actionsRetained: Actions.join('|') === '提问|生成修改预览|停止', questionAndPreviewKeepSavedScope: Calls.length === 2 && Calls[0][3].Scope === 'captured' && Calls[1][3].Scope === 'note' && Calls.every(Value => Value[3].Mode === 'edit' && Value[3].Role === 'auto'), ordinaryAnswerQuoted: OrdinaryAnswerQuoted, editUiExcluded: EditUiExcluded, noOwnHover: Root.querySelectorAll('[title],[aria-label]').length === 0 };
+		const Toolbar = Root.querySelector('.codex-toolbar'), Composer = Root.querySelector('.codex-composer');
+		const GlassScoped = !!Toolbar && Root.querySelector('.codex-options').parentElement === Toolbar && getComputedStyle(Toolbar).backdropFilter.includes('blur') && getComputedStyle(Composer).backdropFilter.includes('blur') && getComputedStyle(Root.querySelector('.codex-messages')).backdropFilter === 'none';
+		return { retiredAbsent: RetiredAbsent, glassScoped: GlassScoped, actionsRetained: Actions.join('|') === '提问|生成修改预览|停止', questionAndPreviewKeepSavedScope: Calls.length === 2 && Calls[0][3].Scope === 'captured' && Calls[1][3].Scope === 'note' && Calls.every(Value => Value[3].Mode === 'edit' && Value[3].Role === 'auto'), ordinaryAnswerQuoted: OrdinaryAnswerQuoted, editUiExcluded: EditUiExcluded, noOwnHover: Root.querySelectorAll('[title],[aria-label]').length === 0 };
 	}
 	finally { await View.onClose(); if(!Keep) { Root.remove(); } }
 };

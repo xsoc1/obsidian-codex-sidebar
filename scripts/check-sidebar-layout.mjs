@@ -25,13 +25,14 @@ function render(folded,css,height,width,mobile=true,currentComposer=css===styles
 	document.getElementById('plugin').textContent=css;
 	const r=document.getElementById('root');
 	r.replaceChildren();r.style.height=height+'px';r.style.width=width+'px';
-	const nav=folded?Layout.sidebar_panel(r,'codex-navigation','会话与连接 · 微型李代数讲义',mobile):{Body:r};
+	const toolbar=currentComposer&&folded?el(r,'div','codex-toolbar'):r;
+	const nav=folded?Layout.sidebar_panel(toolbar,'codex-navigation','会话与连接 · 微型李代数讲义',mobile):{Body:r};
 	const h=el(nav.Body,'div','codex-header');
 	el(h,'strong','','Codex');el(h,'button','','新会话');el(h,'button','','重连');
 	el(el(nav.Body,'select','codex-sessions'),'option','','微型李代数讲义');
 	el(r,'div','codex-status','回复完成 | math-writing 就绪');
 	window.selectionCard=new Layout.SelectionPreview(r,()=>selectionCard.update(null,true));
-	const c=Layout.sidebar_panel(r,'codex-context-tools','上下文',true);
+	const c=Layout.sidebar_panel(toolbar,'codex-context-tools','上下文',true);
 	const a=el(c.Body,'div','codex-context-actions');
 	['捕获当前位置','选择 PDF 页','解释选区','检查证明'].forEach(t=>el(a,'button','',t));
 	el(c.Body,'div','codex-context','选区: 交换子的定义');
@@ -43,7 +44,7 @@ function render(folded,css,height,width,mobile=true,currentComposer=css===styles
 		el(card,'div','codex-message-body','先看矩阵单位的乘法, 再计算交换子。定义与第一次完整运算留在正文中。');
 	}
 	const p=el(r,'div','codex-composer');
-	const o=Layout.sidebar_panel(p,'codex-options','模型与选项 · gpt-6.1-sol / xhigh',mobile);
+	const o=Layout.sidebar_panel(toolbar===r?p:toolbar,'codex-options','模型与选项 · gpt-6.1-sol / xhigh',mobile);
 	const controls=el(o.Body,'div','codex-controls');
 	['模型','思考档次'].forEach(t=>{const l=el(controls,'label','',t);el(el(l,'select'),'option','',t==='模型'?'gpt-6.1-sol':'xhigh');});
 	const toggles=el(o.Body,'div','codex-run-toggles');
@@ -235,7 +236,8 @@ try
 			const stableActions=actions.every((button,index)=>{const r=button.getBoundingClientRect();return [r.x,r.y,r.width,r.height].every((v,k)=>Math.abs(v-before[index][k])<0.5);});
 			composerActions.refresh(false,false,false);
 			const actionsReachable=actions.every(reachable_button);
-			const allButtonsReachable=[...root.querySelectorAll('.codex-header button,.codex-context-actions button,.codex-compose-actions button')].every(reachable_button);
+			const unreachableButtons=[...root.querySelectorAll('.codex-header button,.codex-context-actions button,.codex-compose-actions button')].filter(button=>!reachable_button(button)).map(button=>button.textContent);
+			const allButtonsReachable=unreachableButtons.length===0;
 			const controls=root.querySelector('.codex-controls');const labels=[...controls.querySelectorAll('label')];
 			const modelSingleColumn=labels[1].getBoundingClientRect().top>labels[0].getBoundingClientRect().top+1;
 			window.submissions=[];
@@ -252,7 +254,7 @@ try
 			const savedFoldRestored=restored.Details.open&&saved.get('fixture-fold')==='open';holder.remove();
 			window.polishSpinner=el(root,'div','codex-spinner');polishSpinner.style.position='absolute';polishSpinner.style.left='-9999px';
 			composerActions.Question.focus();
-			return {buttons,stableActions,actionsReachable,allButtonsReachable,localOverflow,stressContained,modelSingleColumn,keyboardPreserved,savedFoldRestored,overflow:root.scrollWidth>root.clientWidth+1,hover:root.querySelectorAll('[title],[aria-label]').length};
+			return {buttons,stableActions,actionsReachable,allButtonsReachable,unreachableButtons,localOverflow,stressContained,modelSingleColumn,keyboardPreserved,savedFoldRestored,overflow:root.scrollWidth>root.clientWidth+1,hover:root.querySelectorAll('[title],[aria-label]').length};
 		})()`, returnByValue: true, awaitPromise: true });
 		assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails));
 		await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
@@ -287,6 +289,27 @@ try
 			writeFileSync(join(Directory, `expanded-${Surface}-${Width}-${Theme}.png`), Buffer.from(Shot.data, "base64"));
 		}
 	}
+	const GlassRows = [];
+	for(const Theme of ["theme-dark", "theme-light"])
+	for(const Width of [320,540])
+	{
+		await call("Emulation.setEmulatedMedia", { features: [] });
+		const Normal = await call("Runtime.evaluate", { expression: `(()=>{
+			document.body.className='${Theme}';render_polish(styles,620,${Width},false);
+			const toolbar=document.querySelector('.codex-toolbar'),composer=document.querySelector('.codex-composer'),messages=document.querySelector('.codex-messages');
+			const normal=[toolbar,composer].every(el=>getComputedStyle(el).backdropFilter.includes('blur'))&&getComputedStyle(messages).backdropFilter==='none';
+			const sheet=document.getElementById('plugin').sheet;
+			for(let i=sheet.cssRules.length-1;i>=0;i--){const rule=sheet.cssRules[i];if(rule.type===CSSRule.SUPPORTS_RULE&&rule.conditionText.includes('backdrop-filter'))sheet.deleteRule(i);}
+			const fallback=[toolbar,composer].every(el=>getComputedStyle(el).backdropFilter==='none'&&!getComputedStyle(el).backgroundColor.startsWith('rgba'));
+			return {normal,fallback};
+		})()`, returnByValue: true });
+		assert.ok(!Normal.exceptionDetails, JSON.stringify(Normal.exceptionDetails));
+		await call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: "reduce" }] });
+		const Reduced = await call("Runtime.evaluate", { expression: `(()=>{document.getElementById('plugin').textContent=styles;return matchMedia('(prefers-reduced-transparency: reduce)').matches&&[...document.querySelectorAll('.codex-toolbar,.codex-composer')].every(el=>getComputedStyle(el).backdropFilter==='none'&&!getComputedStyle(el).backgroundColor.startsWith('rgba'));})()`, returnByValue: true });
+		assert.ok(Normal.result.value.normal && Normal.result.value.fallback && Reduced.result.value, JSON.stringify({ Normal, Reduced }));
+		GlassRows.push({ theme: Theme, width: Width, ...Normal.result.value, reducedTransparency: Reduced.result.value });
+	}
+	await call("Emulation.setEmulatedMedia", { features: [] });
 	const FooterRows = [];
 	for(const Theme of ["theme-dark", "theme-light"])
 	for(const Width of [240,540])
@@ -318,7 +341,7 @@ try
 	await call("Runtime.evaluate", { expression: "document.body.className='theme-dark';render(true,styles,720,320,false)" });
 	const Shot = await call("Page.captureScreenshot", { format: "png" });
 	writeFileSync(join(Directory, "after.png"), Buffer.from(Shot.data, "base64"));
-	writeFileSync(join(Directory, "report.json"), JSON.stringify({ tier: "headless CSS fixture with simulated wide math, not native MathJax, manual IME or iPad device acceptance", baseline: "0.14.0 / 9d80263", rows: Rows, polishRows: PolishRows, footerRows: FooterRows }, null, 2));
-	console.log(JSON.stringify({ directory: Directory, legacyCases: Rows.length, polishCases: PolishRows.length, footerCases: FooterRows.length, rows: Rows, polishRows: PolishRows, footerRows: FooterRows }, null, 2));
+	writeFileSync(join(Directory, "report.json"), JSON.stringify({ tier: "headless CSS fixture with simulated wide math, not native MathJax, manual IME or iPad device acceptance", baseline: "0.14.0 / 9d80263", rows: Rows, polishRows: PolishRows, footerRows: FooterRows, glassRows: GlassRows }, null, 2));
+	console.log(JSON.stringify({ directory: Directory, legacyCases: Rows.length, polishCases: PolishRows.length, footerCases: FooterRows.length, glassCases: GlassRows.length, rows: Rows, polishRows: PolishRows, footerRows: FooterRows, glassRows: GlassRows }, null, 2));
 }
 finally { Socket?.close(); Child.kill(); }

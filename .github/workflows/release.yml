@@ -37,15 +37,23 @@ jobs:
           cp docs/ipad-setup.md dist/bridge/README.md
           (cd dist/plugin && zip -q "../codex-sidebar-${VERSION}.zip" *)
           (cd dist/bridge && zip -qr "../codex-sidebar-windows-bridge-${VERSION}.zip" .)
-      - name: Publish complete prerelease assets for BRAT
+      - name: Publish complete release assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           VERSION="$GITHUB_REF_NAME"
+          RELEASE_FLAGS=()
+          if [[ "$VERSION" == 0.* || "$VERSION" == *-* ]]; then
+            RELEASE_FLAGS+=(--prerelease)
+          fi
           gh release create "$VERSION" manifest.json main.js main.js.map styles.css \
             "dist/codex-sidebar-${VERSION}.zip" "dist/codex-sidebar-windows-bridge-${VERSION}.zip" \
-            --verify-tag --draft --prerelease --title "$VERSION - Obsidian Codex Sidebar" \
+            --verify-tag --draft "${RELEASE_FLAGS[@]}" --title "$VERSION - Obsidian Codex Sidebar" \
             --notes-file "docs/releases/${VERSION}.md"
-          gh release edit "$VERSION" --draft=false
+          if [[ "$VERSION" == 0.* || "$VERSION" == *-* ]]; then
+            gh release edit "$VERSION" --draft=false
+          else
+            gh release edit "$VERSION" --draft=false --prerelease=false --latest
+          fi
