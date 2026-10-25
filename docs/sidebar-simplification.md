@@ -1,6 +1,6 @@
 # 侧栏精简与工作台移除
 
-0.16.0, 2026-10-25. 用户已明确授权 Windows 安装与 GitHub 发布. Windows 安装及原生界面核对已完成, GitHub 发布待完成; 实际进度与验证记录见 [版本说明](releases/0.16.0.md).
+0.16.0, 2026-10-25. 用户已明确授权 Windows 安装与 GitHub 发布. Windows 安装及原生界面核对已完成, [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.16.0)、CI 和公共资产回读均已完成; 实际进度与验证记录见 [版本说明](releases/0.16.0.md).
 
 ## 使用变化
 
