@@ -1,5 +1,7 @@
 # Codex Sidebar
 
+**视觉改进调研 (2026-10-25, 尚未实施)**: 结合当前 0.16.0 与官方样式/API 文档, 比较原生精简、局部阅读卡片和小面积磨砂. 推荐保留正文阅读面积, 优先统一层次、排版与输入区. 独立对照稿的检查不替代实际插件或 iPad 验收. [调研与实施顺序](docs/sidebar-visual-research.md).
+
 **0.16.0**: 精简侧栏, 移除笔记路径/“笔记对应会话”提示行, 将“随笔记切换会话”和“修改范围”移到插件设置. 数学学习工作台及其练习、学习记录管理、课程清单、样章流程和导出功能已移除; 普通问答、PDF、math-writing、回答追问、修改预览与确认写回保留. 旧聊天可查看, 旧工作台记录不读写、不自动清除. 构建和 117 项测试、明暗桌面/移动布局、实际 CodexView 的 SDK 流式与完整打开流程检查通过; 320/540px 截图确认所需控件已移除且操作按钮可见. 已按授权安装 Windows, 原生界面确认两项设置及三个按钮正常, 原 20 个会话和来源/设备状态保留, 七个模型与技能正常. [GitHub/BRAT 预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/0.16.0) 及 [CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40166650838) 成功, 六件公共资产和两份 ZIP 校验通过, 插件与 Windows 安装一致, Downloads 已同步公开包. 本轮没有真实模型请求或 iPad 真机验收; [使用与迁移](docs/sidebar-simplification.md), [版本记录](docs/releases/0.16.0.md).
 
 以下为此前版本的历史记录, 不代表其检查已在 0.16.0 重新执行.
