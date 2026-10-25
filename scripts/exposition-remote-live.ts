@@ -49,7 +49,7 @@ async function run_live(): Promise<void>
 		const Session = randomUUID(), Instructions = client_instructions(DefaultInstructions, null);
 		const Thread = await Client.request("thread/start", { clientSessionId: Session, model: "gpt-6.1-sol", developerInstructions: Instructions, serviceTier: "default", config: { model_reasoning_effort: "low" } });
 		await Client.request("thread/inject_items", { threadId: Thread.thread.id, items: instruction_items(Instructions) });
-		const State = { Settings: { Model: "gpt-6.1-sol", Effort: "low", Fast: false }, Sessions: [{ Id: Session, ThreadId: Thread.thread.id, Messages: [{ Id: "original-question", Role: "user", Text: Input.Task!.Request, Prompt: Input.Prompt, Task: Input.Task, Context: Input.Source }] }], ActiveId: Session };
+		const State = { Settings: { Model: "gpt-6.1-sol", Effort: "low", Fast: false }, Sessions: [{ Id: Session, ThreadId: Thread.thread.id, Messages: [{ Id: "original-question", Role: "user", Text: DevelopmentCases.find(Value => Value.Id === "D03")!.Request, Prompt: Input.Prompt, Task: Input.Task, Context: Input.Source }] }], ActiveId: Session };
 		await Client.sync_state(State);
 		reserve_request(Directory, "remote/D03");
 		writeFileSync(LedgerPath, JSON.stringify({ status: "submitting", plannedRequests: 1, sample: "D03", skill: "production-selected 0.2.0; plugin-only", startedAt: new Date().toISOString() }, null, 2));
@@ -59,7 +59,7 @@ async function run_live(): Promise<void>
 		const Resume = await Client.request("bridge/resume", { threadId: Thread.thread.id });
 		assert.equal(Resume.thread.id, Thread.thread.id); assert.equal(Resume.thread.path, null);
 		const Restored = await Http("/state", "GET");
-		assert.deepEqual(Restored.state.Sessions[0].Messages[0].Task.Source, Input.Source);
+		assert.deepEqual(Restored.state.Sessions[0].Messages[0].Context, Input.Source);
 		assert.ok(Restored.state.Sessions[0].Messages.some((Value: any) => Value.Role === "assistant" && Value.Text));
 		const Started = Calls.find(Value => Value.Method === "thread/start").Params;
 		assert.equal(Started.approvalPolicy, "never"); assert.equal(Started.sandbox, "read-only"); assert.equal(Started.ephemeral, true);

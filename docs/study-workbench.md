@@ -1,5 +1,7 @@
 # 数学学习工作台 (0.7.0 实验版)
 
+> 历史归档: 数学学习工作台在 0.16.0 已移除. 本文只记录旧版本设计/使用/验证, 不是当前功能指南. 旧学习记录原样保留, 新版不读写; 迁移与回退见 [侧栏精简说明](sidebar-simplification.md). 旧脚本和示范清单可在 [0.15.1 源码](https://github.com/xsoc1/obsidian-codex-sidebar/tree/0.15.1) 查看, 当前源码不再提供这些执行入口.
+
 工作台在原 Codex 侧栏的“数学学习工作台”中, 复用原模型选择、会话、引用和重发. iPad 先点开“上下文与学习”, 再展开工作台; 普通聊天时上下控件默认收起. 构建本身不会更新日常插件或远程服务; GitHub/BRAT 使用预发布 0.7.0.
 
 ## 伴读与一题一练
@@ -14,7 +16,7 @@
 
 ## 可选课程清单
 
-旧笔记没有清单也可以伴读与临时练习. 可将 [示范文件](../examples/study/demo.study.json) 和同目录两篇原创讲义复制到独立测试 vault 根目录, 填入 demo.study.json 加载. 清单关联课程、标题单元、直接前置、来源和稳定练习 ID. 解答保留 unverified; 来源 user-checked 仅表示用户登记核对.
+旧笔记没有清单也可以伴读与临时练习. 可将 [历史示范文件](https://github.com/xsoc1/obsidian-codex-sidebar/blob/0.15.1/examples/study/demo.study.json) 和同目录两篇原创讲义复制到独立测试 vault 根目录, 填入 demo.study.json 加载. 清单关联课程、标题单元、直接前置、来源和稳定练习 ID. 解答保留 unverified; 来源 user-checked 仅表示用户登记核对.
 
 勾选直接前置才补读清单中最多三段, 每段不超过 4000 字符, 不搜索/上传整个 vault. 同 ID 的历史尝试不因重新加载覆盖; 题目内容或正文版本变化会标记变化, 不用旧尝试认证新题.
 

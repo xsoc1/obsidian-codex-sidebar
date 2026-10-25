@@ -1,7 +1,7 @@
 // Temporary native component; replay only original model output, never replace the daily plugin.
 import { Plugin, MarkdownView, Component, Platform } from "obsidian";
 import { ContextCapture } from "../src/context";
-import { ObsidianWriteHost } from "../src/study/obsidian-host";
+import { ObsidianWriteHost } from "../src/edit/obsidian-host";
 import { ChatEdits } from "../src/edit/controller";
 import { EditStore } from "../src/edit/store";
 import { render_edit } from "../src/edit/panel";

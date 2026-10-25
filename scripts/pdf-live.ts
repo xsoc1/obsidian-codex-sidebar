@@ -8,8 +8,6 @@ import { RemoteBridge, token_hash } from "../src/bridge";
 import { jpeg_info, pdf_hash, pdf_reference } from "../src/pdf/types";
 import { build_prompt, DefaultInstructions, instruction_items, type ContextSnapshot } from "../src/prompt";
 import { history_items } from "../src/history";
-import { parse_output } from "../src/study/schema";
-import { make_task, task_prompt } from "../src/study/task";
 
 async function run_live()
 {
@@ -29,7 +27,7 @@ async function run_live()
 		assert.equal(Response.status, 200, Value.error ?? "RPC failed"); return Value;
 	};
 	const Results: any[] = [];
-	const ExerciseOnly = process.env.CODEX_PDF_TEST_STAGE === "exercise";
+	const TextOnly = process.env.CODEX_PDF_TEST_STAGE === "text";
 	const VisionOnly = process.env.CODEX_PDF_TEST_STAGE === "vision";
 	try
 	{
@@ -64,7 +62,7 @@ async function run_live()
 				if(Turn?.status === "completed")
 				{
 					assert.ok(Text); Results.push({ inputs: InputItems.length, status: Turn.status, text: Text });
-					writeFileSync(join(Directory, "progress-private.json"), JSON.stringify({ results: Results, stage: ExerciseOnly ? "exercise" : VisionOnly ? "vision" : "full" }, null, 2));
+					writeFileSync(join(Directory, "progress-private.json"), JSON.stringify({ results: Results, stage: TextOnly ? "text" : VisionOnly ? "vision" : "full" }, null, 2));
 					process.stdout.write(`completed original PDF request ${Results.length}\n`); return Text;
 				}
 				if(Turn?.status === "failed") { throw new Error(JSON.stringify(Turn.error)); }
@@ -82,7 +80,7 @@ async function run_live()
 		const Scan = Sources.find(Value => Value.Mapping === "PDF页图")!;
 		assert.ok(!Scan.Text.includes("PHI-2718"));
 		const Prompt = build_prompt("直接读图, 复述页面中 Visual marker 的值, 再解释展开式中间项和页面中的数值核验. 不读其他文件, 不反问.", Scan);
-		if(!ExerciseOnly)
+		if(!TextOnly)
 		{
 			const First = await turn(await thread("scan"), Prompt, Scan);
 			assert.match(First, /PHI[−–-]2718/); assert.match(First, /25/);
@@ -97,11 +95,10 @@ async function run_live()
 		if(!VisionOnly)
 		{
 			const TextSource = Sources.find(Value => Value.Mapping === "PDF文本层")!;
-			const Exercise = make_task("exercise", TextSource, "根据完整矩阵交换子计算派生一道相近练习, 给三个递进提示和完整答案, 不读取文件.", "source-excerpt");
-			const ExerciseText = await turn(await thread("text-exercise"), task_prompt(Exercise), TextSource);
-			parse_output("exercise", ExerciseText);
+			const TextPrompt = build_prompt("解释这页矩阵交换子计算中两种乘法次序的差别, 给出具体依据, 不读取文件.", TextSource);
+			await turn(await thread("text-explanation"), TextPrompt, TextSource);
 		}
-		const Report = { schemaVersion: 1, stage: ExerciseOnly ? "exercise" : VisionOnly ? "vision" : "full", originalOnly: true, model: Model.model, effort: Effort, bridgeRestartCache: !ExerciseOnly, actualImageInput: true, rawHistoryImageAccepted: !ExerciseOnly, structuredExerciseSchemaPassed: !VisionOnly, results: Results };
+		const Report = { schemaVersion: 1, stage: TextOnly ? "text" : VisionOnly ? "vision" : "full", originalOnly: true, model: Model.model, effort: Effort, bridgeRestartCache: !TextOnly, actualImageInput: true, rawHistoryImageAccepted: !TextOnly, textExplanationCompleted: !VisionOnly, results: Results };
 		writeFileSync(join(Directory, "result-private.json"), JSON.stringify(Report, null, 2));
 		process.stdout.write(`PDF live acceptance passed; private evidence: ${Directory}\n`);
 	}

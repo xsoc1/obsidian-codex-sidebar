@@ -11,7 +11,7 @@ const Browser = process.env.CODEX_LAYOUT_BROWSER;
 const AppCss = process.env.CODEX_LAYOUT_APP_CSS;
 if(!Browser || !AppCss) { throw new Error("Set CODEX_LAYOUT_BROWSER and CODEX_LAYOUT_APP_CSS (public Obsidian app.css)"); }
 const Directory = mkdtempSync(join(tmpdir(), "codex-sidebar-layout-"));
-await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { observe_sidebar_footer } from "./src/sidebar-footer"; export { EditOptions } from "./src/edit/options"; export { ComposerActions } from "./src/edit/composer"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
+await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { observe_sidebar_footer } from "./src/sidebar-footer"; export { ComposerActions } from "./src/edit/composer"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
 const Baseline = execFileSync("git", ["show", "665d76f:styles.css"], { encoding: "utf8" });
 // Keep the original folding comparison above; UI polish compares the same current DOM.
 const PolishBaseline = execFileSync("git", ["show", "9d80263:styles.css"], { encoding: "utf8" });
@@ -31,11 +31,10 @@ function render(folded,css,height,width,mobile=true,currentComposer=css===styles
 	el(el(nav.Body,'select','codex-sessions'),'option','','微型李代数讲义');
 	el(r,'div','codex-status','回复完成 | math-writing 就绪');
 	window.selectionCard=new Layout.SelectionPreview(r,()=>selectionCard.update(null,true));
-	const c=Layout.sidebar_panel(r,'codex-context-tools','上下文与学习',true);
+	const c=Layout.sidebar_panel(r,'codex-context-tools','上下文',true);
 	const a=el(c.Body,'div','codex-context-actions');
 	['捕获当前位置','选择 PDF 页','解释选区','检查证明'].forEach(t=>el(a,'button','',t));
 	el(c.Body,'div','codex-context','选区: 交换子的定义');
-	const study=el(c.Body,'details','codex-study-container');el(study,'summary','','数学学习工作台');
 	const m=el(r,'div','codex-messages');
 	for(let i=0;i<4;i++)
 	{
@@ -52,7 +51,6 @@ function render(folded,css,height,width,mobile=true,currentComposer=css===styles
 	el(o.Body,'div','codex-usage','上下文 ~28%');
 	const send=folded?Layout.sidebar_panel(p,'codex-send-tools','提问与发送',mobile):{Body:p};
 	const input=el(send.Body,'textarea');input.placeholder='随时提问... Enter 提问, Shift+Enter 换行';
-	if(currentComposer)window.editOptions=new Layout.EditOptions(send.Body,()=>{});
 	const actions=el(send.Body,'div','codex-compose-actions');
 	window.submissions=[];if(currentComposer)window.composerActions=new Layout.ComposerActions(actions,input,mode=>submissions.push(mode),()=>{});else{el(actions,'button','','发送');el(actions,'button','','停止');}
 	return {messageHeight:m.getBoundingClientRect().height,rootHeight:r.clientHeight,scrollHeight:r.scrollHeight,composerHeight:p.getBoundingClientRect().height};
@@ -149,25 +147,24 @@ try
 			compose.querySelector('summary').click();
 			Layout.reveal_sidebar_panel({Details:compose});input.focus();
 			const draftPreserved=input===compose.querySelector('textarea')&&input.value==='中文草稿 $[X,Y]$'&&input.selectionStart===2&&input.selectionEnd===4;
-			const edit=root.querySelector('.codex-edit-options');const editFolded=!edit.open;
+			const retiredControlsAbsent=!root.querySelector('.codex-edit-options,.codex-study-container,.codex-note-session-status,.codex-note-session-toggle');
 			const explicitActionsVisible=composerActions.Question.checkVisibility()&&composerActions.Preview.checkVisibility();
 			composerActions.refresh(false,false,false);composerActions.Preview.click();
 			input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',cancelable:true}));
 			const routes=submissions.join(',')==='edit,question';
-			edit.open=true;editOptions.Scope.value='captured';edit.open=false;edit.open=true;
-			const editPreserved=explicitActionsVisible&&routes&&editOptions.Scope.value==='captured'&&editOptions.values().Role==='auto'&&edit.querySelectorAll('select').length===1&&[...edit.querySelectorAll('select')].every(s=>s.labels.length===1);edit.open=false;
+			const actionsPreserved=explicitActionsVisible&&routes;
 			const focusRestored=document.activeElement===input;
 			options.open=true;const select=options.querySelector('select');select.value='gpt-6.1-sol';options.open=false;
 			navigation.querySelector('summary').click();const session=navigation.querySelector('select');const selectedSession=session.value;navigation.querySelector('summary').click();
 			root.scrollTop=root.scrollHeight;
 			const send=[...root.querySelectorAll('button')].find(e=>e.textContent==='生成修改预览');
 			const rect=send.getBoundingClientRect(),bounds=root.getBoundingClientRect();
-			return {theme:'${Theme}',width:${Width},height:${Height},before,after,defaultFolded,initiallyHidden,draftPreserved,editFolded,editPreserved,focusRestored,sendReachable:rect.bottom<=bounds.bottom&&rect.top>=bounds.top,preserved:select.value==='gpt-6.1-sol'&&session.value===selectedSession,contextClosed:!root.querySelector('.codex-context-tools').open,optionsClosed:!options.open,navigationClosed:!navigation.open,overflow:root.scrollWidth>root.clientWidth,hover:root.querySelectorAll('[title],[aria-label]').length};
+			return {theme:'${Theme}',width:${Width},height:${Height},before,after,defaultFolded,initiallyHidden,draftPreserved,retiredControlsAbsent,actionsPreserved,focusRestored,sendReachable:rect.bottom<=bounds.bottom&&rect.top>=bounds.top,preserved:select.value==='gpt-6.1-sol'&&session.value===selectedSession,contextClosed:!root.querySelector('.codex-context-tools').open,optionsClosed:!options.open,navigationClosed:!navigation.open,overflow:root.scrollWidth>root.clientWidth,hover:root.querySelectorAll('[title],[aria-label]').length};
 		})()`, returnByValue: true });
 		assert.ok(!Result.exceptionDetails, "Fixture evaluation failed");
 		const Row = Result.result.value; Rows.push(Row);
 		assert.ok(Row.after.messageHeight > Row.before.messageHeight + (Height > 400 ? 70 : 0), "Controls still squeeze the answer area");
-		assert.ok(Row.defaultFolded && Row.initiallyHidden && Row.draftPreserved && Row.editFolded && Row.editPreserved && Row.focusRestored && Row.sendReachable && Row.preserved && Row.contextClosed && Row.optionsClosed && Row.navigationClosed && !Row.overflow && !Row.hover, JSON.stringify(Row));
+		assert.ok(Row.defaultFolded && Row.initiallyHidden && Row.draftPreserved && Row.retiredControlsAbsent && Row.actionsPreserved && Row.focusRestored && Row.sendReachable && Row.preserved && Row.contextClosed && Row.optionsClosed && Row.navigationClosed && !Row.overflow && !Row.hover, JSON.stringify(Row));
 	}
 	for(const Theme of ["theme-dark", "theme-light"])
 	for(const [Width, Height] of [[450,720],[320,620]])
@@ -201,7 +198,6 @@ try
 			document.body.className='${Mobile ? "is-mobile is-tablet " : ""}${Theme}';
 			render_polish(polishBaseline,${Height},${Width},${Mobile});
 			window.polishInput=document.querySelector('.codex-send-tools textarea');polishInput.value='中文草稿与 $[X,Y]$';polishInput.setSelectionRange(2,4);
-			window.polishScope=editOptions.Scope;polishScope.value='captured';
 			window.polishBefore=reading_metrics();return polishBefore;
 		})()`, returnByValue: true });
 		assert.ok(!Before.exceptionDetails, JSON.stringify(Before.exceptionDetails));
@@ -214,12 +210,12 @@ try
 		const Comparison = await call("Runtime.evaluate", { expression: `(()=>{
 			document.getElementById('plugin').textContent=styles;
 			const root=document.getElementById('root');
-			return {before:polishBefore,after:reading_metrics(),sameNodes:polishInput===root.querySelector('.codex-send-tools textarea')&&polishScope===editOptions.Scope,draftPreserved:polishInput.value==='中文草稿与 $[X,Y]$'&&polishInput.selectionStart===2&&polishInput.selectionEnd===4,scopePreserved:polishScope.value==='captured',foldsPreserved:[...root.querySelectorAll('.codex-navigation,.codex-context-tools,.codex-options,.codex-send-tools')].every(panel=>!panel.open)};
+			return {before:polishBefore,after:reading_metrics(),sameNodes:polishInput===root.querySelector('.codex-send-tools textarea'),draftPreserved:polishInput.value==='中文草稿与 $[X,Y]$'&&polishInput.selectionStart===2&&polishInput.selectionEnd===4,foldsPreserved:[...root.querySelectorAll('.codex-navigation,.codex-context-tools,.codex-options,.codex-send-tools')].every(panel=>!panel.open)};
 		})()`, returnByValue: true });
 		assert.ok(!Comparison.exceptionDetails, JSON.stringify(Comparison.exceptionDetails));
 		const Sizes = Comparison.result.value;
 		assert.ok(Sizes.after.width + 0.5 >= Sizes.before.width && Sizes.after.height + 0.5 >= Sizes.before.height, `Folded reading area regressed: ${JSON.stringify({ Theme, Mobile, Width, ...Sizes })}`);
-		assert.ok(Sizes.sameNodes && Sizes.draftPreserved && Sizes.scopePreserved && Sizes.foldsPreserved, JSON.stringify(Sizes));
+		assert.ok(Sizes.sameNodes && Sizes.draftPreserved && Sizes.foldsPreserved, JSON.stringify(Sizes));
 		if(Capture)
 		{
 			const Shot = await call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: Width, height: Height, scale: 1 } });

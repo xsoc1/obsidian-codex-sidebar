@@ -1,5 +1,5 @@
 import { build_prompt, type ContextSnapshot, type AnswerQuote } from "./prompt";
-import type { TaskSpec } from "./study/task";
+import type { TaskSpec } from "./edit/task";
 import { message_pdf_refs } from "./pdf/inputs";
 
 export interface ChatMessage

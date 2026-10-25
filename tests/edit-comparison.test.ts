@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
 import { runInNewContext } from "node:vm";
-import { comparison_texts } from "../src/study/comparison-text";
+import { comparison_texts } from "../src/edit/comparison-text";
 
 class Element
 {
@@ -34,6 +34,7 @@ test("edit differences render complete original and proposed formula contexts; r
 	const Plan = { Id: "original-plan", TaskId: Task.Id, Target, After: Before.slice(0, From) + Replacement + Before.slice(From + Original.length), State: "preview" };
 	const Root = new Element(), Component = { register: () => {} };
 	await Export.exports.render_edit({}, Root, { Store: { Data: { Records: [Record], Writes: [Plan] } } }, Task, Component, () => {});
+	assert.equal(Root.dataset.editStructured, "true", "edit controls and source comparisons must not become assistant-answer quotes");
 	await new Promise(Resolve => setTimeout(Resolve, 0));
 	assert.ok(Rendered.includes(Original), "the old formula must be rendered, not left only in a PRE diff");
 	assert.ok(Rendered.includes(Replacement), "the proposed formula must be rendered without +/- line prefixes");

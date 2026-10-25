@@ -8,10 +8,9 @@ import { exposition_input } from "./exposition-input";
 import { CodexConnection, type RpcMessage } from "../src/rpc";
 import { skill_input, type SkillInput } from "../src/skills";
 import * as CandidatePrompt from "../src/prompt";
-import * as CandidateTask from "../src/study/task";
+import * as CandidateTask from "../src/edit/task";
 import { history_items } from "../src/history";
 import { parse_edit } from "../src/edit/protocol";
-import { parse_output } from "../src/study/schema";
 import { parse_completion, MathCompletionInstructions } from "../src/completion";
 import { reserve_request } from "./exposition-budget";
 
@@ -124,7 +123,6 @@ async function run_live(): Promise<void>
 					writeFileSync(join(Directory, Variant + (Run === "initial" ? "" : "-" + Run) + "-" + Sample.Id + ".json"), JSON.stringify({ entry: Entry, input: Input, output: Output, turnStatus: Completed.status, commands: Commands.filter(Value => Value.turnId === Turn.turn.id) }, null, 2));
 					if(Completed.status !== "completed" || !Output) { throw new Error("Inference did not complete with a final answer"); }
 					if(Sample.Action === "edit") { parse_edit(Output); }
-					else if(["sample", "chapter", "proposal", "exercise", "feedback", "solution"].includes(Sample.Action)) { parse_output(Sample.Action as any, Output); }
 					else if(Sample.Action === "completion") { parse_completion(Output); }
 					Entry.status = "completed"; Entry.outputSha256 = hash(Output);
 				}

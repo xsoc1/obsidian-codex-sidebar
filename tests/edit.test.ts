@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { ChatEdits } from "../src/edit/controller";
 import { EditStore } from "../src/edit/store";
 import { bind_edit, parse_edit, safe_edit_markdown } from "../src/edit/protocol";
-import { task_prompt } from "../src/study/task";
-import { version_of } from "../src/study/document";
+import { task_prompt } from "../src/edit/task";
+import { version_of } from "../src/edit/document";
 import type { ContextSnapshot } from "../src/prompt";
 import { search_window } from "../src/edit/range";
 

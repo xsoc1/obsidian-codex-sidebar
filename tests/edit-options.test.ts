@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EditOptions } from "../src/edit/options";
+import { edit_scope, EditScopeOptions } from "../src/edit/options";
 import { ComposerActions, type ComposeAction } from "../src/edit/composer";
 
 class Element
@@ -34,19 +34,14 @@ class Element
 	setText(Text: string): void { this.textContent = Text; }
 }
 
-test("composer options expose only the modification range with automatic source-role inference", () =>
+test("saved modification range accepts known choices and safely migrates absent or invalid legacy values", () =>
 {
-	const Root = new Element(), Options = new EditOptions(Root as any, () => {});
-	assert.equal((Options.Scope.parentElement!.parentElement as any).Tag, "details");
-	assert.equal(Options.Scope.value, "ai");
-	const All = (Value: Element): Element[] => [Value, ...Value.children.flatMap(All)], Elements = All(Root);
-	assert.equal(Elements.filter(Value => Value.Tag === "select").length, 1);
-	assert.ok(Elements.every(Value => !["本轮方式", "原文类型", "修改范围与原文类型"].includes(Value.textContent)));
 	for(const Scope of ["ai", "captured", "note"])
 	{
-		Options.Scope.value = Scope; assert.deepEqual(Options.values(), { Scope, Role: "auto" });
+		assert.equal(edit_scope(Scope), Scope);
 	}
-	assert.ok(Elements.every(Value => !Value.Attributes.title && !Value.Attributes["aria-label"]));
+	for(const Invalid of [undefined, null, "", "all-files", "__proto__", {}, 1]) { assert.equal(edit_scope(Invalid), "ai"); }
+	assert.equal(Object.keys(EditScopeOptions).length, 3);
 });
 
 test("the two stable action buttons and Enter choose an explicit route while Shift+Enter, IME and Tab remain native", () =>

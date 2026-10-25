@@ -1,7 +1,7 @@
 import type { ContextSnapshot } from "../prompt";
 import type { ChatMessage } from "../history";
-import { make_task, type TaskSpec } from "../study/task";
-import { ConfirmedWriter, type WriteHost } from "../study/writer";
+import { make_task, type TaskSpec } from "./task";
+import { ConfirmedWriter, type WriteHost } from "./writer";
 import { bind_edit, edit_plan, parse_edit, type EditRole, type EditScope } from "./protocol";
 import { EditStore, type EditData } from "./store";
 

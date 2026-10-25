@@ -1,5 +1,7 @@
 # 交互协议与技能衔接
 
+> 历史归档: 数学学习工作台在 0.16.0 已移除. 本文只记录旧版本设计/使用/验证, 不是当前功能指南. 旧学习记录原样保留, 新版不读写; 迁移与回退见 [侧栏精简说明](sidebar-simplification.md). 旧脚本和示范清单可在 [0.15.1 源码](https://github.com/xsoc1/obsidian-codex-sidebar/tree/0.15.1) 查看, 当前源码不再提供这些执行入口.
+
 ## 模块与来源
 
 src/study 分为 task、schema、document、manifest、store/validate-store、controller、writer、obsidian-host、diff、presentation、panel、export. main.ts 只接线原会话与呈现, 没有新聊天后端或前端框架. 前端不静态引入 Node/Electron.

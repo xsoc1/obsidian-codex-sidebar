@@ -1,9 +1,9 @@
-import type { InputRole, StudyAction } from "../../src/study/schema";
+import type { InputRole, TaskAction } from "../../src/edit/task";
 
 export interface ExpositionCase
 {
 	Id: string;
-	Action: StudyAction | "chat" | "completion";
+	Action: TaskAction | "chat" | "completion";
 	Request: string;
 	Source: string;
 	Role?: InputRole;

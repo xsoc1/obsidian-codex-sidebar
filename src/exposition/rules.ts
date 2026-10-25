@@ -10,18 +10,6 @@ export const ExpositionRules = `数学表达规则 v${ExpositionVersion}:
 
 export function task_exposition(Action: string): string
 {
-	if(Action === "feedback")
-	{
-		return "反馈表达: explanation 依据学生实际推理给出具体理由, 接受不同正确解法. 不确定时定位缺口; 按 HintLevel 控制提示, 不用完整标准答案覆盖学生思路.";
-	}
-	if(Action === "exercise" || Action === "solution")
-	{
-		return "练习表达: 题面条件完整, 提示逐级指向数学动作, 解答完成所需论证. 未核验状态使用既定字段, 不在各段重复同一句声明.";
-	}
-	if(Action === "sample" || Action === "chapter" || Action === "proposal")
-	{
-		return "讲义表达: markdown 交付完整定义、首次计算、主要证明和直接依赖, 不把它们转成待填空. rationale 只说明具体主线、内容去向或补充缺口; verification 保持既定状态. 影响结论的疑点仍在正文就地说明.";
-	}
 	if(Action === "edit")
 	{
 		return "改稿表达: markdown 只放授权范围的完整采用稿, rationale 说明具体变化及依据. no-change 与 needs-decision 按真实情况使用. 明确的文风修改保留条件、公式、结论和原证明路线; 必须重建时先交用户决定.";

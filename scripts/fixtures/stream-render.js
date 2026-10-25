@@ -1,4 +1,4 @@
-class Component { load() {} unload() {} }
+class Component { load() {} unload() {} registerDomEvent() {} }
 class ItemView extends Component { constructor() { super(); this.app = {}; } }
 const Define = () => ({});
 window.RenderCalls = 0;
@@ -6,7 +6,7 @@ window.require = Name =>
 {
 	if(Name === "obsidian")
 	{
-		return { Component, ItemView, Plugin: Component, PluginSettingTab: Component, Modal: Component, MarkdownView: Component, Notice: Component, MarkdownRenderer: { render: async (_App, Text, Body) => { window.RenderCalls++; await new Promise(Resolve => setTimeout(Resolve, 18)); Body.createEl("p", { text: Text }); if(Text.startsWith("现在展开")) { await window.StreamHook?.(Body); } } } };
+		return { Component, ItemView, Plugin: Component, PluginSettingTab: Component, Modal: Component, MarkdownView: Component, Notice: Component, Platform: { isMobile: false }, MarkdownRenderer: { render: async (_App, Text, Body) => { window.RenderCalls++; await new Promise(Resolve => setTimeout(Resolve, 18)); Body.createEl("p", { text: Text }); if(Text.startsWith("现在展开")) { await window.StreamHook?.(Body); } } } };
 	}
 	if(Name === "@codemirror/state") { return { StateEffect: { define: Define }, StateField: { define: Define }, Prec: { highest: Define } }; }
 	if(Name === "@codemirror/view") { return { WidgetType: Component, keymap: { of: Define }, ViewPlugin: { fromClass: Define } }; }
@@ -21,6 +21,38 @@ HTMLElement.prototype.createDiv = function(Options) { return this.createEl("div"
 HTMLElement.prototype.createSpan = function(Options) { return this.createEl("span", Options); };
 HTMLElement.prototype.setText = function(Text) { this.textContent = Text; };
 HTMLElement.prototype.empty = function() { this.replaceChildren(); };
+HTMLElement.prototype.addClass = function(Name) { this.classList.add(Name); };
+
+window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
+{
+	const Root = document.body.createDiv(); Root.style.cssText = `width:${Width}px;height:720px`; Root.id = 'simplified-sidebar-fixture';
+	const Calls = [], Owner = { State: { Settings: { EditScope: "captured", AttachContext: true, Model: "fixture-model", Effort: "high", Fast: false, Completion: true, ShowUsage: false } }, Session: { Id: "fixture", Title: "原创微型讲义", Messages: [{ Id: "answer", Role: "assistant", Text: "固定矩阵 X 后，交换子为 [X,Y] = XY − YX。把加法与数乘分别代入，可验证其关于 Y 的线性。" }] }, Capture: { Snapshot: null }, Models: [{ model: "fixture-model", displayName: "模型示例", supportedReasoningEfforts: [{ reasoningEffort: "high" }] }], Inline: { get_suggestion: () => null }, Status: "就绪", SkillStatus: "math-writing", CatalogError: "", Busy: false, refresh() {}, async send_chat(...Args) { Calls.push(Args); return true; } };
+	Owner.State.Sessions = [Owner.Session];
+	const View = new Sidebar.CodexView({}, Owner); View.contentEl = Root; View.app = { vault: { getName: () => "disposable-sidebar-fixture" } };
+	try
+	{
+		await View.onOpen();
+		const Text = Root.textContent;
+		const RetiredAbsent = !Root.querySelector('.codex-note-session-status,.codex-note-session-toggle,.codex-edit-options,.codex-study-container') && !/随笔记切换会话|修改范围|数学学习工作台|笔记对应会话/.test(Text);
+		View.Input.value = "修改选中的一段"; await View.send_input("edit");
+		Owner.State.Settings.EditScope = "note"; View.Input.value = "修改当前笔记"; await View.send_input("edit");
+		await View.render_messages();
+		const Body = Root.querySelector('.codex-assistant .codex-message-body'), Selection = window.getSelection(), Range = document.createRange();
+		Range.selectNodeContents(Body); Selection.removeAllRanges(); Selection.addRange(Range);
+		View.capture_answer_selection(); const OrdinaryAnswerQuoted = !!View.SelectedAnswer;
+		Body.dataset.editStructured = 'true'; View.capture_answer_selection(); const EditUiExcluded = View.SelectedAnswer === null;
+		delete Body.dataset.editStructured; Selection.removeAllRanges(); View.capture_answer_selection();
+		if(Keep)
+		{
+			for(const Selector of ['.codex-navigation','.codex-context-tools','.codex-send-tools']) { Root.querySelector(Selector).open = true; }
+			View.Input.value = "请解释这一步的推导。";
+			await View.render_messages();
+		}
+		const Actions = [...Root.querySelectorAll('.codex-compose-actions button')].map(Value => Value.textContent);
+		return { retiredAbsent: RetiredAbsent, actionsRetained: Actions.join('|') === '提问|生成修改预览|停止', questionAndPreviewKeepSavedScope: Calls.length === 2 && Calls[0][3].Scope === 'captured' && Calls[1][3].Scope === 'note' && Calls.every(Value => Value[3].Mode === 'edit' && Value[3].Role === 'auto'), ordinaryAnswerQuoted: OrdinaryAnswerQuoted, editUiExcluded: EditUiExcluded, noOwnHover: Root.querySelectorAll('[title],[aria-label]').length === 0 };
+	}
+	finally { await View.onClose(); if(!Keep) { Root.remove(); } }
+};
 
 window.run_stream_case = async (HistoryCount = 1, Reading = false) =>
 {
@@ -56,8 +88,8 @@ window.run_context_case = async () =>
 	const Snapshot = {Path:'Original.md',Kind:'选区',Mode:'阅读',Mapping:'源块',CapturedAt:'original-time',Text:'原创段落 $x=1$.',LineStart:0,LineEnd:0,Heading:'定义',Truncated:false};
 	const Owner = {Session:{Id:'session',Title:'original',Messages:[]},Capture:{Snapshot},State:{Settings:{AttachContext:true},Sessions:[]},Busy:true,refresh:()=>{}};Owner.State.Sessions=[Owner.Session];
 	const View = new Sidebar.CodexView({},Owner);View.Opened=true;View.Input={value:''};View.ContextElement=Context;View.SelectionPreview={update:()=>{}};
-	for(const Field of ['StatusElement','NoteSessionLabel'])View[Field]=Root.createDiv();
-	View.NoteSessionToggle=Root.createEl('input');View.NoteSessionBind=Root.createEl('button');View.SessionsElement=Root.createEl('select');
+	View.StatusElement=Root.createDiv();
+	View.NoteSessionBind=Root.createEl('button');View.SessionsElement=Root.createEl('select');
 	for(const Method of ['refresh_controls','refresh_completion','refresh_quote','refresh_activity'])View[Method]=()=>{};
 	try{
 		View.refresh();const Details=Context.querySelector('details');Details.open=true;const Checkbox=Context.querySelector('input');

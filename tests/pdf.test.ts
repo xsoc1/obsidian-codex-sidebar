@@ -11,10 +11,7 @@ import { BridgePdfImages } from "../src/pdf/bridge-cache";
 import { image_inputs, message_pdf_refs, history_pdf_refs } from "../src/pdf/inputs";
 import { branch_prefix, history_items } from "../src/history";
 import { build_prompt, type ContextSnapshot } from "../src/prompt";
-import { note_path, source_path } from "../src/study/document";
-import { StudyStore } from "../src/study/store";
-import { StudyController } from "../src/study/controller";
-import { make_task } from "../src/study/task";
+import { note_path, source_path } from "../src/edit/document";
 
 const Data = "data:image/jpeg;base64," + readFileSync("examples/pdf/scanned-page.jpg").toString("base64");
 const Id = createHash("sha256").update(Data).digest("hex");
@@ -73,23 +70,6 @@ test("PDF prompts and replay retain capture time, truncation, page identity and 
 	Original.Pdf!.Pages[0].Number = 2;
 	assert.equal(Copy.Context!.Pdf!.Pages[0].Number, 1);
 	assert.equal(history_pdf_refs([Message]).length, 1);
-});
-
-test("PDF-derived practice survives local restart and binary source changes mark it stale without erasing attempts or permitting PDF writes", async () =>
-{
-	const Local = new Map<string, string>(), Storage = { getItem: (Key: string) => Local.get(Key) ?? null, setItem: (Key: string, Value: string) => Local.set(Key, Value) };
-	const Store = new StudyStore(Storage, "pdf-test");
-	let Version = Snapshot.Version!;
-	const Host: any = { source_version: async () => Version, read_current: async () => { throw new Error("PDF must use binary hash"); }, compare_write: async () => { throw new Error("No authorized write"); }, changed: () => {}, suppress_completion: () => {}, send_task: async () => true };
-	const Controller = new StudyController(Store, Host);
-	Store.change(Value => Value.Pinned = structuredClone(Snapshot));
-	const Task = make_task("exercise", Snapshot, "相近练习", "source-excerpt");
-	await Controller.send(Task);
-	await Controller.accept_result(Task, JSON.stringify({ schemaVersion: 1, kind: "calculation", statement: "计算 $(2+3)^2$", hints: ["展开中间项", "先算两个平方"], solution: "$25$", verification: "unverified" }), true);
-	Controller.hint(); await Controller.attempt("直接平方得到 $25$.");
-	const Restart = new StudyStore(Storage, "pdf-test"); assert.equal(Restart.Data.Exercises[0].Attempts.length, 1); assert.equal(Restart.Data.Pinned!.Pdf!.Pages[0].Image.Id, Id);
-	Version = "b".repeat(64); const Restored = new StudyController(Restart, Host); await Restored.check_versions();
-	assert.equal(Restart.Data.Exercises[0].Stale, true); assert.equal(Restart.Data.Exercises[0].HintUses.length, 1); assert.equal(Restart.Data.Exercises[0].Attempts.length, 1);
 });
 
 function reader_fixture(Scanned = false)

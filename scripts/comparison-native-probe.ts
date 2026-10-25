@@ -1,5 +1,5 @@
 import { Plugin, Component } from "obsidian";
-import { render_comparison } from "../src/study/comparison";
+import { render_comparison } from "../src/edit/comparison";
 
 export default class ComparisonProbe extends Plugin
 {

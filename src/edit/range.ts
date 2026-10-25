@@ -1,6 +1,6 @@
-import type { TaskSpec, WriteTarget } from "../study/task";
+import type { TaskSpec, WriteTarget } from "./task";
 import type { EditOutput } from "./protocol";
-import { valid_range } from "../study/writer";
+import { valid_range } from "./writer";
 
 export function validate_edit_mode(Task: TaskSpec, Output: EditOutput): void
 {

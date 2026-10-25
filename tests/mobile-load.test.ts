@@ -6,14 +6,33 @@ import { runInNewContext } from "node:vm";
 import { webcrypto, randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import { jpeg_info } from "../src/pdf/types";
-import { make_task } from "../src/study/task";
-import { version_of } from "../src/study/document";
+import { version_of } from "../src/edit/document";
 
-async function mobile_fixture(Http?: (Params: any) => Promise<any>)
+async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Files?: Map<string, string>; Local?: Map<string, string> })
 {
-	const Required: string[] = []; const Files = new Map<string, string>(); const Local = new Map<string, string>();
+	const Required: string[] = []; const Files = Saved?.Files ?? new Map<string, string>(); const Local = Saved?.Local ?? new Map<string, string>();
 	const WorkspaceEvents = new Map<string, ((...Args: any[]) => void)[]>(), Views = new Map<string, (Leaf: any) => any>();
-	class Component { }
+	const Tabs: any[] = [], Settings: any[] = [], Notices: string[] = [];
+	class Component { constructor(..._Args: any[]) { } }
+	class Setting
+	{
+		Name = ""; Desc = ""; Controls: any[] = [];
+		constructor(_Root: any) { Settings.push(this); }
+		setName(Value: string) { this.Name = Value; return this; }
+		setDesc(Value: string) { this.Desc = Value; return this; }
+		control(Type: string, Build: (Value: any) => void)
+		{
+			const Value: any = { Type, inputEl: { style: {}, setAttribute() {}, addClass() {} }, Options: {}, setValue(Value: unknown) { this.Value = Value; return this; }, setDisabled(Value: boolean) { this.Disabled = Value; return this; }, setPlaceholder() { return this; }, setButtonText(Text: string) { this.Text = Text; return this; }, setCta() { return this; }, addOption(Key: string, Label: string) { this.Options[Key] = Label; return this; }, onChange(Handler: any) { this.Change = Handler; return this; }, onClick(Handler: any) { this.Click = Handler; return this; } };
+			this.Controls.push(Value); Build(Value); return this;
+		}
+		addToggle(Build: (Value: any) => void) { return this.control("toggle", Build); }
+		addDropdown(Build: (Value: any) => void) { return this.control("dropdown", Build); }
+		addText(Build: (Value: any) => void) { return this.control("text", Build); }
+		addTextArea(Build: (Value: any) => void) { return this.control("textarea", Build); }
+		addButton(Build: (Value: any) => void) { return this.control("button", Build); }
+	}
+	class SettingTab extends Component { containerEl = { empty: () => { Settings.length = 0; }, createEl: () => ({}) }; }
+	class Notice { constructor(Text: string) { Notices.push(Text); } }
 	class Plugin
 	{
 		manifest = { id: "codex-sidebar", dir: ".obsidian/plugins/codex-sidebar" };
@@ -50,8 +69,9 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 			Views.set(Name, Factory);
 		} addCommand()
 		{
-		} addSettingTab()
+		} addSettingTab(Tab: any)
 		{
+			Tabs.push(Tab);
 		} registerMarkdownPostProcessor()
 		{
 		} registerEvent()
@@ -92,7 +112,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 			Required.push(Name);
 			if(Name === "obsidian")
 			{
-				return { Plugin, ItemView: Component, PluginSettingTab: Component, Modal: Component, MarkdownView: Component, Notice: Component, Platform: { isMobileApp: true }, requestUrl: Http };
+				return { Plugin, ItemView: Component, PluginSettingTab: SettingTab, Setting, Modal: Component, MarkdownView: Component, Notice, Platform: { isMobileApp: true }, requestUrl: Http };
 			}
 			if(Name === "@codemirror/state")
 			{
@@ -106,7 +126,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>)
 		}
 	});
 	const Instance = new Export.exports.default(); await Instance.onload();
-	return { Instance, Files, Required, Local, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
+	return { Instance, Files, Required, Local, Tabs, Settings, Notices, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
 }
 
 function bootstrap_http(Before?: (Params: any) => Promise<void>)
@@ -164,7 +184,7 @@ function source_view(Fixture: Awaited<ReturnType<typeof mobile_fixture>>, Path: 
 	return View;
 }
 
-test("native note event handlers in the mobile-safe bundle switch locally without RPC, keep pinned source/history/settings, and defer drafts and turns", async () =>
+test("native note event handlers in the mobile-safe bundle switch locally without RPC, keep source/history/settings, and defer drafts and turns", async () =>
 {
 	const F = await mobile_fixture(), P = F.Instance;
 	try
@@ -174,11 +194,10 @@ test("native note event handlers in the mobile-safe bundle switch locally withou
 		Object.assign(P.State.Settings, { Model: "saved-model", Effort: "xhigh", Fast: true }); const Settings = JSON.stringify(P.State.Settings);
 		await P.NoteSessions.flush(); const A = P.State.ActiveId; assert.notEqual(A, Old); assert.ok(P.State.Sessions.some((Value: any) => Value.Id === Old)); assert.equal(P.Capture.Snapshot.Path, "A.md");
 		P.Session.Messages.push({ Id: "original", Role: "user", Text: "original question", Context: structuredClone(P.Capture.Snapshot) });
-		P.Study.Store.Data.Pinned = structuredClone(P.Capture.Snapshot);
 		P.Busy = true; source_view(F, "B.md", "# B\n\n$x=2$."); F.emit("active-leaf-change"); F.emit("file-open"); await P.NoteSessions.flush();
 		assert.equal(P.State.ActiveId, A); assert.equal(P.Capture.Snapshot.Path, "A.md");
 		P.Busy = false; await P.NoteSessions.flush(); const B = P.State.ActiveId; assert.notEqual(A, B); assert.equal(P.Capture.Snapshot.Path, "B.md");
-		assert.equal(P.Study.Store.Data.Pinned.Path, "A.md"); assert.equal(P.State.Sessions.find((Value: any) => Value.Id === A).Messages[0].Context.Path, "A.md");
+		assert.equal(P.State.Sessions.find((Value: any) => Value.Id === A).Messages[0].Context.Path, "A.md");
 		const Sidebar = F.Views.get("codex-sidebar-view")!({}); Sidebar.Input = { value: "中文草稿" };
 		P.app.workspace.getLeavesOfType = (Type: string) => Type === "codex-sidebar-view" ? [{ view: Sidebar }] : [];
 		source_view(F, "A.md", "# A\n\n$x=1$."); F.emit("file-open"); await P.NoteSessions.flush(); assert.equal(P.State.ActiveId, B);
@@ -191,11 +210,13 @@ test("native note event handlers in the mobile-safe bundle switch locally withou
 	finally { P.onunload(); }
 });
 
-test("bridge restore retains locally linked note sessions and the intended active conversation without mixing local mappings into remote state", async () =>
+test("bridge restore retains locally linked note sessions and the intended active conversation and client edit scope without mixing local mappings into remote state", async () =>
 {
+	for(const ServerScope of [undefined, "ai"])
+	{
 	const Ordinary = bootstrap_http(), F = await mobile_fixture(async Params =>
 	{
-		if(new URL(Params.url).pathname === "/state" && Params.method === "GET") { return { status: 200, json: { state: { Settings: { Model: "test-model", Effort: "low" }, Sessions: [{ Id: "server-existing", Title: "Server", ThreadId: null, Messages: [] }], ActiveId: "server-existing" }, cursor: 0 } }; }
+		if(new URL(Params.url).pathname === "/state" && Params.method === "GET") { return { status: 200, json: { state: { Settings: { Model: "test-model", Effort: "low", EditScope: ServerScope }, Sessions: [{ Id: "server-existing", Title: "Server", ThreadId: null, Messages: [] }], ActiveId: "server-existing" }, cursor: 0 } }; }
 		return Ordinary(Params);
 	});
 	const P = F.Instance;
@@ -203,12 +224,15 @@ test("bridge restore retains locally linked note sessions and the intended activ
 	{
 		source_view(F, "A.md", "# A"); F.emit("file-open"); await P.NoteSessions.flush(); const A = P.State.ActiveId;
 		P.Session.Messages.push({ Id: "local-only", Role: "user", Text: "unsynced note history" });
+		P.State.Settings.EditScope = "captured";
 		P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture"; P.Remote.Transport = "native";
 		await P.ensure_connection(); assert.equal(P.State.ActiveId, A); assert.equal(P.Session.Messages[0].Id, "local-only");
 		assert.ok(P.State.Sessions.some((Value: any) => Value.Id === "server-existing")); assert.equal(P.NoteSessions.Data.Links[0].SessionId, A);
 		assert.equal(JSON.stringify(P.State).includes('"Links"'), false);
+		assert.equal(P.State.Settings.EditScope, "captured");
 	}
 	finally { P.onunload(); }
+	}
 });
 
 test("question actions never infer a preview from request text, including the former write-intent trigger", async () =>
@@ -232,7 +256,7 @@ test("the actual composer handler preserves drafts and quotes on rejected or sup
 {
 	const F = await mobile_fixture(), P = F.Instance, View = F.Views.get("codex-sidebar-view")!({});
 	const Calls: any[] = [], Quote = { SessionId: P.Session.Id, MessageId: "answer", SelectedText: "片段", SourceText: "$x=1$", SelectedTruncated: false, SourceTruncated: false };
-	View.Input = { value: "写入笔记" }; View.EditOptions = { values: () => ({ Scope: "ai", Role: "auto" }) }; View.refresh_quote = () => {};
+	View.Input = { value: "写入笔记" }; P.State.Settings.EditScope = "captured"; View.refresh_quote = () => {};
 	P.AnswerQuote = Quote;
 	P.send_chat = async (...Args: any[]) => { Calls.push(Args); return false; };
 	try
@@ -242,7 +266,7 @@ test("the actual composer handler preserves drafts and quotes on rejected or sup
 		P.AnswerQuote = null; let Release!: (Value: boolean) => void;
 		P.send_chat = async (...Args: any[]) => { Calls.push(Args); return new Promise<boolean>(Resolve => Release = Resolve); };
 		const Pending = View.send_input("edit"); View.Input.value = "新的草稿"; Release(true); await Pending;
-		assert.equal(View.Input.value, "新的草稿"); assert.deepEqual(JSON.parse(JSON.stringify(Calls[1][3])), { Mode: "edit", Scope: "ai", Role: "auto" });
+		assert.equal(View.Input.value, "新的草稿"); assert.deepEqual(JSON.parse(JSON.stringify(Calls[1][3])), { Mode: "edit", Scope: "captured", Role: "auto" });
 		P.send_chat = async () => true; await View.send_input("question"); assert.equal(View.Input.value, "");
 	}
 	finally { P.onunload(); }
@@ -488,33 +512,97 @@ test("built mobile entry loads and initializes without Node, Electron or desktop
 	await Instance.persist(); assert.equal(Files.size, 1);
 });
 
-test("mobile study tasks use existing two-input transport, keep records outside remote state and preserve task on resend", async () =>
+test("removed workbench stays inactive while old local records and task snapshots survive restart", async () =>
 {
-	const Requests: any[] = [];
-	const { Instance } = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } }));
-	Instance.Remote.Url = "https://example.test"; Instance.Remote.Token = "fixture";
-	Instance.Study.Host.read_current = async () => "original";
-	const Source: any = { Path: "scratch.md", Mode: "阅读", Kind: "选区", Text: "$x$", SelectedText: "$x$", Mapping: "源块", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "original-time" };
-	const Task = make_task("exercise", Source, "给一题");
-	await Instance.Study.send(Task);
-	const Turn = Requests.find(Value => Value.method === "turn/start");
-	assert.equal(Turn.params.input.length, 2); assert.equal(Turn.params.input[1].name, "math-writing");
-	Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "final", type: "agentMessage", phase: "final_answer", text: JSON.stringify({ schemaVersion: 1, kind: "symbols", statement: "解释 $x$", hints: ["看输入"], solution: null, verification: "unverified" }) } } });
-	Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
-	await new Promise(Resolve => setTimeout(Resolve, 30));
-	assert.equal(Instance.Study.Store.Data.Exercises.length, 1);
-	const OldUser = Instance.Session.Messages.find((Value: any) => Value.Role === "user");
-	Instance.Capture.Snapshot = { ...Source, Path: "unrelated.md", Text: "new" };
-	await Instance.resend_message(OldUser.Id);
-	const NewUser = Instance.Session.Messages.at(-1);
-	assert.equal(NewUser.Task.Source.Path, "scratch.md"); assert.equal(NewUser.Task.Source.CapturedAt, "original-time"); assert.notEqual(NewUser.Task.Id, Task.Id);
-	await Instance.persist(); const StatePost = Requests.filter(Value => Value.method === undefined && Value.state).at(-1);
-	assert.equal(StatePost?.state?.Study, undefined);
-	assert.ok(!JSON.stringify(Instance.State).includes("HintUses"));
-	const Records = Instance.Study.Store.export_records();
-	Instance.State = { ...Instance.State, Sessions: [{ Id: "replacement", Title: "remote", Messages: [], ThreadId: null }], ActiveId: "replacement" };
-	assert.equal(Instance.Study.Store.export_records(), Records);
-	Instance.Connection?.close();
+	const Local = new Map([["codex-sidebar-study:v1:test", "original-private-study-records"]]);
+	const F = await mobile_fixture(undefined, { Local });
+	const P = F.Instance;
+	const Source = { Path: "scratch.md", Mode: "阅读", Kind: "选区", Text: "$x$", SelectedText: "$x$", Mapping: "源块", Heading: "", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "original-time" };
+	const Task = { SchemaVersion: 1, Id: "old-exercise", Action: "exercise", Role: "lecture", Scope: "nearby-exercise", HintLevel: "on-demand", Source, Prerequisites: [], CreatedAt: "original-time", Request: "给一题" };
+	P.Session.Messages.push({ Id: "old-question", Role: "user", Text: "给一题", Context: Source, Task });
+	P.Session.Messages.push({ Id: "old-answer", Role: "assistant", Text: JSON.stringify({ schemaVersion: 1, kind: "symbols", statement: "解释 $x$", hints: ["看输入"], solution: null, verification: "unverified" }) });
+	const History = JSON.stringify(P.State.Sessions), ActiveId = P.State.ActiveId;
+	try
+	{
+		assert.equal(P.Study, undefined); assert.ok(!Object.keys(P).some(Key => /Study/.test(Key)));
+		await P.resend_message("old-question");
+		assert.equal(JSON.stringify(P.State.Sessions), History); assert.equal(P.State.ActiveId, ActiveId);
+		for(const Action of ["explain", "symbols", "expand", "check", "exercise", "feedback", "solution", "sample", "chapter", "proposal"])
+		{
+			assert.equal(await P.send_message("旧学习请求", Source, null, { ...Task, Action }), false);
+		}
+		assert.equal(F.browser_requests(), 0); assert.equal(JSON.stringify(P.State.Sessions), History);
+		assert.ok(F.Notices.some(Value => /旧版学习任务.*历史/.test(Value)));
+		assert.equal(Local.get("codex-sidebar-study:v1:test"), "original-private-study-records");
+		await P.persist();
+	}
+	finally { P.onunload(); }
+	const Restart = await mobile_fixture(undefined, { Files: F.Files, Local });
+	try
+	{
+		assert.equal(JSON.stringify(Restart.Instance.State.Sessions), History);
+		assert.equal(Restart.Instance.State.ActiveId, ActiveId);
+		assert.equal(Local.get("codex-sidebar-study:v1:test"), "original-private-study-records");
+		assert.equal(Restart.Instance.Study, undefined);
+	}
+	finally { Restart.Instance.onunload(); }
+});
+
+test("plugin settings own note routing and modification scope, persist choices, and keep earlier chats on restart", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance;
+	const Original = P.State.ActiveId;
+	P.Session.Messages.push({ Id: "saved-answer", Role: "assistant", Text: "原回答 $x=1$." });
+	try
+	{
+		F.Tabs[0].display();
+		const Routing = F.Settings.find(Value => Value.Name === "随笔记切换会话");
+		const Scope = F.Settings.find(Value => Value.Name === "修改范围");
+		assert.ok(Routing && Scope);
+		assert.equal(Routing.Controls[0].Type, "toggle"); assert.equal(Routing.Controls[0].Value, true);
+		assert.equal(Scope.Controls[0].Type, "dropdown"); assert.deepEqual(Object.keys(Scope.Controls[0].Options).sort(), ["ai", "captured", "note"]);
+		await Routing.Controls[0].Change(false);
+		await Scope.Controls[0].Change("captured");
+		assert.equal(P.NoteSessions.Data.Enabled, false); assert.equal(P.State.Settings.EditScope, "captured");
+		source_view(F, "new.md", "new note"); F.emit("file-open"); await P.NoteSessions.flush();
+		assert.equal(P.State.ActiveId, Original); assert.equal(P.State.Sessions.length, 1);
+		F.Tabs[0].display();
+		assert.equal(F.Settings.find(Value => Value.Name === "随笔记切换会话").Controls[0].Value, false);
+		assert.equal(F.Settings.find(Value => Value.Name === "修改范围").Controls[0].Value, "captured");
+		assert.ok(F.Settings.every(Value => !/学习工作台|课程清单|学习记录/.test(Value.Name)));
+		await P.persist();
+	}
+	finally { P.onunload(); }
+	const Restart = await mobile_fixture(undefined, { Files: F.Files, Local: F.Local });
+	try
+	{
+		assert.equal(Restart.Instance.State.Settings.EditScope, "captured"); assert.equal(Restart.Instance.NoteSessions.Data.Enabled, false);
+		assert.equal(Restart.Instance.Session.Messages[0].Text, "原回答 $x=1$."); assert.equal(Restart.Instance.State.ActiveId, Original);
+		await Restart.Instance.set_note_sessions(true);
+		source_view(Restart, "new.md", "new note"); Restart.emit("file-open"); await Restart.Instance.NoteSessions.flush();
+		assert.notEqual(Restart.Instance.State.ActiveId, Original); assert.ok(Restart.Instance.State.Sessions.some((Value: any) => Value.Id === Original));
+	}
+	finally { Restart.Instance.onunload(); }
+});
+
+test("loading legacy state normalizes an absent or unsupported edit range without changing chat snapshots", async () =>
+{
+	for(const Scope of [undefined, "all-vault", null])
+	{
+		const F = await mobile_fixture();
+		F.Instance.Session.Messages.push({ Id: "saved", Role: "assistant", Text: "原文 $x=1$." });
+		await F.Instance.persist(); F.Instance.onunload();
+		const Path = [...F.Files.keys()].find(Value => Value.endsWith("-state.json"))!;
+		const Data = JSON.parse(F.Files.get(Path)!); Data.Settings.EditScope = Scope;
+		const History = JSON.stringify(Data.Sessions); F.Files.set(Path, JSON.stringify(Data));
+		const Restart = await mobile_fixture(undefined, { Files: F.Files, Local: F.Local });
+		try
+		{
+			assert.equal(Restart.Instance.State.Settings.EditScope, "ai");
+			assert.equal(JSON.stringify(Restart.Instance.State.Sessions), History);
+		}
+		finally { Restart.Instance.onunload(); }
+	}
 });
 
 test("mobile PDF turns upload only owned page images, preserve source on resend and reconnect, and keep raw images outside state", async () =>

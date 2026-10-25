@@ -8,8 +8,6 @@ import { DefaultInstructions, ManagedInstructions, V0111DefaultInstructions, edi
 import { ExpositionRules, CompletionExposition } from "../src/exposition/rules";
 import { MathCompletionInstructions } from "../src/completion";
 import { branch_prefix, history_items, type ChatMessage } from "../src/history";
-import { task_prompt } from "../src/study/task";
-import { parse_output } from "../src/study/schema";
 import { parse_edit } from "../src/edit/protocol";
 
 const Host = { Vault: "test's vault", Root: "C:/original", Cli: "C:/Obsidian.com" };
@@ -45,28 +43,22 @@ test("client and bridge composition is idempotent, with server facts and a compl
 	assert.equal(count(client_instructions(DefaultInstructions, Host), ManagedInstructions), 1);
 });
 
-test("task-specific serialization examples use existing fields, with no universal verification field", async () =>
+test("only explicit edits use structured output; former workbench examples are ordinary questions", async () =>
 {
-	for(const Id of ["D04", "D08", "D14"])
+	for(const Id of ["D04", "D08"])
 	{
-		const Input = await exposition_input(DevelopmentCases.find(Value => Value.Id === Id)!);
-		assert.ok(Input.Task);
-		assert.equal(Input.Task.Target?.Before ?? null, Input.Task.Action === "edit" ? Input.Source?.Text : null);
-		if(Id === "D08")
-		{
-			assert.ok(!Input.Prompt.includes('"markdown":'));
-			assert.ok(!Input.Prompt.includes('"verification":'));
-			assert.deepEqual(parse_output("feedback", '{"schemaVersion":1,"verdict":"uncertain","explanation":"缺少共同可积控制函数."}'), { schemaVersion: 1, verdict: "uncertain", explanation: "缺少共同可积控制函数." });
-			assert.throws(() => parse_output("feedback", '{"schemaVersion":1,"verdict":"correct","explanation":"ok","verification":"verified"}'));
-		}
-		if(Id === "D14")
-		{
-			assert.ok(!Input.Prompt.includes("数学未独立核验"));
-			assert.ok(Input.Prompt.includes("明确的文风修改"));
-			assert.equal(parse_edit('{"schemaVersion":1,"kind":"note-edit","status":"needs-decision","markdown":null,"rationale":"原路线不成立"}').markdown, null);
-			assert.throws(() => parse_edit('{"schemaVersion":1,"kind":"note-edit","status":"no-change","markdown":null,"rationale":"ok","verification":"unverified"}'));
-		}
+		const Sample = DevelopmentCases.find(Value => Value.Id === Id)!;
+		const Input = await exposition_input(Sample);
+		assert.equal(Input.Task, null);
+		assert.ok(Input.Prompt.includes(Sample.Request));
+		assert.ok(!Input.Prompt.includes('"schemaVersion":'));
 	}
+	const Edit = await exposition_input(DevelopmentCases.find(Value => Value.Id === "D14")!);
+	assert.equal(Edit.Task?.Action, "edit");
+	assert.equal(Edit.Task?.Target?.Before, Edit.Source?.Text);
+	assert.ok(Edit.Prompt.includes("明确的文风修改"));
+	assert.equal(parse_edit('{"schemaVersion":1,"kind":"note-edit","status":"needs-decision","markdown":null,"rationale":"原路线不成立"}').markdown, null);
+	assert.throws(() => parse_edit('{"schemaVersion":1,"kind":"note-edit","status":"no-change","markdown":null,"rationale":"ok","verification":"unverified"}'));
 });
 
 test("24 original fixture inputs have distinct IDs and separate criteria; preparing inputs has no source mutations", async () =>
@@ -85,16 +77,15 @@ test("24 original fixture inputs have distinct IDs and separate criteria; prepar
 	assert.equal(JSON.stringify(Samples), Before);
 });
 
-test("replay keeps saved prompts and sources while a new target is built from current task rules", async () =>
+test("ordinary replay keeps saved prompts and source snapshots without activating retired task routes", async () =>
 {
-	const Input = await exposition_input(HoldoutCases.find(Value => Value.Id === "H07")!);
-	const Messages: ChatMessage[] = [{ Id: "first", Role: "user", Text: "old", Prompt: "original saved prompt", Context: Input.Source }, { Id: "answer", Role: "assistant", Text: "old answer" }, { Id: "target", Role: "user", Text: Input.Task!.Request, Task: Input.Task! }];
+	const Sample = HoldoutCases.find(Value => Value.Id === "H07")!;
+	const Input = await exposition_input(Sample);
+	assert.equal(Input.Task, null);
+	const Messages: ChatMessage[] = [{ Id: "first", Role: "user", Text: "old", Prompt: "original saved prompt", Context: Input.Source }, { Id: "answer", Role: "assistant", Text: "old answer" }, { Id: "target", Role: "user", Text: Sample.Request, Prompt: Input.Prompt, Context: Input.Source }];
 	const Before = JSON.stringify(Messages), Prefix = branch_prefix(Messages, "target");
 	assert.equal(history_items(Prefix)[0].content[0].text, "original saved prompt");
-	const NewTask = structuredClone(Input.Task!); NewTask.Id = "replayed";
-	const Prompt = task_prompt(NewTask);
-	assert.ok(Prompt.includes("原笔记 A")); assert.ok(Prompt.includes("伴读表达"));
-	assert.deepEqual(NewTask.Source, Messages[2].Task!.Source);
+	assert.ok(Input.Prompt.includes("原笔记 A"));
 	assert.equal(JSON.stringify(Messages), Before);
 	const Hash = (Text: string) => createHash("sha256").update(Text).digest("hex");
 	assert.notEqual(Hash(V0111DefaultInstructions), Hash(DefaultInstructions));
@@ -106,7 +97,7 @@ test("completion gets only its short exposition strategy; truncation, quotation 
 	assert.ok(MathCompletionInstructions.includes(CompletionExposition));
 	assert.ok(!MathCompletionInstructions.includes(ExpositionRules));
 	const Pdf = await exposition_input(HoldoutCases.find(Value => Value.Id === "H04")!);
-	assert.equal(Pdf.Task!.Source!.Truncated, true); assert.equal(Pdf.Source!.Mapping, "PDF文本层");
+	assert.equal(Pdf.Source!.Truncated, true); assert.equal(Pdf.Source!.Mapping, "PDF文本层");
 	const Quote = await exposition_input(HoldoutCases.find(Value => Value.Id === "H02")!);
 	assert.equal(Quote.Source, null);
 	const CapturedQuote = JSON.parse(Quote.Prompt.split("\n").at(-1)!);

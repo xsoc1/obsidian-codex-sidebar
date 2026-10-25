@@ -1,11 +1,11 @@
 import { Modal, type App, type Component } from "obsidian";
 import type { ChatEdits } from "./controller";
-import { render_comparison } from "../study/comparison";
-import type { TaskSpec } from "../study/task";
+import { render_comparison } from "./comparison";
+import type { TaskSpec } from "./task";
 
 export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatEdits | null, Task: TaskSpec, Render: Component, Changed: () => void): Promise<void>
 {
-	Root.dataset.studyStructured = "edit";
+	Root.dataset.editStructured = "true";
 	const Record = Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id);
 	Root.createEl("strong", { text: "笔记修改提案" });
 	Root.createDiv({ cls: "codex-message-context", text: `${Task.Source?.Path ?? "未知目标"} · ${Task.EditRoleMode === "auto" ? "原文类型由 AI 辨识" : Task.Role} · 原始快照 ${Task.Source?.CapturedAt ?? "未知"}` });

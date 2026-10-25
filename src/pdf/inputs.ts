@@ -1,7 +1,7 @@
 import type { ContextSnapshot } from "../prompt";
 import type { ChatMessage } from "../history";
 import { validate_pdf, type PdfImageRef } from "./types";
-import { source_path } from "../study/document";
+import { source_path } from "../edit/document";
 
 export function pdf_refs(Context: ContextSnapshot | null | undefined): PdfImageRef[]
 {

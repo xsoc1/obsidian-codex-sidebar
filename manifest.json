@@ -1,9 +1,9 @@
 {
 	"id": "codex-sidebar",
 	"name": "Codex Sidebar",
-	"version": "0.15.1",
+	"version": "0.16.0",
 	"minAppVersion": "1.7.2",
-	"description": "Private Codex sidebar with a mathematics reading, practice and reviewed writing workbench.",
+	"description": "Private Codex chat sidebar with note context, PDF reading and reviewed note edits.",
 	"author": "HuangZY",
 	"isDesktopOnly": false
 }

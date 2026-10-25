@@ -1,6 +1,6 @@
 import { MarkdownView, type FileView, type TFile, type MarkdownPostProcessorContext, type App } from "obsidian";
 import { bound_text, heading_at, source_excerpt, type ContextSnapshot } from "./prompt";
-import { version_of } from "./study/document";
+import { version_of } from "./edit/document";
 import { PdfReader, is_pdf_view, pdf_location } from "./pdf/reader";
 import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
 

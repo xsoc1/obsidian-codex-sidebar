@@ -1,7 +1,7 @@
-import type { LocalStorageLike, WritePlan } from "../study/store";
-import type { TaskSpec } from "../study/task";
-import { note_path } from "../study/document";
-import { valid_range } from "../study/writer";
+import type { LocalStorageLike, WritePlan } from "./write-types";
+import type { TaskSpec } from "./task";
+import { note_path } from "./document";
+import { valid_range } from "./writer";
 import { parse_edit, type EditOutput } from "./protocol";
 import { resolve_edit_target, validate_edit_mode } from "./range";
 

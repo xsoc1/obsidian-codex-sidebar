@@ -1,12 +1,12 @@
 import { ChatWriteRules } from "./rules";
-import type { InputRole } from "../study/schema";
-import type { TaskSpec, WriteTarget } from "../study/task";
+import type { InputRole } from "./task";
+import type { TaskSpec, WriteTarget } from "./task";
 import type { ContextSnapshot } from "../prompt";
-import { note_path, version_of } from "../study/document";
+import { note_path, version_of } from "./document";
 import { source_excerpt } from "../prompt";
-import { safe_math_markdown } from "../study/safe-markdown";
-import { valid_range, type WriteHost } from "../study/writer";
-import type { WritePlan } from "../study/store";
+import { safe_math_markdown } from "./safe-markdown";
+import { valid_range, type WriteHost } from "./writer";
+import type { WritePlan } from "./write-types";
 import { search_window, resolve_edit_target, validate_edit_mode } from "./range";
 import { task_exposition } from "../exposition/rules";
 
