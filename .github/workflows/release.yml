@@ -25,18 +25,11 @@ jobs:
       - run: npm run build
       - run: npm test
       - name: Package only public build files
-        shell: bash
+        shell: pwsh
         run: |
-          VERSION=$(node -p 'require("./manifest.json").version')
-          test "$VERSION" = "$GITHUB_REF_NAME"
-          test "$VERSION" = "$(node -p 'require("./package.json").version')"
-          mkdir -p dist/plugin dist/bridge/scripts
-          cp manifest.json main.js main.js.map styles.css dist/plugin/
-          cp bridge.cjs dist/bridge/
-          cp scripts/start-bridge.ps1 scripts/stop-bridge.ps1 dist/bridge/scripts/
-          cp docs/ipad-setup.md dist/bridge/README.md
-          (cd dist/plugin && zip -q "../codex-sidebar-${VERSION}.zip" *)
-          (cd dist/bridge && zip -qr "../codex-sidebar-windows-bridge-${VERSION}.zip" .)
+          $Version = (Get-Content manifest.json -Raw | ConvertFrom-Json).version
+          if($Version -ne $env:GITHUB_REF_NAME) { throw "Release tag and product version differ." }
+          ./scripts/package-candidate.ps1 -OutputDirectory (Join-Path $PWD "dist")
       - name: Publish complete release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -49,7 +42,7 @@ jobs:
             RELEASE_FLAGS+=(--prerelease)
           fi
           gh release create "$VERSION" manifest.json main.js main.js.map styles.css \
-            "dist/codex-sidebar-${VERSION}.zip" "dist/codex-sidebar-windows-bridge-${VERSION}.zip" \
+            "dist/codex-sidebar-${VERSION}.zip" "dist/codex-sidebar-windows-bridge-${VERSION}.zip" dist/candidate-manifest.json \
             --verify-tag --draft "${RELEASE_FLAGS[@]}" --title "$VERSION - Obsidian Codex Sidebar" \
             --notes-file "docs/releases/${VERSION}.md"
           if [[ "$VERSION" == 0.* || "$VERSION" == *-* ]]; then

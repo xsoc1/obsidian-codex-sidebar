@@ -38,7 +38,7 @@ try
 		assert.equal(Row.baseline.returnRenderCalls, Row.baseline.historyCount, "Baseline must reproduce full-history rendering");
 		assert.equal(Row.baseline.cardsReused, false);
 		assert.equal(Row.candidate.returnRenderCalls, 0); assert.ok(Row.candidate.cardsReused && Row.candidate.readingPreserved);
-		assert.ok(Row.candidate.sourcePathInvalidates && Row.candidate.devicesIsolated && Row.candidate.desktopReturnsRetained);
+		assert.ok(Row.candidate.sourcePathStable && Row.candidate.devicesIsolated && Row.candidate.desktopReturnsRetained);
 	}
 	const Report = { tier: "actual CodexView + asynchronous SDK fixture; not native MathJax, real model or iPad", cases: Cases };
 	writeFileSync(join(Directory, "report.json"), JSON.stringify(Report, null, 2)); console.log(JSON.stringify({ directory: Directory, ...Report }));

@@ -1,0 +1,51 @@
+"""Create only the original dense formula PDF used by the region acceptance probe."""
+from pathlib import Path
+from reportlab.pdfgen import canvas
+
+Target = Path(__file__).resolve().parent.parent / "examples" / "pdf" / "dense-formula-mini.pdf"
+if Target.exists():
+	raise SystemExit("Fixture already exists; do not replace an unknown artifact")
+Pdf = canvas.Canvas(str(Target), pagesize=(612, 792), invariant=1)
+Pdf.setTitle("Original dense formula region fixture")
+Pdf.setFont("Helvetica-Bold", 16)
+Pdf.drawString(42, 738, "Original formula detail and context")
+Pdf.setFont("Helvetica", 9)
+Pdf.drawString(42, 715, "Inspect subscripts, minus signs, a fraction and integration bounds.")
+for Column, X in enumerate([52, 350]):
+	for Index in range(6):
+		Y = 584 - Index * 30
+		Pdf.setFont("Symbol", 16)
+		Pdf.drawString(X, Y - 4, "\u222b")
+		Pdf.setFont("Times-Italic", 4)
+		Pdf.drawString(X + 9, Y + 8, "b")
+		Pdf.drawString(X + 9, Y - 8, "a")
+		Pdf.setFont("Times-Italic", 8)
+		Pdf.drawString(X + 20, Y, "f")
+		Pdf.setFont("Times-Roman", 4)
+		Pdf.drawString(X + 24, Y - 3, str(Index + 1))
+		Pdf.setFont("Times-Italic", 8)
+		Pdf.drawString(X + 30, Y, "(x) dx =")
+		Pdf.drawString(X + 80, Y + 6, "a")
+		Pdf.setFont("Times-Roman", 4)
+		Pdf.drawString(X + 84, Y + 3, "n")
+		Pdf.setFont("Times-Italic", 8)
+		Pdf.drawString(X + 91, Y + 6, "- b")
+		Pdf.setFont("Times-Roman", 4)
+		Pdf.drawString(X + 105, Y + 3, "n")
+		Pdf.setLineWidth(0.5)
+		Pdf.line(X + 77, Y + 2, X + 112, Y + 2)
+		Pdf.setFont("Times-Italic", 8)
+		Pdf.drawString(X + 82, Y - 8, "1 + x")
+		Pdf.setFont("Times-Roman", 4)
+		Pdf.drawString(X + 102, Y - 4, "2")
+		Pdf.setFont("Times-Roman", 8)
+		Pdf.drawString(X + 119, Y, "- 1/2")
+		Pdf.setFont("Helvetica", 5)
+		Pdf.drawString(X + 157, Y, f"row {Index + 1}, column {Column + 1}")
+Pdf.setFont("Helvetica", 10)
+Pdf.drawString(42, 360, "This is a rendering fixture, not a claimed mathematical theorem.")
+Pdf.drawString(42, 342, "Full-page and crop must retain page 1 and the same byte-version.")
+Pdf.drawString(42, 60, "Original public material; no private course content.")
+Pdf.showPage()
+Pdf.save()
+print(Target.name)

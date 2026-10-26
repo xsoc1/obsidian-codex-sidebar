@@ -1,15 +1,15 @@
 # iPad 远程使用
 
-1.0.0 采用局部磨砂界面. “随笔记切换会话”和“修改范围”在插件设置中; 侧栏会话、上下文、模型和发送区保留独立折叠状态. 展开发送区可提问、生成修改预览或停止, 回答引用可用“追问这段”展开输入框. 现有配对、会话与 PDF 来源保留, 本版无需重启已有兼容远程桥. PDF 用法见 [指南](pdf-support.md), 界面验证边界见 [版本说明](releases/1.0.0.md). 新版磨砂、分屏和软键盘尚未完成 iPad 真机验收.
+`2.0.0-beta.1` 是本地候选, 新增协议 2 的增量同步、操作核对、前台恢复与 PDF 区域图. 需要部署时先升级 Windows 独立桥, 再升级同一配对的客户端. 本轮未改日常安装或重启现行桥. 兼容表、数据保留与回退见 [迁移说明](migration.md), 完成与未验范围见 [当前记录](reliability-suite.md).
 
-新一次连接超时可将“移动网络传输”从默认“浏览器 Fetch”改为“Obsidian 原生请求”, 再保存并连接. 不自动切换或重发, 不改密钥、身份或 Windows 权限. 原生请求超时只停止等待, 底层可能继续执行; 未知结果应先重连核对. 本次原 Wi-Fi 下两种方式均超时且 Safari 很慢; 换手机热点后, 用户已确认 0.7.0 原生请求能加载模型、收到完整短回答, 普通桥重启后重连仍保留模型与原回答. 原 Wi-Fi 的延迟原因尚未定位, 不把这个结果推广为所有网络都已恢复.
+iPad 运行侧栏, Windows 保持开机并运行独立隐藏 CLI. 同一配对密钥连接同一远程 agent; 不同配对与 Windows 本机会话隔离. 保持四个折叠区和“提问 / 生成修改预览”, 笔记会话与修改范围位于设置.
 
-iPad 运行 Obsidian 侧栏, Windows 电脑运行独立隐藏 Codex CLI. 电脑必须开机、联网, iPad 与电脑连接同一 Tailscale 私有网络. 用户通过 GitHub/BRAT 更新 0.6.2 后, 已确认模型列表显示及实际短问题完整回复, iPad 前台基础问答通过. Windows 原生插件另有远程对话和补全验证; iPad 的触控选区、补全确认、中文键盘及后台恢复仍待实测.
+旧版 0.6.2/0.7.0 的真实 iPad 基础问答与热点恢复曾由用户确认, 不作为本候选真机验收. 新版锁屏、切网、软键盘和 PDF 区域仍需真机复验. 历史网络记录保存在 [旧指南](history/ipad-setup-through-1.1.0.md).
 
 ## 安装插件和连接
 
-1. 从本版本插件包取出 `manifest.json`, `main.js`, `styles.css` (可另加 `main.js.map`), 放入 iPad vault 的 `.obsidian/plugins/codex-sidebar/`. 可用 vault 同步或支持隐藏目录的文件管理工具传入. 保留已有 `data.json`, 不把 Windows 私有服务配置同步到 vault.
-2. 在 iPad Obsidian 的社区插件中启用 Codex Sidebar. 尚未发布到 Obsidian 社区目录, 需要手动安装或用 BRAT 的指定版本功能安装本仓库的发布标签. 重启或重载插件, 确认加载版本与所选发布标签一致. 从旧版升级仅替换插件构建文件, 保留 data.json 和 remote-*-state.json; 地址、密钥与聊天记录不需要清空. 仅更新本次侧栏布局时, 现有兼容 Windows 桥可以继续运行.
+1. 从本版本插件包取出 `manifest.json`, `main.js`, `styles.css` (可另加 `main.js.map`), 放入 iPad vault 的 `.obsidian/plugins/codex-sidebar/`. 可用 vault 同步或支持隐藏目录的文件管理工具传入. 保留所有会话/事务文件和设备缓存, 不把 Windows 私有服务配置同步到 vault.
+2. 在 iPad Obsidian 的社区插件中启用 Codex Sidebar. 尚未发布到 Obsidian 社区目录, 需要手动安装或用 BRAT 的指定版本功能安装本仓库的发布标签. 重启或重载插件, 确认加载版本与所选发布标签一致. 从旧版升级仅替换插件构建文件, 保留原 data.json、remote-*-state.json、新规范 state-v2 文件及事务日志. 地址、密钥与聊天记录不清空; 本候选新功能需按迁移说明升级桥.
 3. 打开插件设置, 填写电脑的私有 HTTPS 地址与配对密钥, 点击 `保存并连接`. 两项来自电脑私有目录中的 `connection-private.json`: `Url` 是地址, `Token` 是密钥. 不填 Codex 登录密码或 OpenAI API key. iPad 与服务绑定的 vault 名称必须一致.
 4. 用工具栏的机器人按钮或命令面板的 `Codex Sidebar: 打开/收起聊天栏` 打开侧栏. 首次连接从实际模型列表初始化一个具体选择; 之后保存并恢复模型、思考档次、Fast 与开关选择.
 5. 先发一个短问题. 再选中笔记中的一段文字, 查看上下文卡片后解释/检查证明. 回答里的文字可选中并通过 `追问这段` 引用. 行内补全在侧栏确认插入, 保留 Obsidian 原生 Tab. 编辑已发送的问题并重发会保留原会话并创建分支.
@@ -20,7 +20,7 @@ iPad 运行 Obsidian 侧栏, Windows 电脑运行独立隐藏 Codex CLI. 电脑�
 
 ## Windows 服务
 
-源码构建会生成 `bridge.cjs`. 单独的 Windows 桥包包含此文件和 `scripts/start-bridge.ps1`, `scripts/stop-bridge.ps1`. 电脑需有 Node.js 22+、已登录的 Codex CLI、已安装启用的 math-writing. 使用 Obsidian 只读查询工具时, Windows Obsidian 也需打开对应 vault 并启用 CLI.
+源码构建会生成 `bridge.cjs`. 单独的 Windows 桥包包含此文件和 `scripts/start-bridge.ps1`, `scripts/stop-bridge.ps1`. 电脑需有 Node.js 24、已登录的 Codex CLI、已安装启用的 math-writing. 使用 Obsidian 只读查询工具时, Windows Obsidian 也需打开对应 vault 并启用 CLI.
 
 首次初始化 (将示例路径替换为本机路径):
 
@@ -63,7 +63,7 @@ Safari 能返回 JSON 但加载很慢, 也不足以通过插件连接验收. 服
 - 笔记选区、阅读位置与未保存内容由客户端捕获后发送. Windows 只读工具读到的是电脑副本, 可能落后于 iPad; 内置提示词要求区分来源, 优先使用本次客户端快照.
 - 远程问答保持固定 vault、只读权限和 `approvalPolicy=never`. 不支持远程批准写入、通用 shell、全局 Codex 设置、账号操作或浏览桌面聊天.
 - math-writing 在 Windows 自动发现并在每次聊天/补全中显式加载. 缺失或禁用会阻止请求. 最小改动、原思路证明、重大重建先征求用户决定与模仿原稿语言等固定准则继续生效.
-- 客户端断开后, 电脑继续生成并保存回答. 网络恢复后点击 `重连`, 恢复桥保存的文本及当前运行状态. 超出事件缓存窗口时也需要重连. 网络超时不会自动重发未知结果的问题.
+- 客户端断开后, 电脑继续生成并保存回答. 回到前台、网络恢复或短暂轮询失败时有界恢复只读状态与监听, 也可手动核对. 快照、操作凭证及事件游标一致恢复, 不自动重发未知推理; CLI/桥进程重启后的旧 TurnId 不能证明仍在生成.
 - 移动端普通 HTTP 在前台等待超过 30 秒会取消并显示具体接口; 补全请求上限 120 秒. 准备阶段显示当前会话、技能、工作说明或提问保存步骤. 切后台/锁屏可能暂停客户端脚本, 不能承诺后台也精确在上述秒数显示提示. 移动浏览器传输需要桥的 CORS 预检支持; 升级插件时同时更新电脑 bridge.cjs 并重启独立桥. 预检不读取记录或启动 Agent, 正式请求仍用 Authorization 配对认证, 不发送 Cookie. 实施依据为 [Fetch 标准](https://fetch.spec.whatwg.org/#http-access-control-allow-origin).
 - 当前 CLI 的临时线程不支持 `thread/read(includeTurns=true)`. 桥用自己收到的事件、文本记录和运行状态续接原线程; 桥重启后新建临时线程并注入保存的问答. 不恢复完整工具输出和进程状态.
 - 补全仅返回建议, 由客户端检查文档/光标/输入法状态并在侧栏确认. 电脑不直接写入笔记. 不支持 PDF 页面识别、截图/OCR.

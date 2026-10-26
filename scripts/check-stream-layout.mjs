@@ -30,7 +30,7 @@ try
 	function call(Method, Params = {}) { return new Promise((Resolve, Reject) => { const Id = ++Sequence; Pending.set(Id, { resolve: Resolve, reject: Reject }); Socket.send(JSON.stringify({ id: Id, method: Method, params: Params })); }); }
 	await call("Page.navigate", { url: pathToFileURL(join(Directory, "fixture.html")).href });
 	await new Promise(Resolve => setTimeout(Resolve, 300));
-	const Result = await call("Runtime.evaluate", { expression: "(async()=>{const surfaces=[];for(const theme of ['theme-dark','theme-light'])for(const mobile of [false,true]){document.body.className=theme+(mobile?' is-mobile is-tablet':'');surfaces.push({theme,mobile,cases:[await run_stream_case(1),await run_stream_case(3),await run_stream_case(1,true),await run_stream_case(3,true),await run_stream_case(1,'near'),await run_stream_case(3,'near')],context:await run_context_case(),sidebar:await run_simplified_sidebar_case()});}return {surfaces};})()", awaitPromise: true, returnByValue: true });
+	const Result = await call("Runtime.evaluate", { expression: "(async()=>{const surfaces=[];for(const theme of ['theme-dark','theme-light'])for(const mobile of [false,true]){document.body.className=theme+(mobile?' is-mobile is-tablet':'');surfaces.push({theme,mobile,cases:[await run_stream_case(1),await run_stream_case(3),await run_stream_case(1,true),await run_stream_case(3,true),await run_stream_case(1,'near'),await run_stream_case(3,'near')],context:await run_context_case(),sidebar:await run_simplified_sidebar_case(),followup:await run_followup_case()});}return {surfaces};})()", awaitPromise: true, returnByValue: true });
 	assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails));
 	const Report = Result.result.value;
 	writeFileSync(join(Directory, "report.json"), JSON.stringify(Report, null, 2));
@@ -45,6 +45,7 @@ try
 		}
 		assert.ok(Object.values(Surface.context).every(Boolean), "Unchanged source preview is rebuilt or its checkbox is stale");
 		assert.ok(Object.values(Surface.sidebar).every(Boolean), "Actual sidebar retained removed controls or ignored the saved edit range");
+		assert.ok(Object.values(Surface.followup).every(Boolean), "Followup chain failed to load original or latest bounded card window");
 	}
 	for(const Width of [320, 420, 540])
 	{
