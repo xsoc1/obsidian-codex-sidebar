@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { resolve_codex_executable } from "./launch";
 
 export interface RpcMessage
 {
@@ -150,7 +151,7 @@ export class CodexConnection
 
 	constructor(CliPath: string, Cwd: string, OnMessage: (Message: RpcMessage) => void, OnClosed: (Error: Error) => void)
 	{
-		this.Process = spawn(CliPath, ["app-server", "--listen", "stdio://"],
+		this.Process = spawn(resolve_codex_executable(CliPath), ["app-server", "--listen", "stdio://"],
 		{
 			cwd: Cwd,
 			windowsHide: true,

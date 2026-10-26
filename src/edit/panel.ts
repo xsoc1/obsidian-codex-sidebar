@@ -9,7 +9,7 @@ export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatE
 	const Record = Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id);
 	Root.createEl("strong", { text: "笔记修改提案" });
 	Root.createDiv({ cls: "codex-message-context", text: `${Task.Source?.Path ?? "未知目标"} · ${Task.EditRoleMode === "auto" ? "原文类型由 AI 辨识" : Task.Role} · 原始快照 ${Task.Source?.CapturedAt ?? "未知"}` });
-	if(!Record) { Root.createDiv({ text: "本设备没有这次修改基线, 不能采用远程设备或已清除的提案. 原会话保留, 请明确重新捕获发起新修改." }); return; }
+	if(!Record) { Root.createDiv({ text: Edits?.Store.Data.ExpiredIds?.includes(Task.Id) ? "这次修改与还原缓存已按保留轮数自动清理, 聊天和笔记保留. 需要再修改时请重新捕获并生成预览." : "本设备没有这次修改基线, 不能采用远程设备或已清除的提案. 原会话保留, 请明确重新捕获发起新修改." }); return; }
 	const Plan = Edits!.Store.Data.Writes.find(Value => Value.TaskId === Task.Id);
 	const Target = Plan?.Target ?? Record.Spec.Target!, Range = Target.Range!;
 	Root.createDiv({ text: `${Task.EditMode === "ai" ? Plan ? "AI 选择的实际范围" : "AI 可选范围" : "范围"}: 原文字符 ${Range.From + 1}-${Range.To}; 确认前不会修改文件.${Task.EditMode === "ai" && Task.WriteUnit?.Truncated ? " 本轮仅提供当前位置附近的有限窗口." : ""}` });

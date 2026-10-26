@@ -18,6 +18,8 @@ export interface PackedEdits
 	Records: PackedRecord[];
 	Writes: Omit<WritePlan, "Target" | "After">[];
 	Refs: string[];
+	CacheTurns?: number;
+	ExpiredIds?: string[];
 }
 
 async function text_id(Text: string): Promise<string>
@@ -52,7 +54,7 @@ export async function pack_edits(Data: EditData): Promise<{ Data: PackedEdits; T
 		Records.push({ ...Meta, Spec, ...(Output ? { Output } : {}) });
 	}
 	const Writes = Data.Writes.map(({ Target: _Target, After: _After, ...Plan }) => structuredClone(Plan));
-	return { Data: { schemaVersion: 3, DeviceId: Data.DeviceId, Records, Writes, Refs: [...Texts.keys()].sort() }, Texts };
+	return { Data: { schemaVersion: 3, DeviceId: Data.DeviceId, Records, Writes, Refs: [...Texts.keys()].sort(), ...(Data.CacheTurns !== undefined ? { CacheTurns: Data.CacheTurns } : {}), ...(Data.ExpiredIds ? { ExpiredIds: [...Data.ExpiredIds] } : {}) }, Texts };
 }
 
 export async function unpack_edits(Data: PackedEdits, Texts: Map<string, string>): Promise<EditData>
@@ -90,7 +92,7 @@ export async function unpack_edits(Data: PackedEdits, Texts: Map<string, string>
 		if(!Plan) { throw new Error("修改日志缺少可用修改稿, 原数据保留"); }
 		return { ...Plan, ...Value };
 	});
-	const Result: EditData = { schemaVersion: 2, DeviceId: Data.DeviceId, Records, Writes };
+	const Result: EditData = { schemaVersion: 2, DeviceId: Data.DeviceId, Records, Writes, ...(Data.CacheTurns !== undefined ? { CacheTurns: Data.CacheTurns } : {}), ...(Data.ExpiredIds ? { ExpiredIds: [...Data.ExpiredIds] } : {}) };
 	if(Used.size !== Data.Refs.length) { throw new Error("修改记录存在未绑定的文本引用"); }
 	validate_edits(Result); return Result;
 }

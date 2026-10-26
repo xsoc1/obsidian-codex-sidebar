@@ -4,21 +4,32 @@ import { make_task, type TaskSpec } from "./task";
 import { ConfirmedWriter, type WriteHost } from "./writer";
 import { bind_edit, edit_plan, parse_edit, type EditRole, type EditScope } from "./protocol";
 import { EditStore, type EditData } from "./store";
+import { EditCache, cache_owner, arm_cache, type CacheContext } from "./cache";
 
 interface EditHost extends WriteHost
 {
 	protected_source(Task: TaskSpec): boolean;
 	send(Task: TaskSpec): Promise<boolean>;
 	changed(): void;
+	cache_context?(Key?: string): CacheContext | null;
 }
 
 export class ChatEdits
 {
 	readonly Writer: ConfirmedWriter<EditData>;
+	readonly Cache: EditCache;
 	Error = "";
 	ErrorTaskId: string | null = null;
 	private Processing = new Set<string>();
-	constructor(readonly Store: EditStore, readonly Host: EditHost) { this.Writer = new ConfirmedWriter(Store, Host); }
+	constructor(readonly Store: EditStore, readonly Host: EditHost)
+	{
+		this.Writer = new ConfirmedWriter(Store, Host, (Data, Plan) =>
+		{
+			const Record = Data.Records.find(R => R.Spec.Id === Plan.TaskId);
+			if(Record) { arm_cache(Data, Record, Host.cache_context?.(Record.Cache?.Context) ?? null); }
+		});
+		this.Cache = new EditCache(Store, Key => Host.cache_context?.(Key) ?? null, () => this.Writer.is_busy() || this.Processing.size > 0, () => Host.changed());
+	}
 	async request(Request: string, Source: ContextSnapshot, Scope: EditScope, Role: EditRole): Promise<boolean>
 	{
 		const Generation = this.Store.Generation;
@@ -47,11 +58,13 @@ export class ChatEdits
 	async register(Task: TaskSpec): Promise<void>
 	{
 		if(this.Store.Data.Records.some(Value => Value.Spec.Id === Task.Id)) { return; }
-		await this.Store.change(Data => { if(!Data.Records.some(Value => Value.Spec.Id === Task.Id)) { Data.Records.push({ Spec: structuredClone(Task), Status: "pending" }); } });
+		const Cache = cache_owner(this.Host.cache_context?.() ?? null);
+		await this.Store.change(Data => { if(!Data.Records.some(Value => Value.Spec.Id === Task.Id)) { Data.Records.push({ Spec: structuredClone(Task), Status: "pending", ...(Cache ? { Cache } : {}) }); } });
 	}
 	async clear(): Promise<void>
 	{
 		if(this.Writer.is_busy()) { throw new Error("正在写入或撤销, 请等待回读后再清除记录"); }
+		await this.Cache.flush();
 		await this.Store.clear(); this.Error = ""; this.ErrorTaskId = null; this.Host.changed();
 	}
 	replay(Task: TaskSpec, Request?: string): TaskSpec
@@ -104,7 +117,7 @@ export class ChatEdits
 			const Entry = Data.Records.find(Value => Value.Spec.Id === TaskId);
 			if(Entry?.Status !== "pending") { return; }
 			Entry.Status = "complete"; Entry.Output = Output;
-			if(Plan) { Data.Writes.push(Plan); }
+			if(Plan) { Data.Writes.push(Plan); arm_cache(Data, Entry, this.Host.cache_context?.(Entry.Cache?.Context) ?? null); }
 		});
 		this.Error = ""; this.ErrorTaskId = null;
 		this.Host.changed();
@@ -131,13 +144,16 @@ export class ChatEdits
 	}
 	async confirm(Id: string): Promise<void>
 	{
+		if(this.Cache.Working) { throw new Error("正在整理修改缓存, 请稍后再确认"); }
 		const Plan = this.Store.Data.Writes.find(Value => Value.Id === Id);
 		const Record = this.Store.Data.Records.find(Value => Value.Spec.Id === Plan?.TaskId);
 		if(!Record || !Plan || this.Host.protected_source({ ...Record.Spec, Target: Plan.Target })) { throw new Error("修改基线缺失或目标现已只读"); }
-		await this.Writer.confirm(Id); this.Host.changed();
+		await this.Writer.confirm(Id);
+		this.Host.changed();
 	}
 	async undo(Id: string): Promise<void>
 	{
+		if(this.Cache.Working) { throw new Error("正在整理修改缓存, 请稍后再撤销"); }
 		const Plan = this.Store.Data.Writes.find(Value => Value.Id === Id);
 		const Record = this.Store.Data.Records.find(Value => Value.Spec.Id === Plan?.TaskId);
 		if(!Record || !Plan || this.Host.protected_source({ ...Record.Spec, Target: Plan.Target })) { throw new Error("修改基线缺失或目标现已只读, 不自动撤销"); }

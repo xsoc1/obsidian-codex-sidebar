@@ -15,7 +15,7 @@ export function valid_range(Target: WriteTarget): boolean
 export class ConfirmedWriter<Data extends { Writes: WritePlan[] } = { Writes: WritePlan[] }>
 {
 	private Locked = new Set<string>();
-	constructor(private Store: { Data: Data; change(Update: (Value: Data) => void): void | Promise<void> }, private Host: WriteHost)
+	constructor(private Store: { Data: Data; change(Update: (Value: Data) => void): void | Promise<void> }, private Host: WriteHost, private Completed?: (Value: Data, Plan: WritePlan) => void)
 	{
 	}
 	is_busy(): boolean { return this.Locked.size > 0; }
@@ -120,6 +120,7 @@ export class ConfirmedWriter<Data extends { Writes: WritePlan[] } = { Writes: Wr
 			}
 			Plan.State = State; Plan.Error = Error;
 			if(UndoPending) { Plan.UndoPending = true; } else { delete Plan.UndoPending; }
+			if(!UndoPending && ["applied", "undone"].includes(State)) { this.Completed?.(Data, Plan); }
 		});
 	}
 }

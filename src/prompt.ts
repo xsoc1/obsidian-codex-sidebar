@@ -41,12 +41,14 @@ export interface HostEnvironment
 	Cli: string;
 }
 
+const VaultReadPolicy = "当前用户授权的阅读范围包括整个当前笔记库. 由你依据任务需要自行决定读取哪些相关笔记, 不局限于附带选区. 先用搜索、目录、链接和大纲定位, 再按需补读定义、前置结论和原文; 不一次上传整个 vault, 不把未读内容当作已知. 保留每次读取的来源和截断事实. 只读权限不妨碍生成供用户确认的修改预览, 但不授权模型直接写入. 不跨 vault, 不读取隐藏配置、认证或凭据文件, 不将读权限扩展成任意命令权限.";
+
 const RemoteInstructions = "这是独立的 iPad/远程 Obsidian 会话. CLI 在 Windows, 用户界面在客户端. 当前笔记以每轮源快照为准, 电脑同步副本可能过时. 只读工具读取的是电脑副本, 不声称看到了 iPad 屏幕、未同步文件或其他会话. 修改只生成提案, 写入由当前客户端确认并执行; 补全也只返回待确认建议.";
 
 export function client_instructions(Instructions: string, Environment: HostEnvironment | null, SourceRules = ""): string
 {
 	const Custom = migrate_instructions(Instructions.trim() ? Instructions : DefaultInstructions);
-	const Work = editing_instructions([SourceRules, Environment ? "" : RemoteInstructions, Custom].filter(Boolean).join("\n\n"));
+	const Work = editing_instructions([SourceRules, VaultReadPolicy, Environment ? "" : RemoteInstructions, Custom].filter(Boolean).join("\n\n"));
 	return Environment ? environment_instructions(Work, Environment) : Work;
 }
 

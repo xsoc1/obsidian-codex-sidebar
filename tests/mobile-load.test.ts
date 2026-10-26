@@ -896,3 +896,26 @@ test("remote state-sync failure preserves a locally committed deletion and repor
 	}
 	finally { P.onunload(); }
 });
+
+test("edit retention setting is device-local, defaults to one and persists never across restart", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance, State = JSON.stringify(P.State);
+	F.Tabs[0].display(); const Setting = F.Settings.find(S => S.Name === "修改与还原缓存保留轮数");
+	assert.ok(Setting); assert.equal(Setting.Controls[0].Value, "1"); await Setting.Controls[0].Change("3"); assert.equal(P.Edits.Cache.Turns, 3);
+	await Setting.Controls[0].Change("bad"); assert.equal(P.Edits.Cache.Turns, 3); await Setting.Controls[0].Change("永不"); assert.equal(P.Edits.Cache.Turns, 0);
+	assert.equal(JSON.stringify(P.State), State); await P.Edits.Store.close(); P.onunload();
+	const G = await mobile_fixture(undefined, { Files: F.Files, Local: F.Local });
+	try { G.Tabs[0].display(); assert.equal(G.Settings.find(S => S.Name === "修改与还原缓存保留轮数").Controls[0].Value, "永不"); }
+	finally { G.Instance.onunload(); }
+});
+
+test("actual plugin cache context counts completed dialogue once and excludes interruption, reasoning and other scopes", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance, Id = P.Session.Id;
+	P.Session.Messages.push({ Id: "u", Role: "user", Text: "Original", TurnId: "t1", CompletionStatus: "completed" }, { Id: "a", Role: "assistant", Text: "Original", TurnId: "t1", CompletionStatus: "completed" }, { Id: "stop", Role: "assistant", Text: "Original", TurnId: "t2", CompletionStatus: "interrupted" }, { Id: "r", Role: "reasoning", Text: "Original", TurnId: "t3", CompletionStatus: "completed" });
+	const C = P.edit_cache_context(); assert.deepEqual([...C.Turns], ["t1"]);
+	assert.equal(P.edit_cache_context(JSON.stringify(["desktop", Id])), null);
+	P.Session.ThreadId = "fixture-thread";
+	P.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "t2", status: "failed" } } });
+	assert.deepEqual([...P.edit_cache_context().Turns], ["t1"]); P.onunload();
+});

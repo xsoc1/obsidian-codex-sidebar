@@ -1,7 +1,7 @@
 {
 	"id": "codex-sidebar",
 	"name": "Codex Sidebar",
-	"version": "1.0.3",
+	"version": "1.1.0",
 	"minAppVersion": "1.7.2",
 	"description": "Private Codex chat sidebar with note context, PDF reading and reviewed note edits.",
 	"author": "HuangZY",

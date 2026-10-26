@@ -4,6 +4,7 @@ import { note_path } from "./document";
 import { valid_range } from "./writer";
 import { parse_edit, type EditOutput } from "./protocol";
 import { resolve_edit_target, validate_edit_mode } from "./range";
+import { validate_cache, type EditCacheState } from "./cache";
 
 export interface EditRecord
 {
@@ -12,6 +13,7 @@ export interface EditRecord
 	Output?: EditOutput;
 	Error?: string;
 	ErrorHistory?: string[];
+	Cache?: EditCacheState;
 }
 export interface EditData
 {
@@ -19,11 +21,14 @@ export interface EditData
 	DeviceId: string;
 	Records: EditRecord[];
 	Writes: WritePlan[];
+	CacheTurns?: number;
+	ExpiredIds?: string[];
 }
 
 export function validate_edits(Data: EditData): void
 {
 	if(!Data || Data.schemaVersion !== 2 || typeof Data.DeviceId !== "string" || !Array.isArray(Data.Records) || !Array.isArray(Data.Writes)) { throw new Error("修改记录版本不支持或损坏, 原数据保留"); }
+	validate_cache(Data);
 	const Seen = new Set<string>();
 	for(const Record of Data.Records)
 	{

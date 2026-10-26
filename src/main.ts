@@ -37,6 +37,7 @@ import { SelectionPreview, selection_in_source } from "./selection-preview";
 import { NoteSessions, note_file_path } from "./note-sessions";
 import { new_session, prune_sessions, restore_sessions, delete_session_plan, type ChatSession, type SessionState } from "./sessions";
 import { DeleteSessionDialog } from "./session-dialog";
+import type { CacheContext } from "./edit/cache";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -222,7 +223,7 @@ export default class CodexSidebarPlugin extends Plugin
 			const Host = new ObsidianWriteHost(this.app);
 			this.Edits = new ChatEdits(await open_edit_store(localStorage, this.app.vault.getName()), {
 				read_current: Path => Host.read_current(Path), compare_write: (Path, Before, After) => Host.compare_write(Path, Before, After),
-				protected_source: Task => this.protected_edit(Task), send: Task => this.send_message(Task.Request, Task.Source, null, Task), changed: () => this.refresh()
+				protected_source: Task => this.protected_edit(Task), send: Task => this.send_message(Task.Request, Task.Source, null, Task), changed: () => this.refresh(), cache_context: Key => this.edit_cache_context(Key)
 			});
 		}
 		catch(ErrorValue) { this.Status = error_text(ErrorValue); }
@@ -581,6 +582,18 @@ export default class CodexSidebarPlugin extends Plugin
 		}).catch(ErrorValue => this.show_error(ErrorValue));
 	}
 
+	private edit_cache_context(Key?: string): CacheContext | null
+	{
+		const Device = this.Remote.Enabled ? this.Remote.CacheId : "desktop";
+		let Id = this.State.ActiveId;
+		if(Key)
+		{
+			try { const Parts = JSON.parse(Key); if(!Array.isArray(Parts) || Parts.length !== 2 || Parts[0] !== Device) { return null; } Id = Parts[1]; } catch { return null; }
+		}
+		const Session = this.State.Sessions.find(S => S.Id === Id);
+		return Session ? { Key: JSON.stringify([Device, Id]), Turns: [...new Set(Session.Messages.filter(M => M.Role !== "reasoning" && M.TurnId && M.CompletionStatus === "completed").map(M => M.TurnId!))] } : null;
+	}
+
 	refresh(): void
 	{
 		if(this.Unloaded)
@@ -588,6 +601,7 @@ export default class CodexSidebarPlugin extends Plugin
 			return;
 		}
 		this.Edits?.consume(this.Session.Messages);
+		this.Edits?.Cache.poll();
 		this.Ribbon?.toggleClass("is-active", this.app.workspace.getLeavesOfType(ViewType).length > 0);
 		for(const Leaf of this.app.workspace.getLeavesOfType(ViewType))
 		{
@@ -1489,7 +1503,7 @@ export default class CodexSidebarPlugin extends Plugin
 				}
 				break;
 			case "turn/completed":
-				for(const Reply of this.Session.Messages.filter(Value => Value.Role === "assistant" && Value.TurnId === Params.turn.id))
+				for(const Reply of this.Session.Messages.filter(Value => Value.Role !== "reasoning" && Value.TurnId === Params.turn.id))
 				{
 					Reply.CompletionStatus = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "interrupted" : "failed";
 				}
@@ -2315,6 +2329,13 @@ class CodexSettings extends PluginSettingTab
 			this.display();
 		}));
 		new Setting(this.containerEl).setName("数学内容修改准则").setDesc("题目可判断并标注补充条件; 完整答案最小修补, 需推倒重来时先由你决定; 解题思路严格沿原路线证明; 模仿原稿语言. 固定随请求注入, 自定义工作提示词仍保留.");
+		new Setting(this.containerEl).setName("修改与还原缓存保留轮数").setDesc("默认 1. 修改预览生成后, 或采用/安全还原后重新计时, 在同一会话后续完成 N 轮对话时清理对应预览和还原数据. 输入 1-1000 或“永不”. 未采用预览也会到期; 聊天和笔记保留, 旧记录不追溯清理. " + (this.Owner.Edits?.Cache.Error ?? "")).addText(Value => Value.setValue(this.Owner.Edits?.Cache.Turns === 0 ? "永不" : String(this.Owner.Edits?.Cache.Turns ?? 1)).setPlaceholder("1 或 永不").onChange(async Text =>
+		{
+			const Input = Text.trim(), Turns = ["永不", "never", "0"].includes(Input.toLowerCase()) ? 0 : /^\d+$/.test(Input) ? Number(Input) : NaN;
+			if(!Number.isSafeInteger(Turns) || Turns < 0 || Turns > 1000) { Value.inputEl.setCustomValidity?.("输入 1-1000 或 永不"); return; }
+			Value.inputEl.setCustomValidity?.("");
+			try { await this.Owner.Edits?.Cache.set_turns(Turns); } catch(ErrorValue) { new Notice(error_text(ErrorValue)); }
+		}));
 		let ConfirmEdits = false;
 		new Setting(this.containerEl).setName("本设备修改记录").setDesc("普通聊天的修改提案、原文基线与撤销记录仅存本设备, 不随远程聊天覆盖. 导出含原文, 请自行保管. 清除后不能采用或安全撤销旧提案, 不会改动笔记.")
 			.addButton(Button => Button.setButtonText("导出记录").onClick(() => { if(this.Owner.Edits) { export_edits(this.app, this.Owner.Edits.Store.export_records()); } }))
