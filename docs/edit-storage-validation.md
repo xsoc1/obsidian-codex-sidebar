@@ -25,6 +25,10 @@
 
 ## 交付边界
 
-候选四件 ZIP 的成员、逐字节匹配与本机路径标记检查通过. 用户授权 GitHub 正式发布, 公开 CI、标签、Latest、资产下载和 ZIP 成员结果在完成后补记; 不以本地打包冒充公开交付. 原生截图、原文、会话和完整备份均留在 Git 之外.
+候选四件 ZIP 的成员、逐字节匹配与本机路径标记检查通过. 代码和不可变标签 `1.0.1` 指向 `ed6b425b42e6224b98a2ec8e5993fcb4ca555f82`, 与默认分支一起原子推送. [Actions 40255062932](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40255062932) 依赖安装、构建、130 项测试、打包和发布均成功. 匿名接口确认 [1.0.1](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/1.0.1) 为 draft=false、prerelease=false, Latest=1.0.1.
+
+六件公开资产逐件下载, 大小和 SHA-256 均匹配 GitHub digest. 四件插件文件与主源码、开发树构建和 Windows 安装逐字节相等; 两个 ZIP 的成员及内容与发布提交匹配. 插件 ZIP SHA-256 为 `19fd02f0d067b4b220a1b0331b24821d373b5f0ea0e7000402308c0a66b4e5f9`, 桥 ZIP 为 `d631dc41698e113454ee690c7e2f9afc9c578522f75b8b454eb0abbbfd28111e`. 两包均已放入 Downloads 及两份源码的 dist, 六份副本相同. README 已匿名回读, 字节与发布提交一致.
+
+本文与 AGENTS 的完成补记只更新验证记录, 不重打标签或替换资产. 原生截图、原文、会话和完整备份均留在 Git 之外.
 
 本次没有新真实模型推理、真实课程笔记写入、独立桥重启、iPad 真机迁移、手工 IME 或耗电/帧率测试. README 仅介绍产品和功能; 本文记录验证与实际边界.
