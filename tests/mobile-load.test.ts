@@ -7,10 +7,20 @@ import { webcrypto, randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import { jpeg_info } from "../src/pdf/types";
 import { version_of } from "../src/edit/document";
+import { IDBFactory } from "fake-indexeddb";
+import { open_edit_store } from "../src/edit/database";
+
+const Databases = new WeakMap<Map<string, string>, IDBFactory>();
+
+async function wait_for_edit(Instance: any): Promise<void>
+{
+	for(let Index = 0; Index < 400 && !Instance.Edits.Store.Data.Writes.length; Index++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
+}
 
 async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Files?: Map<string, string>; Local?: Map<string, string> })
 {
 	const Required: string[] = []; const Files = Saved?.Files ?? new Map<string, string>(); const Local = Saved?.Local ?? new Map<string, string>();
+	if(!Databases.has(Local)) { Databases.set(Local, new IDBFactory()); }
 	const WorkspaceEvents = new Map<string, ((...Args: any[]) => void)[]>(), Views = new Map<string, (Leaf: any) => any>();
 	const Tabs: any[] = [], Settings: any[] = [], Notices: string[] = [];
 	class Component { constructor(..._Args: any[]) { } }
@@ -99,7 +109,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	const Define = () => ({});
 	let BrowserRequests = 0;
 	runInNewContext(readFileSync(process.env.CODEX_SIDEBAR_TEST_BUNDLE ?? "main.js", "utf8"), {
-		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, atob, setTimeout, clearTimeout, setInterval, clearInterval,
+		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, indexedDB: Databases.get(Local), DOMException, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, atob, setTimeout, clearTimeout, setInterval, clearInterval,
 		fetch: async (Url: string, Params: any) =>
 		{
 			BrowserRequests++;
@@ -313,7 +323,7 @@ test("ordinary mobile chat edits use the two-input skilled turn and the local co
 		const Out = JSON.stringify({ schemaVersion: 1, kind: "note-edit", status: "proposal", markdown: New, rationale: "仅纠正加法结果." });
 		Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "edit-final", type: "agentMessage", phase: "final_answer", text: Out } } });
 		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
-		await new Promise(Resolve => setTimeout(Resolve, 20));
+		await wait_for_edit(Instance);
 		assert.equal(Instance.Edits.Store.Data.Writes.length, 1); assert.equal(Writes, 0);
 		const Plan = Instance.Edits.Store.Data.Writes[0];
 		await Promise.all([Instance.Edits.confirm(Plan.Id), Instance.Edits.confirm(Plan.Id)]);
@@ -324,7 +334,9 @@ test("ordinary mobile chat edits use the two-input skilled turn and the local co
 		await Instance.resend_message(User.Id);
 		const Replay = Instance.Session.Messages.findLast((Value: any) => Value.Role === "user");
 		assert.equal(Replay.Task.Source.Path, "scratch.md"); assert.equal(Replay.Task.Source.CapturedAt, "original-time"); assert.notEqual(Replay.Task.Id, User.Task.Id);
-		assert.ok(Local.has("codex-sidebar-edits:v2:test")); assert.ok(!JSON.stringify(Instance.State).includes("private-outside-snapshot"));
+		const Persisted = await open_edit_store({ getItem: Key => Local.get(Key) ?? null, setItem: () => {} }, "test", Databases.get(Local));
+		assert.equal(Persisted.Data.Records.length, Instance.Edits.Store.Data.Records.length); await Persisted.close();
+		assert.ok(!Local.has("codex-sidebar-edits:v2:test")); assert.ok(!JSON.stringify(Instance.State).includes("private-outside-snapshot"));
 		assert.ok(Required.every(Name => ["obsidian", "@codemirror/state", "@codemirror/view"].includes(Name)));
 	}
 	finally { Instance.onunload(); }
@@ -434,7 +446,7 @@ test("explicitly requesting a short proof preview produces a real preview before
 		const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", original: Original, markdown: Markdown, rationale: "只填充第17题答案留白, 保留题面和相邻内容" };
 		Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "proof-final", type: "agentMessage", phase: "final_answer", text: JSON.stringify(Output) } } });
 		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
-		await new Promise(Resolve => setTimeout(Resolve, 20));
+		await wait_for_edit(Instance);
 		const Plan = Instance.Edits.Store.Data.Writes[0];
 		assert.ok(Plan); assert.equal(Plan.State, "preview"); assert.equal(Writes, 0); assert.equal(Current, Before);
 		await Promise.all([Instance.Edits.confirm(Plan.Id), Instance.Edits.confirm(Plan.Id)]);
@@ -469,7 +481,7 @@ test("the preview action adopts a previous proposal through an AI edit task even
 		const Output = { schemaVersion: 1, kind: "note-edit", status: "proposal", original: Original, markdown: "$1+1=2$", rationale: "只修正计算结果" };
 		Instance.handle_message({ method: "item/completed", params: { threadId: "fixture-thread", turnId: "fixture-turn", item: { id: "ai-final", type: "agentMessage", phase: "final_answer", text: JSON.stringify(Output) } } });
 		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
-		await new Promise(Resolve => setTimeout(Resolve, 20));
+		await wait_for_edit(Instance);
 		const Plan = Instance.Edits.Store.Data.Writes[0]; assert.ok(Plan); assert.equal(Plan.Target.Range.From, Before.indexOf(Original)); assert.equal(Writes, 0);
 		await Instance.Edits.confirm(Plan.Id); assert.equal(Writes, 1); assert.equal(Current, Before.replace(Original, "$1+1=2$"));
 		assert.equal((Instance.State as any).Edits, undefined); assert.equal((Instance.State as any).Writes, undefined);

@@ -84,7 +84,7 @@ test("snapshot replay stays on original range and timestamp; missing device reco
 test("clearing or cancelling rejects late output and local store failures cannot advance the write journal", async () =>
 {
 	const F = await fixture(); await F.Controller.request("修改", F.Source, "captured", "note"); const Task = F.Sent[0];
-	F.Controller.cancel(Task.Id); await F.Controller.accept_result(Task.Id, JSON.stringify(Output), true); assert.equal(F.Store.Data.Writes.length, 0);
+	await F.Controller.cancel(Task.Id); await F.Controller.accept_result(Task.Id, JSON.stringify(Output), true); assert.equal(F.Store.Data.Writes.length, 0);
 	F.Store.clear(); assert.equal(F.Store.Data.Records.length, 0); assert.equal(F.Writes.length, 0);
 	const Storage = { getItem: () => null, setItem: () => { throw new Error("quota"); } }, Store = new EditStore(Storage, "quota");
 	assert.throws(() => Store.change(Data => Data.DeviceId = "changed"), /quota/); assert.notEqual(Store.Data.DeviceId, "changed");
@@ -94,7 +94,7 @@ test("clear during source validation cannot revive a task; read-only changes are
 {
 	const F = await fixture(); let Release!: (Value: string) => void;
 	F.Host.read_current = () => new Promise<string>(Resolve => Release = Resolve);
-	const Pending = F.Controller.request("修改", F.Source, "captured", "note"); F.Controller.clear(); Release(Before);
+	const Pending = F.Controller.request("修改", F.Source, "captured", "note"); await F.Controller.clear(); Release(Before);
 	await assert.rejects(Pending, /已清除/); assert.equal(F.Sent.length, 0);
 	const G = await fixture(); await G.Controller.request("修正", G.Source, "captured", "note"); await G.Controller.accept_result(G.Sent[0].Id, JSON.stringify(Output), true);
 	G.protect(); await assert.rejects(G.Controller.confirm(G.Store.Data.Writes[0].Id), /只读/); assert.equal(G.Writes.length, 0);
@@ -152,7 +152,7 @@ test("v1 records migrate into v2 without overwriting the old store, and resolved
 	const InvalidRaw = JSON.stringify(Invalid), InvalidLocal = new Map([["codex-sidebar-edits:v1:test", InvalidRaw]]);
 	await assert.rejects(fixture(InvalidLocal), /旧版修改记录损坏/); assert.equal(InvalidLocal.get("codex-sidebar-edits:v1:test"), InvalidRaw); assert.ok(!InvalidLocal.has("codex-sidebar-edits:v2:test"));
 	await G.Controller.confirm(G.Store.Data.Writes[0].Id); assert.ok(Local.has("codex-sidebar-edits:v2:test")); assert.equal(Local.get("codex-sidebar-edits:v1:test"), Raw);
-	G.Controller.clear(); assert.equal(Local.get("codex-sidebar-edits:v1:test"), ""); assert.equal(G.Store.Data.Records.length, 0);
+	await G.Controller.clear(); assert.equal(Local.get("codex-sidebar-edits:v1:test"), ""); assert.equal(G.Store.Data.Records.length, 0);
 	const H = await fixture(); await H.Controller.request("修改", H.Source, "ai", "note"); await H.Controller.accept_result(H.Sent[0].Id, JSON.stringify({ ...Output, original: Old }), true);
 	assert.throws(() => H.Store.change(Data => Data.Writes[0].Target.Range!.From = 0), /损坏/); assert.equal(H.Writes.length, 0);
 });

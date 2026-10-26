@@ -89,7 +89,7 @@ async function run_live(): Promise<void>
 		else { assert.equal(Plan.After, Before.replace("[h,e]=he-eh=e", "[h,e]=he-eh=2e")); }
 		await Promise.all([Controller.confirm(Plan.Id), Controller.confirm(Plan.Id)]); assert.equal(Writes, 1);
 		await Controller.undo(Plan.Id); assert.equal(Current, Before);
-		const Replay = Controller.replay(Spec!); Controller.register(Replay); await Controller.accept_result(Replay.Id, Output, true);
+		const Replay = Controller.replay(Spec!); await Controller.register(Replay); await Controller.accept_result(Replay.Id, Output, true);
 		Current += "\n后续编辑"; await assert.rejects(Controller.confirm(Store.Data.Writes.at(-1)!.Id), /陈旧/);
 		if(Scope === "ai") { assert.ok(Plan.Target.Range!.From > Source.Selection!.To); }
 		const Report = { scope: Scope, followup: Followup, writing: Writing, model: Model.model, effort: Effort, skillVersion: SkillVersion, inputs: 2, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", passed: ["real completed model edit", "runtime schema", Writing ? "proof in answer blank with unchanged question/neighbours" : "minimal coefficient correction", "zero pre-confirm writes", "duplicate confirm", "safe undo", "stale rejection"], host: "in-memory; native host checked separately" };

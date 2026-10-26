@@ -9,6 +9,7 @@ export interface WritePlan
 	Rationale: string;
 	State: "preview" | "pending" | "applied" | "undone" | "conflict";
 	Error?: string;
+	UndoPending?: boolean;
 }
 export interface LocalStorageLike
 {

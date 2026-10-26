@@ -16,6 +16,7 @@ export class ChatEdits
 {
 	readonly Writer: ConfirmedWriter<EditData>;
 	Error = "";
+	ErrorTaskId: string | null = null;
 	private Processing = new Set<string>();
 	constructor(readonly Store: EditStore, readonly Host: EditHost) { this.Writer = new ConfirmedWriter(Store, Host); }
 	async request(Request: string, Source: ContextSnapshot, Scope: EditScope, Role: EditRole): Promise<boolean>
@@ -28,8 +29,9 @@ export class ChatEdits
 		if(Scope === "ai") { Task.EditMode = "ai"; }
 		if(Role === "auto") { Task.EditRoleMode = "auto"; }
 		if(this.Host.protected_source({ ...Task, Target: { ...Task.Target, Range: Bound.Focus } })) { throw new Error("此范围包含标为只读的源书或教师原题, 不生成写回提案"); }
-		this.register(Task);
-		this.Error = "";
+		await this.register(Task);
+		if(Generation !== this.Store.Generation) { throw new Error("修改记录已清除, 拒绝迟到任务"); }
+		this.Error = ""; this.ErrorTaskId = null;
 		try
 		{
 			const Accepted = await this.Host.send(Task);
@@ -38,25 +40,57 @@ export class ChatEdits
 		}
 		catch(ErrorValue)
 		{
-			this.Store.change(Data => { const Value = Data.Records.find(Value => Value.Spec.Id === Task.Id); if(Value?.Status === "pending") { Value.Status = "rejected"; Value.Error = String(ErrorValue); } });
+			await this.Store.change(Data => { const Value = Data.Records.find(Value => Value.Spec.Id === Task.Id); if(Value?.Status === "pending") { Value.Status = "rejected"; Value.Error = String(ErrorValue); } });
 			this.Host.changed(); throw ErrorValue;
 		}
 	}
-	register(Task: TaskSpec): void
+	async register(Task: TaskSpec): Promise<void>
 	{
 		if(this.Store.Data.Records.some(Value => Value.Spec.Id === Task.Id)) { return; }
-		this.Store.change(Data => Data.Records.push({ Spec: structuredClone(Task), Status: "pending" }));
+		await this.Store.change(Data => { if(!Data.Records.some(Value => Value.Spec.Id === Task.Id)) { Data.Records.push({ Spec: structuredClone(Task), Status: "pending" }); } });
 	}
-	clear(): void
+	async clear(): Promise<void>
 	{
 		if(this.Writer.is_busy()) { throw new Error("正在写入或撤销, 请等待回读后再清除记录"); }
-		this.Store.clear(); this.Error = ""; this.Host.changed();
+		await this.Store.clear(); this.Error = ""; this.ErrorTaskId = null; this.Host.changed();
 	}
 	replay(Task: TaskSpec, Request?: string): TaskSpec
 	{
 		const Original = this.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id)?.Spec;
 		if(!Original) { throw new Error("本设备缺少原修改基线, 不会改用当前选区; 请明确重新捕获后发起新修改"); }
 		return { ...structuredClone(Original), Id: crypto.randomUUID(), Request: Request ?? Original.Request };
+	}
+	can_retry(TaskId: string): boolean
+	{
+		const Record = this.Store.Data.Records.find(Value => Value.Spec.Id === TaskId);
+		return Record?.Status === "rejected" && !!Record.Error?.includes("本设备修改记录已满");
+	}
+	async retry_result(TaskId: string, Messages: ChatMessage[]): Promise<void>
+	{
+		if(!this.can_retry(TaskId) || this.Processing.has(TaskId)) { throw new Error("这条记录不属于可恢复的旧容量错误"); }
+		const User = Messages.find(Value => Value.Role === "user" && Value.Task?.Id === TaskId);
+		const Replies = User?.TurnId ? Messages.filter(Value => Value.Role === "assistant" && Value.TurnId === User.TurnId) : [];
+		const Final = Replies.filter(Value => Value.Phase === "final_answer").at(-1) ?? Replies.at(-1);
+		if(!Final || Replies.some(Value => Value.CompletionStatus !== "completed") || (Replies.some(Value => Value.Phase) && !Replies.some(Value => Value.Phase === "final_answer"))) { throw new Error("缺少完整原始回复, 不恢复中断或其他轮次的输出"); }
+		this.Processing.add(TaskId);
+		try
+		{
+			await this.Store.change(Data =>
+			{
+				const Record = Data.Records.find(Value => Value.Spec.Id === TaskId);
+				if(Record?.Status !== "rejected" || !Record.Error?.includes("本设备修改记录已满")) { throw new Error("原修改记录已变化, 请重新检查"); }
+				Record.ErrorHistory = [...(Record.ErrorHistory ?? []), Record.Error];
+				Record.Status = "pending"; delete Record.Error;
+			});
+			await this.accept_result(TaskId, Final.Text, true);
+		}
+		catch(ErrorValue)
+		{
+			this.Error = String(ErrorValue); this.ErrorTaskId = TaskId;
+			await this.Store.change(Data => { const Record = Data.Records.find(Value => Value.Spec.Id === TaskId); if(Record?.Status === "pending") { Record.Status = "rejected"; Record.Error = this.Error; } });
+			throw ErrorValue;
+		}
+		finally { this.Processing.delete(TaskId); this.Host.changed(); }
 	}
 	async accept_result(TaskId: string, Text: string, Completed: boolean): Promise<void>
 	{
@@ -65,14 +99,14 @@ export class ChatEdits
 		if(!Completed) { throw new Error("修改输出中断或失败, 不生成可采用的提案"); }
 		const Output = parse_edit(Text), Plan = edit_plan(Record.Spec, Output);
 		if(Plan && this.Host.protected_source({ ...Record.Spec, Target: Plan.Target })) { throw new Error("AI 选择的实际范围包含只读内容, 提案已拒绝"); }
-		this.Store.change(Data =>
+		await this.Store.change(Data =>
 		{
 			const Entry = Data.Records.find(Value => Value.Spec.Id === TaskId);
 			if(Entry?.Status !== "pending") { return; }
 			Entry.Status = "complete"; Entry.Output = Output;
 			if(Plan) { Data.Writes.push(Plan); }
 		});
-		this.Error = "";
+		this.Error = ""; this.ErrorTaskId = null;
 		this.Host.changed();
 	}
 	consume(Messages: ChatMessage[]): void
@@ -86,11 +120,11 @@ export class ChatEdits
 			const Final = Replies.filter(Value => Value.Phase === "final_answer").at(-1) ?? Replies.at(-1)!;
 			const Complete = Replies.every(Value => Value.CompletionStatus === "completed") && (!!Replies.find(Value => Value.Phase === "final_answer") || !Replies.some(Value => Value.Phase));
 			this.Processing.add(Id);
-			void this.accept_result(Id, Final.Text, Complete).catch(ErrorValue =>
+			void this.accept_result(Id, Final.Text, Complete).catch(async ErrorValue =>
 			{
-				this.Error = String(ErrorValue);
-				try { this.Store.change(Data => { const Value = Data.Records.find(Value => Value.Spec.Id === Id); if(Value?.Status === "pending") { Value.Status = "rejected"; Value.Error = this.Error; } }); }
-				catch(ErrorValue) { this.Error += "; 无法保存修改记录: " + String(ErrorValue); }
+				this.Error = String(ErrorValue); this.ErrorTaskId = Id;
+				try { await this.Store.change(Data => { const Value = Data.Records.find(Value => Value.Spec.Id === Id); if(Value?.Status === "pending") { Value.Status = "rejected"; Value.Error = this.Error; } }); }
+				catch(ErrorValue) { if(String(ErrorValue) !== this.Error) { this.Error += "; 无法保存修改记录: " + String(ErrorValue); } }
 				this.Host.changed();
 			}).finally(() => this.Processing.delete(Id));
 		}
@@ -109,9 +143,9 @@ export class ChatEdits
 		if(!Record || !Plan || this.Host.protected_source({ ...Record.Spec, Target: Plan.Target })) { throw new Error("修改基线缺失或目标现已只读, 不自动撤销"); }
 		await this.Writer.undo(Id); this.Host.changed();
 	}
-	cancel(TaskId: string): void
+	async cancel(TaskId: string): Promise<void>
 	{
-		this.Store.change(Data =>
+		await this.Store.change(Data =>
 		{
 			const Record = Data.Records.find(Value => Value.Spec.Id === TaskId);
 			if(Data.Writes.some(Value => Value.TaskId === TaskId && ["pending", "applied"].includes(Value.State))) { throw new Error("写入已开始或已采用, 请使用安全撤销"); }

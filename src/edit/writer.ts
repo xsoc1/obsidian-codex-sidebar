@@ -15,7 +15,7 @@ export function valid_range(Target: WriteTarget): boolean
 export class ConfirmedWriter<Data extends { Writes: WritePlan[] } = { Writes: WritePlan[] }>
 {
 	private Locked = new Set<string>();
-	constructor(private Store: { Data: Data; change(Update: (Value: Data) => void): void }, private Host: WriteHost)
+	constructor(private Store: { Data: Data; change(Update: (Value: Data) => void): void | Promise<void> }, private Host: WriteHost)
 	{
 	}
 	is_busy(): boolean { return this.Locked.size > 0; }
@@ -27,6 +27,7 @@ export class ConfirmedWriter<Data extends { Writes: WritePlan[] } = { Writes: Wr
 			return;
 		}
 		this.Locked.add(Plan.Target.Path);
+		let ReadbackComplete = false;
 		try
 		{
 			note_path(Plan.Target.Path);
@@ -48,23 +49,26 @@ export class ConfirmedWriter<Data extends { Writes: WritePlan[] } = { Writes: Wr
 			}
 			if(Plan.State === "pending" && Current === Plan.After)
 			{
-				this.set_state(Id, "applied"); return;
+				ReadbackComplete = true;
+				await this.set_state(Id, "applied"); return;
 			}
 			if(await version_of(Current) !== Plan.Target.Version || Current !== Plan.Target.Before)
 			{
 				throw new Error("内容已变化, 拒绝陈旧预览; 请重新生成提案");
 			}
-			this.set_state(Id, "pending");
+			await this.set_state(Id, "pending");
 			await this.Host.compare_write(Plan.Target.Path, Current, Plan.After);
 			if(await this.Host.read_current(Plan.Target.Path) !== Plan.After)
 			{
 				throw new Error("写入回读不一致, 请核对当前内容");
 			}
-			this.set_state(Id, "applied");
+			ReadbackComplete = true;
+			await this.set_state(Id, "applied");
 		}
 		catch(ErrorValue)
 		{
-			this.set_state(Id, "conflict", ErrorValue instanceof Error ? ErrorValue.message : String(ErrorValue));
+			if(ReadbackComplete) { throw new Error("笔记已写入, 完成日志未保存; 存储恢复后可再次确认核对, 不会重复写入. " + String(ErrorValue)); }
+			if(this.Store.Data.Writes.find(Value => Value.Id === Id)?.State !== "pending") { await this.set_state(Id, "conflict", ErrorValue instanceof Error ? ErrorValue.message : String(ErrorValue)); }
 			throw ErrorValue;
 		}
 		finally
@@ -86,25 +90,28 @@ export class ConfirmedWriter<Data extends { Writes: WritePlan[] } = { Writes: Wr
 		this.Locked.add(Plan.Target.Path);
 		try
 		{
-			if(await this.Host.read_current(Plan.Target.Path) !== Plan.After)
+			const Current = await this.Host.read_current(Plan.Target.Path);
+			if(Plan.UndoPending && Current === Plan.Target.Before) { await this.set_state(Id, "undone"); return; }
+			if(Current !== Plan.After)
 			{
 				throw new Error("写入后已有其他编辑, 无法安全撤销");
 			}
+			await this.set_state(Id, "applied", undefined, true);
 			await this.Host.compare_write(Plan.Target.Path, Plan.After, Plan.Target.Before);
 			if(await this.Host.read_current(Plan.Target.Path) !== Plan.Target.Before)
 			{
 				throw new Error("撤销回读不一致");
 			}
-			this.set_state(Id, "undone");
+			await this.set_state(Id, "undone");
 		}
 		finally
 		{
 			this.Locked.delete(Plan.Target.Path);
 		}
 	}
-	private set_state(Id: string, State: WritePlan["State"], Error?: string): void
+	private async set_state(Id: string, State: WritePlan["State"], Error?: string, UndoPending = false): Promise<void>
 	{
-		this.Store.change(Data =>
+		await this.Store.change(Data =>
 		{
 			const Plan = Data.Writes.find(Value => Value.Id === Id)!;
 			if(!Plan)
@@ -112,6 +119,7 @@ export class ConfirmedWriter<Data extends { Writes: WritePlan[] } = { Writes: Wr
 				return;
 			}
 			Plan.State = State; Plan.Error = Error;
+			if(UndoPending) { Plan.UndoPending = true; } else { delete Plan.UndoPending; }
 		});
 	}
 }

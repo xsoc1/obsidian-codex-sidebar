@@ -3,7 +3,7 @@ import type { ChatEdits } from "./controller";
 import { render_comparison } from "./comparison";
 import type { TaskSpec } from "./task";
 
-export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatEdits | null, Task: TaskSpec, Render: Component, Changed: () => void): Promise<void>
+export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatEdits | null, Task: TaskSpec, Render: Component, Changed: () => void, Retry?: () => Promise<void>): Promise<void>
 {
 	Root.dataset.editStructured = "true";
 	const Record = Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id);
@@ -14,9 +14,20 @@ export async function render_edit(AppValue: App, Root: HTMLElement, Edits: ChatE
 	const Target = Plan?.Target ?? Record.Spec.Target!, Range = Target.Range!;
 	Root.createDiv({ text: `${Task.EditMode === "ai" ? Plan ? "AI 选择的实际范围" : "AI 可选范围" : "范围"}: 原文字符 ${Range.From + 1}-${Range.To}; 确认前不会修改文件.${Task.EditMode === "ai" && Task.WriteUnit?.Truncated ? " 本轮仅提供当前位置附近的有限窗口." : ""}` });
 	Root.createEl("p", { text: Record.Error ?? Record.Output?.rationale ?? (Record.Status === "pending" ? "正在生成修改稿..." : "修改提案已取消") });
-	if(Edits?.Error) { Root.createDiv({ text: Edits.Error, attr: { role: "status" } }); }
+	if(Edits?.Error && Edits.Error !== Record.Error && (!Edits.ErrorTaskId || Edits.ErrorTaskId === Task.Id)) { Root.createDiv({ text: Edits.Error, attr: { role: "status" } }); }
 	if(Record.Output?.status === "needs-decision") { Root.createDiv({ text: "此修改需要你先决定处理路线, 没有生成可写入稿. 请在聊天中明确决定后重新提出修改." }); }
 	if(Record.Output?.status === "no-change") { Root.createDiv({ text: "本轮无需写入" }); }
+	if(Retry && Edits?.can_retry(Task.Id))
+	{
+		const RetryButton = Root.createEl("button", { text: "恢复这次预览", attr: { type: "button" } });
+		RetryButton.addEventListener("click", async () =>
+		{
+			RetryButton.disabled = true;
+			try { await Retry(); }
+			catch(ErrorValue) { Root.createDiv({ text: String(ErrorValue), attr: { role: "status" } }); }
+			finally { RetryButton.disabled = false; Changed(); }
+		});
+	}
 	if(!Plan) { return; }
 	if(Task.EditMode === "ai") { const Original = Root.createEl("details"); Original.createEl("summary", { text: "查看 AI 选择的原文" }); Original.createEl("pre", { text: Target.Before!.slice(Range.From, Range.To), cls: "codex-edit-diff" }); }
 	Root.createDiv({ text: `状态: ${Plan.State}; ${Plan.Error ?? "格式已校验, 数学正确性仍须审核"}`, attr: { "aria-live": "polite" } });

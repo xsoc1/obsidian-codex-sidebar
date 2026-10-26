@@ -44,6 +44,29 @@ test("edit differences render complete original and proposed formula contexts; r
 	assert.ok(Root.all().some(Value => Value.Tag === "button" && Value.textContent === "确认写入此文件"));
 });
 
+test("a recorded error repeated as controller error appears once, with unrelated failures still visible", async () =>
+{
+	const Export = { exports: {} as any };
+	const Code = buildSync({ entryPoints: ["src/edit/panel.ts"], bundle: true, platform: "node", format: "cjs", write: false, external: ["obsidian"] }).outputFiles[0].text;
+	runInNewContext(Code, { module: Export, exports: Export.exports, require: () => ({ Modal: class { } }) });
+	const ErrorText = "Error: original storage failure", Task = { Id: "original", Source: {}, Target: { Range: { From: 0, To: 1 } } };
+	const Record = { Spec: Task, Status: "rejected", Error: ErrorText }, Edits = { Error: ErrorText, Store: { Data: { Records: [Record], Writes: [] } } };
+	const Root = new Element(); await Export.exports.render_edit({}, Root, Edits, Task, {}, () => {});
+	assert.equal(Root.all().filter(Value => Value.textContent === ErrorText).length, 1);
+	Edits.Error = "A different storage failure";
+	const Other = new Element(); await Export.exports.render_edit({}, Other, Edits, Task, {}, () => {});
+	assert.equal(Other.all().filter(Value => Value.textContent === Edits.Error).length, 1);
+	const DifferentTask = { ...Edits, ErrorTaskId: "other-task" }, Unrelated = new Element();
+	await Export.exports.render_edit({}, Unrelated, DifferentTask, Task, {}, () => {});
+	assert.equal(Unrelated.all().filter(Value => Value.textContent === Edits.Error).length, 0);
+	let Retries = 0;
+	const Recoverable = { ...Edits, Error: ErrorText, ErrorTaskId: Task.Id, can_retry: () => true }, RetryRoot = new Element();
+	await Export.exports.render_edit({}, RetryRoot, Recoverable, Task, {}, () => {}, async () => { Retries++; });
+	const Retry = RetryRoot.all().find(Value => Value.Tag === "button" && Value.textContent === "恢复这次预览")!;
+	assert.ok(Retry); await Retry.Listeners.get("click")!(); assert.equal(Retries, 1);
+	assert.equal(RetryRoot.all().filter(Value => Value.textContent === ErrorText).length, 1);
+});
+
 test("formula comparisons expand partial inline/display ranges without changing the actual write range or source strings", () =>
 {
 	const Before = "前段保留.\n\n说明 $x^2+1=3$.\n\n$$\n\\begin{aligned}\nf(x)&=x^2\\\\\n\n&=1\n\\end{aligned}\n$$\n\n后文保留.";

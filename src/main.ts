@@ -27,7 +27,7 @@ import { image_inputs, message_pdf_refs, history_pdf_refs } from "./pdf/inputs";
 import { pdf_reference, jpeg_info, type PdfImageRef } from "./pdf/types";
 import { PdfPageModal, pdf_preview, PdfInstructions } from "./pdf/panel";
 import { ChatEdits } from "./edit/controller";
-import { EditStore } from "./edit/store";
+import { open_edit_store } from "./edit/database";
 import { type EditRole, type EditScope } from "./edit/protocol";
 import { render_edit, export_edits } from "./edit/panel";
 import { edit_scope, EditScopeOptions } from "./edit/options";
@@ -239,7 +239,7 @@ export default class CodexSidebarPlugin extends Plugin
 		try
 		{
 			const Host = new ObsidianWriteHost(this.app);
-			this.Edits = new ChatEdits(new EditStore(localStorage, this.app.vault.getName()), {
+			this.Edits = new ChatEdits(await open_edit_store(localStorage, this.app.vault.getName()), {
 				read_current: Path => Host.read_current(Path), compare_write: (Path, Before, After) => Host.compare_write(Path, Before, After),
 				protected_source: Task => this.protected_edit(Task), send: Task => this.send_message(Task.Request, Task.Source, null, Task), changed: () => this.refresh()
 			});
@@ -1109,7 +1109,7 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				throw new Error("任务超过远程输入上限, 请缩小来源或修改范围");
 			}
-			if(Task?.Action === "edit") { this.Edits?.register(Task); }
+			if(Task?.Action === "edit") { await this.Edits?.register(Task); }
 			const PublicTask = Task ? structuredClone(Task) : undefined;
 			if(PublicTask?.Target)
 			{
@@ -1593,6 +1593,7 @@ export default class CodexSidebarPlugin extends Plugin
 	onunload(): void
 	{
 		this.Unloaded = true;
+		void this.Edits?.Store.close();
 		this.NoteSessions?.dispose();
 		this.Generation++;
 		this.Inline?.clear();
@@ -2029,7 +2030,7 @@ class CodexView extends ItemView
 			const Items = Messages.map(Message =>
 			{
 				const Task = structured_task(Messages, Message), Record = Task?.Action === "edit" ? this.Owner.Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id) : null;
-				const EditState = Task?.Action === "edit" ? [this.Owner.Edits?.Error, Record?.Status, Record?.Error, this.Owner.Edits?.Store.Data.Writes.filter(Value => Value.TaskId === Task.Id).map(Value => [Value.Id, Value.State, Value.Error])] : null;
+				const EditState = Task?.Action === "edit" ? [this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, Record?.Status, Record?.Error, this.Owner.Edits?.Store.Data.Writes.filter(Value => Value.TaskId === Task.Id).map(Value => [Value.Id, Value.State, Value.Error])] : null;
 				return { Id: Message.Id, Key: JSON.stringify([Message, Message.Role === "user" ? [this.Owner.Busy, this.EditingId === Message.Id] : null, EditState]), Render: () => this.render_card(Message, Messages) };
 			});
 			if(!Items.length)
@@ -2121,7 +2122,7 @@ class CodexView extends ItemView
 			}
 			else if(Structured?.Action === "edit")
 			{
-				await render_edit(this.app, Body, this.Owner.Edits, Structured, RenderComponent, () => this.Owner.refresh());
+				await render_edit(this.app, Body, this.Owner.Edits, Structured, RenderComponent, () => this.Owner.refresh(), () => this.Owner.Edits!.retry_result(Structured.Id, this.Owner.Session.Messages));
 				const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始修改输出" }); Raw.createEl("pre", { text: Message.Text });
 			}
 			else if(Message.Role === "assistant" || Message.Role === "reasoning")
@@ -2287,10 +2288,10 @@ class CodexSettings extends PluginSettingTab
 		let ConfirmEdits = false;
 		new Setting(this.containerEl).setName("本设备修改记录").setDesc("普通聊天的修改提案、原文基线与撤销记录仅存本设备, 不随远程聊天覆盖. 导出含原文, 请自行保管. 清除后不能采用或安全撤销旧提案, 不会改动笔记.")
 			.addButton(Button => Button.setButtonText("导出记录").onClick(() => { if(this.Owner.Edits) { export_edits(this.app, this.Owner.Edits.Store.export_records()); } }))
-			.addButton(Button => Button.setButtonText("清除记录...").onClick(() =>
+			.addButton(Button => Button.setButtonText("清除记录...").onClick(async () =>
 			{
 				if(!ConfirmEdits) { ConfirmEdits = true; Button.setButtonText("确认清除此设备记录"); return; }
-				try { this.Owner.Edits?.clear(); this.Owner.refresh(); new Notice("本设备修改记录已清除, 笔记未改动"); }
+				try { await this.Owner.Edits?.clear(); this.Owner.refresh(); new Notice("本设备修改记录已清除, 笔记未改动"); }
 				catch(ErrorValue) { new Notice(error_text(ErrorValue)); }
 				this.display();
 			}));
