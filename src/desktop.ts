@@ -1,9 +1,18 @@
 import { existsSync, readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
+import { resolve_codex_executable } from "./launch";
 export { CodexConnection } from "./rpc";
 export { CompletionService } from "./completion";
 export { existsSync };
+
+export async function runtime_info(Cli: string): Promise<{ Complete: boolean; Resolved: boolean; Version: string }>
+{
+	const Executable = resolve_codex_executable(Cli), Directory = dirname(Executable);
+	const Complete = ["codex-code-mode-host.exe", "codex-command-runner.exe", "codex-windows-sandbox-setup.exe"].every(Name => existsSync(join(Directory, Name)));
+	const Version = await new Promise<string>((Resolve, Reject) => execFile(Executable, ["--version"], { windowsHide: true, shell: false, timeout: 5000, maxBuffer: 8192 }, (ErrorValue, Output) => ErrorValue ? Reject(ErrorValue) : Resolve(Output.trim().slice(0, 160))));
+	return { Complete, Resolved: Executable !== Cli, Version };
+}
 
 export function skill_version(Path: string): string
 {

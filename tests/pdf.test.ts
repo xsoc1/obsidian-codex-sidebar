@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { buildSync } from "esbuild";
 import { runInNewContext } from "node:vm";
 import { webcrypto, createHash } from "node:crypto";
-import { jpeg_info, pdf_hash, pdf_reference, reference_id, validate_pdf } from "../src/pdf/types";
+import { jpeg_info, pdf_hash, pdf_reference, reference_id, validate_pdf, validate_region } from "../src/pdf/types";
 import { BridgePdfImages } from "../src/pdf/bridge-cache";
 import { image_inputs, message_pdf_refs, history_pdf_refs } from "../src/pdf/inputs";
 import { branch_prefix, history_items } from "../src/history";
@@ -26,6 +26,7 @@ test("PDF references validate original JPEG bounds and metadata without permitti
 	for(const Url of ["https://external/image.jpg", "file:///secret", "data:image/jpeg;base64,abc", "../private", "obsidian-pdf:" + "A".repeat(64)]) { assert.throws(() => reference_id(Url)); }
 	for(const Value of [Data.replace("jpeg", "png"), Data.slice(0, -4), "data:image/jpeg;base64," + "a".repeat(1500001)]) { assert.throws(() => jpeg_info(Value)); }
 	for(const Change of [ { ReadOnly: false }, { Pages: [] }, { PageCount: 0 }, { javascript: "run" }, { Pages: [{ Number: 1, TextLayer: false, Image: { ...Ref, data: Data } }] }, { Pages: [{ Number: 3, TextLayer: false, Image: Ref }] }, { Pages: [Snapshot.Pdf!.Pages[0], Snapshot.Pdf!.Pages[0]] } ]) { assert.throws(() => validate_pdf({ ...Snapshot.Pdf!, ...Change } as any)); }
+	assert.throws(() => validate_pdf({ ...Snapshot.Pdf!, Pages: [{ ...Snapshot.Pdf!.Pages[0], Image: { ...Ref, Kind: "region" } }] }), /未知字段/);
 	assert.equal(source_path("course/original.PDF"), "course/original.PDF");
 	assert.throws(() => source_path("../private.pdf")); assert.throws(() => note_path("course/original.pdf"));
 });
@@ -78,15 +79,15 @@ function reader_fixture(Scanned = false)
 	const Export = { exports: {} as any };
 	runInNewContext(Bundle, { module: Export, exports: Export.exports, crypto: webcrypto, TextEncoder, Uint8Array, atob, setTimeout, clearTimeout, require: () => ({ loadPdfJs: () => { throw new Error("supply fixture loader"); } }) });
 	const File: any = { path: "original.pdf", extension: "pdf", stat: { mtime: 1, size: 100 } };
-	let Loads = 0, Renders = 0;
-	const Images: any = { put: async () => Ref };
+	let Loads = 0, Renders = 0; const RenderOptions: any[] = [];
+	const Images: any = { put: async (_Data: any, Origin: any) => ({ ...Ref, Width: Canvas.width, Height: Canvas.height, ...(Origin ?? {}) }) };
 	const Reader = new Export.exports.PdfReader({ vault: { readBinary: async () => new ArrayBuffer(100) } }, Images, async () => ({ getDocument: (Params: any) =>
 	{
 		assert.equal(Params.isEvalSupported, false); assert.equal(Params.cMapPacked, true); assert.equal(Params.cMapUrl, "/lib/pdfjs/cmaps/"); Loads++;
-		return { promise: Promise.resolve({ numPages: 3, destroy: async () => {}, getPage: async () => ({ getTextContent: async () => ({ items: Scanned ? [] : [{ str: "[X,Y]=2Y", hasEOL: true }] }), getViewport: ({ scale }: any) => ({ width: 612 * scale, height: 792 * scale }), render: (Options: any) => { assert.equal(Options.intent, "print"); Renders++; return { promise: Promise.resolve(), cancel: () => {} }; } }) }) };
+		return { promise: Promise.resolve({ numPages: 3, destroy: async () => {}, getPage: async () => ({ getTextContent: async () => ({ items: Scanned ? [] : [{ str: "[X,Y]=2Y", hasEOL: true }] }), getViewport: ({ scale }: any) => ({ width: 612 * scale, height: 792 * scale }), render: (Options: any) => { assert.equal(Options.intent, "print"); Renders++; RenderOptions.push(Options); return { promise: Promise.resolve(), cancel: () => {} }; } }) }) };
 	} }));
 	const Canvas: any = { width: 0, height: 0, getContext: () => ({}), toDataURL: () => Data };
-	return { Reader, File, Owner: { createElement: () => Canvas }, Canvas, counts: () => ({ Loads, Renders }), location: Export.exports.pdf_location };
+	return { Reader, File, Owner: { createElement: () => Canvas }, Canvas, RenderOptions, counts: () => ({ Loads, Renders }), location: Export.exports.pdf_location };
 }
 
 test("bounded PDF reader preserves text-layer and scan metadata, rejects stale files, invalid pages and oversized documents", async () =>
@@ -122,4 +123,34 @@ test("PDF viewport selection is bounded to two intersecting pages and unmapped v
 	Root.querySelectorAll = () => [];
 	assert.throws(() => location(Root, "选区"), /指定页面/);
 	Selected = false; assert.throws(() => location(Root, "当前位置"), /指定页面/);
+});
+
+test("a full page plus a magnified formula region keeps one PDF page identity and exactly two images", async () =>
+{
+	const F = reader_fixture(), Version = (await F.Reader.capture(F.File, [1], F.Owner)).Version;
+	const Region = { X: 0.1, Y: 0.25, Width: 0.45, Height: 0.12 };
+	const Value = await F.Reader.capture(F.File, [{ Number: 1, Kind: "page", Version }, { Number: 1, Kind: "region", Region, Version }], F.Owner);
+	assert.equal(Value.Pdf.schemaVersion, 2); assert.deepEqual(Array.from(Value.Pdf.Pages, (P: any) => P.Number), [1, 1]); assert.deepEqual(Array.from(Value.Pdf.Pages, (P: any) => P.Kind), ["page", "region"]); validate_pdf(Value.Pdf);
+	const Crop = Value.Pdf.Pages[1]; assert.equal(Crop.Region.PageWidth, 612); assert.equal(Crop.Region.PageHeight, 792); assert.ok(Crop.Region.Scale > 2.5); assert.equal(Crop.TextLayer, false);
+	assert.ok(F.RenderOptions.at(-1).transform[4] < 0 && F.RenderOptions.at(-1).transform[5] < 0);
+	await assert.rejects(F.Reader.capture(F.File, [1, 2, { Number: 2, Kind: "region", Region }], F.Owner), /最多两张图/);
+	await assert.rejects(F.Reader.capture(F.File, [{ Number: 1, Kind: "region", Region, Version: "b".repeat(64) }], F.Owner), /区域选择后已变化/);
+	for(const Change of [{ X: -1 }, { Width: 0 }, { X: 0.9, Width: 0.5 }, { X: 0, Y: 0, Width: 1, Height: 1 }]) { assert.throws(() => validate_region({ ...Region, ...Change })); }
+	const Controller = new AbortController(); Controller.abort(); await assert.rejects(F.Reader.capture(F.File, [1], F.Owner, "当前位置", "", false, Controller.signal), /已取消/);
+	F.Reader.remember_page(F.File, 2); assert.equal(F.Reader.last_page(F.File), 2); assert.equal(F.Reader.last_page({ ...F.File, path: "other.pdf" }), null); F.File.stat.mtime++; assert.equal(F.Reader.last_page(F.File), null); F.Reader.close();
+});
+
+test("region cache metadata is validated and stays device-scoped without changing legacy image responses", () =>
+{
+	const Directory = mkdtempSync(join(tmpdir(), "codex-pdf-region-cache-"));
+	try
+	{
+		const Cache = new BridgePdfImages(join(Directory, "a")), Epoch = Cache.request({ action: "has", ids: [] }).epoch;
+		const Origin = { Kind: "region", Region: { X: 0.2, Y: 0.3, Width: 0.5, Height: 0.5, PageWidth: 612, PageHeight: 792, Scale: 4, Rotation: 0 } };
+		const Stored = Cache.request({ action: "put", id: Id, data: Data, epoch: Epoch, origin: Origin }); assert.equal(Stored.Kind, "region"); assert.deepEqual(Stored.Region, Origin.Region);
+		assert.ok(readFileSync(join(Directory, "a", Id + ".jpeg-data.origin.json"), "utf8").includes('"Kind":"region"'));
+		assert.throws(() => Cache.request({ action: "put", id: Id, data: Data, epoch: Epoch, origin: { Kind: "page", Region: Origin.Region } }));
+		Cache.request({ action: "clear" }); assert.throws(() => Cache.get(Id));
+	}
+	finally { rmSync(Directory, { recursive: true, force: true }); }
 });

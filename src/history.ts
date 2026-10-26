@@ -1,6 +1,8 @@
 import { build_prompt, type ContextSnapshot, type AnswerQuote } from "./prompt";
 import type { TaskSpec } from "./edit/task";
 import { message_pdf_refs } from "./pdf/inputs";
+import type { SourceReference } from "./sources";
+import type { HistoryInputLedger } from "./history-budget";
 
 export interface ChatMessage
 {
@@ -16,6 +18,10 @@ export interface ChatMessage
 	Task?: TaskSpec;
 	CompletionStatus?: "completed" | "interrupted" | "failed";
 	Phase?: "commentary" | "final_answer" | null;
+	OperationId?: string;
+	SyncVersion?: { Revision: number; Digest: string; Origin: string };
+	Sources?: SourceReference[];
+	InputLedger?: HistoryInputLedger;
 }
 
 export function history_items(Messages: ChatMessage[], Images = new Map<string, string>())

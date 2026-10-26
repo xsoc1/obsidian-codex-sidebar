@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { new_session, session_stamp, delete_session_plan, prune_sessions, restore_sessions, deleted_session_ids } from "../src/sessions";
+import { new_session, session_stamp, delete_session_plan, prune_sessions, restore_sessions, deleted_session_ids, deleted_messages, message_deleted } from "../src/sessions";
+import { create_send_operation, merge_operations } from "../src/sync/operations";
+import { client_sync } from "../src/sync/types";
 
 function fixture()
 {
@@ -46,4 +48,34 @@ test("old data without deletion markers stays unchanged and an independent devic
 	const F = fixture(), Normal = prune_sessions(F.State); assert.deepEqual(Normal, F.State); assert.ok(!("DeletedSessionIds" in Normal));
 	const Removed = delete_session_plan(F.State, F.A.Id, session_stamp(F.A)).State;
 	assert.ok(!prune_sessions(Removed).Sessions.some(S => S.Id === F.A.Id)); assert.ok(prune_sessions(F.State).Sessions.some(S => S.Id === F.A.Id));
+});
+
+test("a stale remote snapshot cannot erase a locally saved message or an unlinked local conversation", () =>
+{
+	const F = fixture(), Remote = structuredClone(F.State); F.A.Messages.push({ Id: "local-pending", Role: "user", Text: "Original pending question", Prompt: "Original immutable input" });
+	const Extra = new_session("Original offline conversation"); Extra.Messages.push({ Id: "offline", Role: "user", Text: "Original offline content" }); F.State.Sessions.push(Extra);
+	const Restored = restore_sessions(F.State, Remote, [], false);
+	assert.ok(Restored.Sessions.find(S => S.Id === F.A.Id)!.Messages.some(M => M.Id === "local-pending")); assert.ok(Restored.Sessions.some(S => S.Id === Extra.Id));
+	const Reopened: typeof Restored = JSON.parse(JSON.stringify(Restored)); assert.ok(restore_sessions(Reopened, Remote, [], false).Sessions.find(S => S.Id === F.A.Id)!.Messages.some(M => M.Id === "local-pending"));
+});
+
+test("message tombstones filter stale local and remote snapshots while an independent branch keeps its original prompt", () =>
+{
+	const F = fixture(); F.A.Messages[0].Prompt = "Original immutable prompt"; F.B.Messages[0].Prompt = "Original branch prompt";
+	F.A.Messages.push({ Id: "answer", Role: "assistant", TurnId: "original-turn", Text: "Original answer" });
+	const Remote: any = { ...structuredClone(F.State), DeletedMessages: [{ SessionId: F.A.Id, MessageId: "question" }, { SessionId: F.A.Id, MessageId: "answer" }] };
+	const Restored: any = restore_sessions(F.State, Remote, [], false); assert.equal(Restored.Sessions.find((S: any) => S.Id === F.A.Id).Messages.length, 0);
+	assert.equal(Restored.Sessions.find((S: any) => S.Id === F.B.Id).Messages[0].Prompt, "Original branch prompt");
+	const Again: any = restore_sessions(JSON.parse(JSON.stringify(Restored)), F.State, [], false); assert.equal(Again.Sessions.find((S: any) => S.Id === F.A.Id).Messages.length, 0); assert.deepEqual(Again.DeletedMessages, Remote.DeletedMessages);
+});
+
+test("message tombstones cancel only matching unsubmitted operations and preserve unknown evidence plus branch input", async () =>
+{
+	const F = fixture(), Sync = client_sync("original-scope"), Local = await create_send_operation(Sync.Scope, F.A.Id, "question", { Prompt: "Original immutable" }), Unknown = await create_send_operation(Sync.Scope, F.A.Id, "answer", { Prompt: "Original pending verification" }), Branch = await create_send_operation(Sync.Scope, F.B.Id, "question", { Prompt: "Original independent branch" });
+	Unknown.Status = "submission-unknown"; Unknown.Attempted = true; Unknown.TurnId = "original-turn"; Sync.Operations.push(Local, Unknown, Branch);
+	const State = { ...F.State, Sync, DeletedMessages: [{ SessionId: F.A.Id, MessageId: "question" }, { SessionId: F.A.Id, MessageId: "answer" }] }, Pruned = prune_sessions(State);
+	assert.equal(Pruned.Sync.Operations[0].Status, "cancelled"); assert.equal(Pruned.Sync.Operations[0].MessageDeleted, true); assert.deepEqual(Pruned.Sync.Operations[0].Input, Local.Input);
+	assert.equal(Pruned.Sync.Operations[1].Status, "submission-unknown"); assert.equal(Pruned.Sync.Operations[1].TurnId, "original-turn"); assert.equal(Pruned.Sync.Operations[2].MessageDeleted, undefined);
+	assert.equal(merge_operations(Pruned.Sync.Operations, [Local])[0].MessageDeleted, true); assert.equal(message_deleted(Pruned, F.A.Id, "question"), true); assert.equal(message_deleted(Pruned, F.B.Id, "question"), false);
+	for(const Value of [null, "bad", [{}], [{ SessionId: "s", MessageId: " " }], [{ SessionId: "s", MessageId: "m", Other: true }]]) { assert.throws(() => deleted_messages(Value), /损坏/); }
 });

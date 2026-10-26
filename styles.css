@@ -116,6 +116,18 @@
 .codex-message-label { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; justify-content: space-between; }
 .codex-message-label button { font-size: 11px; min-height: 26px; padding: 3px 7px; }
 .codex-message-context { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; margin-bottom: 6px; }
+.codex-history-load { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0 10px; }
+.codex-sidebar :is(.codex-edit-target, .codex-answer-sources button, .codex-followup-chain button) { text-align: left; overflow-wrap: anywhere; white-space: normal; max-width: 100%; }
+.codex-answer-sources, .codex-followup-chain { font-size: 12px; margin-top: 8px; }
+.codex-followup-chain button { margin: 4px 4px 0 0; }
+.codex-operation-state, .codex-edit-retention { color: var(--text-muted); font-size: 12px; margin: 6px 0; }
+.codex-sync-conflicts { font-size: 12px; margin-top: 6px; }
+.codex-sync-conflict { margin: 6px 0; }
+.codex-conflict-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: 12px; }
+.codex-draft-state { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; margin: 6px 0; }
+.codex-draft-state[hidden] { display: none; }
+.codex-draft-state pre { white-space: pre-wrap; max-height: 100px; overflow: auto; }
+.codex-draft-state button { max-width: 100%; white-space: normal; }
 .codex-message-body { font-size: var(--codex-reading-size); line-height: 1.7; overflow-wrap: anywhere; min-width: 0; }
 .codex-assistant .codex-message-body { user-select: text; -webkit-user-select: text; }
 .codex-user .codex-message-body, .codex-system .codex-message-body { white-space: pre-wrap; }

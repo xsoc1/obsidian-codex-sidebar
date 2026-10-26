@@ -35,9 +35,23 @@ import { ComposerActions, type ComposeAction } from "./edit/composer";
 import { MessageList, type MessageNode } from "./message-list";
 import { SelectionPreview, selection_in_source } from "./selection-preview";
 import { NoteSessions, note_file_path } from "./note-sessions";
-import { new_session, prune_sessions, restore_sessions, delete_session_plan, type ChatSession, type SessionState } from "./sessions";
+import { new_session, prune_sessions, restore_sessions, delete_session_plan, message_deleted, type ChatSession, type SessionState } from "./sessions";
 import { DeleteSessionDialog } from "./session-dialog";
 import type { CacheContext } from "./edit/cache";
+import { CodexView } from "./view";
+import { CodexSettings } from "./settings";
+import { environment_diagnostics, type DiagnosticProbe } from "./diagnostics";
+import { RunLifecycle, PreparationCancelled, preparation_step, type PreparationTicket } from "./runtime/lifecycle";
+import { send_intent, validate_outbox, normalize_outbox, type SendIntent } from "./runtime/outbox";
+import { ensure_sync, create_send_operation, update_operation } from "./sync/operations";
+import type { SendOperation, OperationStatus } from "./sync/types";
+import { content_digest } from "./sync/types";
+import { load_state_file, validate_saved_state, write_state_file } from "./runtime/state-store";
+import { build_history_input, plan_history_input, HistoryReadTool, read_history_page, type HistoryBudgetOptions } from "./history-budget";
+import { source_reference, tool_read_reference, rename_sources, type SourceReference } from "./sources";
+import { write_late_receipt, apply_late_receipts } from "./runtime/receipts";
+import { message_checkpoint } from "./runtime/message-events";
+import { merge_sync_metadata } from "./sync/metadata";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -62,7 +76,11 @@ interface SidebarSettings
 interface SavedState extends SessionState
 {
 	Settings: SidebarSettings;
+	Outbox?: SendIntent[];
+	SchemaVersion?: 2;
 }
+
+interface StateTarget { Scope: string; Remote: boolean; Path: string; State: SavedState; Connection: RpcConnection | null; OperationId?: string; }
 
 function error_text(ErrorValue: unknown): string
 {
@@ -87,6 +105,170 @@ async function instruction_hash(Text: string): Promise<string>
 
 export default class CodexSidebarPlugin extends Plugin
 {
+	readonly Runtime = new RunLifecycle();
+	private Diagnosing = false;
+	private LastInputLedger = new Map<string, ChatMessage["InputLedger"]>();
+	private thread_session(ThreadId: string): ChatSession | undefined { return this.State.Sessions.find(S => S.ThreadId === ThreadId || this.LiveThreads.get(S.Id) === ThreadId); }
+	private update_run_operation(Target: StateTarget, Id: string, Status: OperationStatus, Details: Partial<SendOperation> = {}): void
+	{
+		const State = this.target_state(Target), Operation = State.Sync?.Operations.find(O => O.Id === Id), Intent = State.Outbox?.find(O => O.Id === Id);
+		if(Operation) { update_operation(State.Sync!, Id, Status, Details); }
+		if(Intent && !["completed", "cancelled", "failed"].includes(Intent.Status)) { Intent.Status = Status; if(Details.Error) { Intent.Error = Details.Error; } }
+	}
+
+	private completed_key(Scope: string, ThreadId: string, TurnId: string): string { return JSON.stringify([Scope, ThreadId, TurnId]); }
+	private async commit_send_receipt(Target: StateTarget, Operation: SendOperation, Result: any, Remote?: SendOperation): Promise<any>
+	{
+		const State = this.target_state(Target), Current = State.Sync?.Operations.find(O => O.Id === Operation.Id) ?? Operation;
+		if(Current.Digest !== Operation.Digest) { throw new Error("接收凭证的原始输入身份已变化, 不覆盖"); }
+		const Terminal = ["completed", "cancelled", "failed"].includes(Current.Status), TerminalStatus = Current.Status;
+		if(Remote && State.Sync) { update_operation(State.Sync, Current.Id, Remote.Status, Remote); }
+		if(Terminal) { Current.Status = TerminalStatus; }
+		if(Result?.turn?.id)
+		{
+			Current.Result = structuredClone(Result); Current.TurnId = Result.turn.id; Current.ThreadId = (Current.Request as any)?.threadId ?? Current.ThreadId;
+			if(!Remote && !["completed", "cancelled", "failed"].includes(Current.Status)) { Current.Status = this.CompletedTurns.has(this.completed_key(Target.Scope, Current.ThreadId ?? "", Result.turn.id)) ? "completed" : "running"; }
+			const Session = State.Sessions.find(S => S.Id === Current.SessionId), Message = Session?.Messages.find(M => M.Id === Current.MessageId);
+			if(Message) { Message.TurnId = Result.turn.id; } else if(!Session) { Current.SessionDeleted = true; } else if(message_deleted(State, Current.SessionId, Current.MessageId)) { Current.MessageDeleted = true; }
+			if(this.Unloaded && Current.Status === "running") { Current.Status = "submission-unknown"; Current.Error = "插件已关闭, 原接收凭证保留, 运行结果需恢复后核对"; }
+		}
+		Object.assign(Operation, Current); await this.save_target(Target); return Result;
+	}
+	get RuntimeState() { return { Stage: this.Runtime.Stage }; }
+	get CanStop(): boolean { return this.Runtime.CanStop || this.Busy || this.ChatPreparing || !!this.Connecting || !!this.TurnId; }
+	operation_state(Id: string): Pick<SendOperation, "Status" | "Error" | "TurnId" | "Attempted"> | null
+	{
+		return this.State.Sync?.Operations.find(O => O.Id === Id) ?? (this.State.Outbox?.some(O => O.Id === Id) ? { ...this.State.Outbox.find(O => O.Id === Id)!, Attempted: false } : null);
+	}
+	async resume_operation(Id: string): Promise<void>
+	{
+		const Operation = this.State.Sync?.Operations.find(O => O.Id === Id), Intent = this.State.Outbox?.find(O => O.Id === Id), Status = Operation ?? Intent;
+		if(!Status || !["local", "received"].includes(Status.Status) || Operation?.Attempted === true || Operation?.Conflicts?.length) { throw new Error("原提交结果未知或已有终态, 不能盲目继续发送; 请先核对"); }
+		const Session = this.State.Sessions.find(S => S.Id === Status.SessionId), Message = Session?.Messages.find(M => M.Id === Status.MessageId && M.OperationId === Id);
+		if(!Session || !Message || this.State.ActiveId !== Session.Id) { throw new Error("请先返回原会话核对这条已保存问题"); }
+		const Task = Message.Task ? this.Edits?.Store.Data.Records.find(R => R.Spec.Id === Message.Task!.Id)?.Spec : null;
+		if(Message.Task && !Task) { throw new Error("原修改基线已到期或缺失, 请明确重新捕获后生成新预览"); }
+		if(Task) { await this.Edits!.Store.change(Data => { const R = Data.Records.find(R => R.Spec.Id === Task.Id); if(R && R.Status === "rejected") { R.Status = "pending"; delete R.Error; } }); }
+		await this.send_message(Message.Text, Message.Context ?? null, Message.Quote ?? null, Task, { MessageId: Message.Id, OperationId: Id });
+	}
+	async resolve_message_conflict(Key: string, Choice: "local" | "remote"): Promise<void>
+	{
+		if(!["local", "remote"].includes(Choice) || this.Busy || this.ChatPreparing) { throw new Error("请先等待当前请求完成"); }
+		const Conflicts = this.State.Sync?.Conflicts ?? this.State.MessageConflicts ?? [], Matching = Conflicts.filter(C => C.Key === Key);
+		if(Matching.length !== 1) { throw new Error("同一身份存在多份冲突, 请先导出双方完整记录逐一核对, 未猜选其中一份"); }
+		const C = Matching[0], Parts = JSON.parse(Key), SessionId = Parts[0] === "message" ? Parts[1] : Parts[0], MessageId = Parts[0] === "message" ? Parts[2] : Parts[1];
+		const Session = this.State.Sessions.find(S => S.Id === SessionId), Index = Session?.Messages.findIndex(M => M.Id === MessageId) ?? -1;
+		if(!Session || Index < 0 || this.State.DeletedSessionIds?.includes(SessionId)) { throw new Error("目标消息或会话已不存在, 不恢复已删除数据"); }
+		const Candidate = Choice === "local" ? C.Local : C.Remote;
+		if(!Candidate || typeof Candidate !== "object" || (Candidate as ChatMessage).Id !== MessageId || typeof (Candidate as ChatMessage).Text !== "string" || !["user", "assistant", "system", "reasoning"].includes((Candidate as ChatMessage).Role)) { throw new Error("此冲突不是可确认的单条消息, 请保留导出记录核对"); }
+		const Stamp = JSON.stringify(C), MessageStamp = JSON.stringify(Session.Messages[Index]), Scope = this.local_scope();
+		const Accepted = await new Promise<boolean>(Resolve =>
+		{
+			const Dialog = new Modal(this.app); this.Modals.add(Dialog); let Done = false;
+			Dialog.contentEl.createEl("h3", { text: "确认会话消息冲突" }); Dialog.contentEl.createEl("p", { text: `只替换原会话中的这一条消息为${Choice === "local" ? "本机" : "远端"}版本. 双方原记录保留审计, 不写入笔记或重发推理.` });
+			Dialog.contentEl.createEl("pre", { text: (Candidate as ChatMessage).Text.slice(0, 16000) });
+			const Button = Dialog.contentEl.createEl("button", { text: "确认采用此消息版本" }); Button.addEventListener("click", () => { Done = true; Resolve(true); Dialog.close(); });
+			Dialog.onClose = () => { this.Modals.delete(Dialog); if(!Done) { Resolve(false); } }; Dialog.open();
+		});
+		if(!Accepted) { return; }
+		if(Scope !== this.local_scope() || !Conflicts.includes(C) || JSON.stringify(C) !== Stamp || JSON.stringify(Session.Messages[Index]) !== MessageStamp || !this.State.Sessions.includes(Session)) { throw new Error("确认期间冲突或消息发生变化, 未覆盖后续内容"); }
+		const Audit = ((this.State as any).ResolvedConflicts ??= []); Audit.push({ ...structuredClone(C), Choice }); Session.Messages[Index] = structuredClone(Candidate as ChatMessage);
+		Conflicts.splice(Conflicts.indexOf(C), 1); await this.persist(); this.refresh();
+	}
+	private local_scope(): string { return this.Remote.Enabled ? "remote-local:" + this.Remote.CacheId : "desktop:" + this.app.vault.getName(); }
+	draft_scope(): string { return this.local_scope() + ":" + (this.Remote.CacheId ?? "local"); }
+	private state_path(Remote = this.Remote.Enabled): string { return `${this.manifest.dir}/${Remote ? "remote-" + this.Remote.CacheId : "desktop"}-state-v2.json`; }
+	private state_target(): StateTarget { return { Scope: this.local_scope(), Remote: this.Remote.Enabled, Path: this.state_path(), State: this.State, Connection: this.Connection }; }
+	private target_state(Target: StateTarget): SavedState { if(Target.Scope === this.local_scope()) { Target.State = this.State; } return Target.State; }
+	private async save_target(Target: StateTarget, SyncRemote = false): Promise<void>
+	{
+		const State = this.target_state(Target);
+		if(this.Unloaded || Target.Scope !== this.local_scope())
+		{
+			const Record = State.Sync?.Operations.find(O => O.Id === Target.OperationId) ?? State.Outbox?.find(O => O.Id === Target.OperationId);
+			if(Record) { await write_late_receipt(this.app.vault.adapter, Target.Path, Record, State.Outbox?.find(I => I.Id === Record.Id)); } return;
+		}
+		return this.persist_snapshot(State, SyncRemote, Target);
+	}
+	async reconcile_operation(Id: string): Promise<void>
+	{
+		if(await apply_late_receipts(this.app.vault.adapter, this.state_path(), this.State)) { await this.persist(false); }
+		if(this.Remote.Enabled && !this.Connection) { this.Runtime.stage("recovering"); await this.ensure_connection(); }
+		const Operation = this.State.Sync?.Operations.find(O => O.Id === Id);
+		if(!Operation) { new Notice(this.State.Outbox?.find(O => O.Id === Id)?.Status === "cancelled" ? "准备已取消, 没有自动重发" : "此问题只保存在本机, 尚无服务端提交凭证; 可明确重发为新分支"); return; }
+		if(this.Connection instanceof RemoteConnection)
+		{
+			const Current = await this.Connection.operation_status(Id);
+			if(!Current) { new Notice("没有查到接收凭证, 不能据此断言请求已停止, 不自动重发"); return; }
+			update_operation(this.State.Sync!, Id, Current.Status, Current); await this.persist(false); await this.recover_remote(this.Connection); this.refresh();
+			new Notice(`发送状态: ${{ local: "仅本机", received: "服务端已接收", "submission-unknown": "推理结果待核对", running: "生成中", completed: "已完成", cancelled: "已取消", failed: "失败" }[Current.Status]}`); return;
+		}
+		new Notice(["completed", "cancelled", "failed"].includes(Operation.Status) ? "已保存此操作的终态" : "本机临时进程不提供跨重启提交核对; 原问题保留, 未自动重发. 请核对已有回答, 必要时明确重发为新分支");
+	}
+	private async recover_remote(Connection: RemoteConnection): Promise<void>
+	{
+		if(this.Connection !== Connection || this.Unloaded) { return; }
+		const OldInfo = this.HostInfo as any, Info = Connection.Info;
+		if(Info && OldInfo && (Info.server !== OldInfo.server || (Info.agentInstance && OldInfo.agentInstance && Info.agentInstance !== OldInfo.agentInstance)))
+		{
+			this.LiveThreads.clear(); this.LoadedThread = null; this.LastInputLedger.clear();
+			for(const S of this.State.Sessions) { S.ThreadId = null; S.InstructionsHash = ""; }
+		}
+		this.HostInfo = Info;
+		const Restored = await Connection.restore_state(this.State, this.NoteSessions?.Data.Enabled ? this.NoteSessions.Data.Links.map(L => L.SessionId) : [], !this.NoteSessions?.Manual);
+		if(this.Connection !== Connection || this.Unloaded) { return; }
+		this.merge_restored(Restored);
+		for(const Id of this.State.Sync?.Operations.filter(O => ["received", "submission-unknown", "running"].includes(O.Status)).map(O => O.Id) ?? [])
+		{
+			if(Connection.Info?.capabilities?.operationStatus !== 1) { break; }
+			const Current = await Connection.operation_status(Id);
+			if(this.Connection !== Connection || this.Unloaded) { return; }
+			if(Current && this.State.Sync?.Operations.some(O => O.Id === Id)) { update_operation(this.State.Sync, Id, Current.Status, Current); }
+		}
+		await this.persist(false); this.restore_runtime(); this.Status = "已恢复状态与事件监听, 未重发推理"; this.refresh();
+	}
+	private merge_restored(Restored: SavedState, Bootstrap = false): void
+	{
+		const Fresh = this.State, Merged = restore_sessions(Fresh, Restored, this.NoteSessions?.Data.Enabled ? this.NoteSessions.Data.Links.map(L => L.SessionId) : [], !this.NoteSessions?.Manual);
+		if(Restored.Sync) { Merged.Sync = merge_sync_metadata(Merged.Sync, Restored.Sync); }
+		this.State = { ...Fresh, ...Merged, Settings: Bootstrap && !Fresh.Settings.Model ? { ...Fresh.Settings, Model: Restored.Settings.Model, Effort: Restored.Settings.Effort } : Fresh.Settings, Outbox: Fresh.Outbox };
+	}
+
+	async diagnose_environment(): Promise<void>
+	{
+		if(this.Diagnosing) { return; }
+		this.Diagnosing = true;
+		const Dialog = new Modal(this.app); this.Modals.add(Dialog); Dialog.onClose = () => { this.Modals.delete(Dialog); Dialog.contentEl.empty(); };
+		Dialog.contentEl.createEl("h3", { text: "Codex 环境检查" }); const Body = Dialog.contentEl.createDiv({ attr: { role: "status" } }); Body.setText("正在检查, 不提交推理请求..."); Dialog.open();
+		const Ready = this.ensure_connection();
+		void Ready.catch(() => {});
+		const Probes: DiagnosticProbe[] = [
+			{ Name: "完整 Codex 运行包", Run: async () =>
+			{
+				if(this.Remote.Enabled) { return { Status: "unavailable", Detail: "运行包在 Windows 桥主机, 客户端无法逐文件核验", Action: "在 Windows 使用同一检查入口核验 CLI 与配套程序" }; }
+				this.Desktop ??= await import("./desktop"); const Cli = this.State.Settings.CliPath || await this.Desktop.discover_cli(), Info = await this.Desktop.runtime_info(Cli);
+				return { Status: Info.Complete ? "ok" : "warning", Detail: `${Info.Version}; ${Info.Complete ? "配套工具程序齐全" : "当前目录未找到全部配套程序"}${Info.Resolved ? "; 已为插件进程定位完整应用运行包" : ""}`, Action: Info.Complete ? undefined : "在设置中选择完整 CLI 安装目录, 不仅复制单个 exe" };
+			} },
+			{ Name: "登录", Run: async () => { await Ready; const Account = await this.Connection!.request("account/read", { refreshToken: false }); return { Status: Account.account ? "ok" : "error", Detail: Account.account ? "Codex 已登录" : "尚未登录", Action: Account.account ? undefined : "在 Codex 应用或 CLI 完成登录, 不向插件粘贴认证文件" }; } },
+			{ Name: "模型目录", Run: async () => { await Ready; return { Status: this.Models.length ? "ok" : "error", Detail: this.Models.length ? `读取到 ${this.Models.length} 个模型, 不等同于推理额度验收` : this.CatalogError || "目录为空", Action: this.Models.length ? undefined : "连接恢复后重查目录" }; } },
+			{ Name: "math-writing", Run: async () => { await Ready; await this.ensure_math_skill(); return { Status: "ok", Detail: this.SkillStatus }; } },
+			{ Name: "Obsidian CLI 与当前库", Run: async () =>
+			{
+				await Ready;
+				if(this.Remote.Enabled) { return { Status: this.HostInfo?.vault === this.app.vault.getName() ? "ok" : "error", Detail: "读取发生在 Windows 同步副本; 客户端快照保持独立", Action: this.HostInfo?.vault === this.app.vault.getName() ? undefined : "核对桥绑定的库, 不跨库重定向" }; }
+				const Result = await run_obsidian_read(this.obsidian_cli(), this.app.vault.getName(), { command: "vault", params: { info: "name" } });
+				const Matched = Result.success && Result.contentItems[0].text.trim() === this.app.vault.getName();
+				return { Status: Matched ? "ok" : "error", Detail: Matched ? "CLI 可访问当前笔记库" : Result.success ? "CLI 返回的库名与当前库不一致" : "CLI 无法读取当前库", Action: Matched ? undefined : "保持当前 Obsidian 库已打开, 核对 CLI 路径与库名" };
+			} },
+			{ Name: "远程能力", Run: async () => { if(!this.Remote.Enabled) { return { Status: "ok", Detail: "本机模式, 不需要独立远程桥" }; } await Ready; const Info = this.HostInfo as any; return { Status: Info?.protocolVersion >= 2 ? "ok" : "warning", Detail: `桥产品版本 ${Info?.bridgeVersion ?? "旧桥未报告"}; 协议 ${Info?.protocolVersion ?? "legacy"}`, Action: Info?.protocolVersion >= 2 ? undefined : "新同步、操作核对及 PDF 局部图需要新桥; 此检查不会自动重启或更新" }; } }
+		];
+		try
+		{
+			const Report = await environment_diagnostics(Probes); if(!this.Modals.has(Dialog)) { return; }
+			Body.empty(); for(const Item of Report) { Body.createEl("h4", { text: `${({ ok: "正常", warning: "待核对", error: "缺项", unavailable: "此端不可验" })[Item.Status]} · ${Item.Name}` }); Body.createEl("p", { text: Item.Detail }); if(Item.Action) { Body.createEl("p", { text: Item.Action }); } }
+		}
+		finally { this.Diagnosing = false; }
+	}
 	Edits: ChatEdits | null = null;
 	ChatPreparing = false;
 	State!: SavedState;
@@ -141,6 +323,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Connection = null;
 		this.LoadedThread = null;
 		this.LiveThreads.clear();
+		this.LastInputLedger.clear();
 		this.MathWritingSkill = null;
 		this.LoadingSkill = null;
 		this.SkillStatus = "math-writing: 连接后检查";
@@ -167,14 +350,15 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			this.Remote.Enabled = true;
 		}
-		this.RemoteStatePath = `${this.manifest.dir}/remote-${this.Remote.CacheId}-state.json`;
+		this.RemoteStatePath = this.state_path(true);
 		this.save_remote_config();
 		if(!this.Remote.Enabled)
 		{
 			this.Desktop = await import("./desktop");
 			this.CompletionWorker = new this.Desktop.CompletionService();
 		}
-		const Saved = this.Remote.Enabled ? await this.app.vault.adapter.exists(this.RemoteStatePath) ? JSON.parse(await this.app.vault.adapter.read(this.RemoteStatePath)) as Partial<SavedState> : null : await this.loadData() as Partial<SavedState> | null;
+		const LegacyStatePath = `${this.manifest.dir}/${this.Remote.Enabled ? "remote-" + this.Remote.CacheId + "-state.json" : "data.json"}`;
+		const Saved = await load_state_file(this.app.vault.adapter, this.state_path(), LegacyStatePath) as SavedState | null;
 		const Sessions = Saved?.Sessions?.filter(Value => Value.Id && Array.isArray(Value.Messages)) ?? [];
 		if(!Sessions.length)
 		{
@@ -194,11 +378,15 @@ export default class CodexSidebarPlugin extends Plugin
 			Session.InstructionsHash = "";
 		}
 		this.State = prune_sessions({
+			...Saved, SchemaVersion: 2 as const,
 			Settings: { CliPath: "", Model: "", Effort: "", Fast: false, ShowUsage: true, Instructions: DefaultInstructions, AttachContext: true, AutoCapture: true, Completion: true, CompletionDelay: 1200, ObsidianCliPath: "", ...Saved?.Settings, EditScope: edit_scope(Saved?.Settings?.EditScope) },
 			Sessions,
 			ActiveId: Sessions.some(Value => Value.Id === Saved?.ActiveId) ? Saved!.ActiveId! : Sessions[0].Id,
 			...(Saved?.DeletedSessionIds !== undefined ? { DeletedSessionIds: Saved.DeletedSessionIds } : {})
 		});
+		if(this.State.Outbox) { for(const Intent of this.State.Outbox) { if(await content_digest(Intent.Input) !== Intent.Digest) { throw new Error("待发送原始输入摘要不一致, 未替换会话记录"); } } }
+		normalize_outbox(this.State);
+		if(await apply_late_receipts(this.app.vault.adapter, this.state_path(), this.State)) { await write_state_file(this.app.vault.adapter, this.state_path(), this.State); }
 		this.State.Settings.Instructions = migrate_instructions(this.State.Settings.Instructions);
 		if(!this.State.Settings.Model)
 		{
@@ -251,8 +439,16 @@ export default class CodexSidebarPlugin extends Plugin
 		this.registerEvent(this.app.workspace.on("file-open", () => this.observe_note_file()));
 		this.registerEvent(this.app.vault.on("rename", (File, Old) =>
 		{
-			try { this.NoteSessions?.rename(Old, File.path); this.observe_note_file(); } catch(ErrorValue) { this.NoteSessionError = error_text(ErrorValue); this.refresh(); }
+			try
+			{
+				for(const Session of this.State.Sessions) { for(const Message of Session.Messages) { if(Message.Sources) { Message.Sources = rename_sources(Message.Sources, Old, File.path); } if(Message.Quote?.SourceReferences) { Message.Quote.SourceReferences = rename_sources(Message.Quote.SourceReferences, Old, File.path); } } }
+				this.NoteSessions?.rename(Old, File.path); this.observe_note_file(); this.persist_background();
+			}
+			catch(ErrorValue) { this.NoteSessionError = error_text(ErrorValue); this.refresh(); }
 		}));
+		const Resume = () => { if(!this.Unloaded && this.Connection instanceof RemoteConnection && typeof document !== "undefined" && document.visibilityState !== "hidden") { this.Connection.resume(); } };
+		if(typeof document !== "undefined") { this.registerDomEvent(document, "visibilitychange", Resume); }
+		if(typeof window !== "undefined") { this.registerDomEvent(window, "online", Resume); }
 		this.registerEvent(this.app.vault.on("delete", File =>
 		{
 			try { this.NoteSessions?.forget(File.path); } catch(ErrorValue) { this.NoteSessionError = error_text(ErrorValue); this.refresh(); }
@@ -317,7 +513,7 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		if(this.SessionDeleting) { return "正在删除会话"; }
 		if(this.Unloaded) { return "插件已关闭"; }
-		if(this.Busy || this.ChatPreparing) { return "正在回复, 完成后切换"; }
+		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing) { return "正在准备、回复或核对提交, 完成后切换"; }
 		if(this.Edits?.Writer.is_busy()) { return "正在写回或撤销"; }
 		if(this.AnswerQuote) { return "有回答引用, 发送或取消后切换"; }
 		if(this.app.workspace.getLeavesOfType(ViewType).some(Leaf => Leaf.view instanceof CodexView && Leaf.view.has_pending_input())) { return "有草稿或正在编辑消息, 发送/清空或取消后切换"; }
@@ -618,26 +814,35 @@ export default class CodexSidebarPlugin extends Plugin
 		if(this.SessionDeletion) { return this.SessionDeletion.then(() => this.persist(SyncRemote)); }
 		return this.persist_snapshot(this.State, SyncRemote);
 	}
-	private persist_snapshot(State: SavedState, SyncRemote: boolean): Promise<void>
+	private persist_snapshot(State: SavedState, SyncRemote: boolean, Target = this.state_target()): Promise<void>
 	{
-		const Data = JSON.parse(JSON.stringify(State));
-		const RemoteMode = this.Remote.Enabled;
-		const StatePath = this.RemoteStatePath;
-		const RemoteConnectionValue = this.Connection instanceof RemoteConnection ? this.Connection : null;
-		const RemoteCursor = RemoteConnectionValue?.cursor_snapshot() ?? 0;
-		this.SaveQueue = this.SaveQueue.catch(() => {}).then(async () =>
+		const Data: SavedState = structuredClone(State); normalize_outbox(Data); Data.SchemaVersion = 2; validate_saved_state(Data);
+		const Connection = Target.Connection instanceof RemoteConnection ? Target.Connection : null, Cursor = Connection?.cursor_snapshot() ?? 0;
+		const QueueWrite = (Work: () => Promise<void>): Promise<void> => { this.SaveQueue = this.SaveQueue.catch(() => {}).then(Work); return this.SaveQueue; };
+		const Local = QueueWrite(async () =>
 		{
-			if(RemoteMode)
+			const Current = Target.Scope === this.local_scope() ? this.State : Target.State;
+			if(Current.Sync) { Data.Sync = merge_sync_metadata(Data.Sync, Current.Sync); }
+			await write_state_file(this.app.vault.adapter, Target.Path, Data);
+		});
+		if(!Target.Remote || !Connection || !SyncRemote) { return Local; }
+		return Local.then(async () =>
+		{
+			try { await Connection.sync_state(Data, Cursor); }
+			finally
 			{
-				await this.app.vault.adapter.write(StatePath, JSON.stringify(Data));
-			}
-			else
-			{
-				await this.saveData(Data);
+				if(Data.Sync)
+				{
+					await QueueWrite(async () =>
+					{
+						// Merge acknowledgements only, never replay an old whole snapshot.
+						const Fresh: SavedState = Target.Scope === this.local_scope() && !this.Unloaded ? this.State : JSON.parse(await this.app.vault.adapter.read(Target.Path));
+						Fresh.Sync = merge_sync_metadata(Fresh.Sync, Data.Sync!); normalize_outbox(Fresh); Fresh.SchemaVersion = 2; validate_saved_state(Fresh);
+						await write_state_file(this.app.vault.adapter, Target.Path, structuredClone(Fresh));
+					});
+				}
 			}
 		});
-		return RemoteMode && RemoteConnectionValue && SyncRemote
-			? this.SaveQueue.then(() => RemoteConnectionValue.sync_state(Data, RemoteCursor)) : this.SaveQueue;
 	}
 
 	private persist_background(): void
@@ -651,7 +856,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async set_remote_mode(Enabled: boolean): Promise<void>
 	{
-		if(this.Busy || this.SessionDeleting || this.NoteSessions?.Switching)
+		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting || this.NoteSessions?.Switching)
 		{
 			throw new Error("请先停止当前回复再切换连接");
 		}
@@ -661,9 +866,10 @@ export default class CodexSidebarPlugin extends Plugin
 		this.CompletionWorker?.close();
 		this.Connecting = null;
 		this.Remote.Enabled = Enabled || Platform.isMobileApp;
-		this.RemoteStatePath = `${this.manifest.dir}/remote-${this.Remote.CacheId}-state.json`;
+		this.RemoteStatePath = this.state_path(true);
 		this.save_remote_config();
-		const Saved = this.Remote.Enabled ? await this.app.vault.adapter.exists(this.RemoteStatePath) ? JSON.parse(await this.app.vault.adapter.read(this.RemoteStatePath)) : null : await this.loadData();
+		const LegacyStatePath = `${this.manifest.dir}/${this.Remote.Enabled ? "remote-" + this.Remote.CacheId + "-state.json" : "data.json"}`;
+		const Saved = await load_state_file(this.app.vault.adapter, this.state_path(), LegacyStatePath);
 		this.State = prune_sessions(Saved?.Sessions?.length ? Saved : { Settings: { ...this.State.Settings }, Sessions: [new_session()], ActiveId: "" });
 		this.State.Settings.EditScope = edit_scope(this.State.Settings.EditScope);
 		if(!this.State.Sessions.some(Value => Value.Id === this.State.ActiveId))
@@ -688,7 +894,7 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		if(Transport !== "browser" && Transport !== "native") { throw new Error("未知网络传输方式"); }
 		remote_url(Url);
-		if(this.Busy || this.SessionDeleting)
+		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting)
 		{
 			throw new Error("请先停止当前回复再更换远程连接");
 		}
@@ -712,7 +918,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async update_run_settings(Model: string, Effort: string, Fast: boolean): Promise<void>
 	{
-		if(this.Busy || this.SessionDeleting)
+		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting)
 		{
 			return;
 		}
@@ -744,6 +950,7 @@ export default class CodexSidebarPlugin extends Plugin
 			return;
 		}
 		const Generation = ++this.Generation;
+		this.Runtime.stage("connecting");
 		this.Status = this.Remote.Enabled ? "连接独立远程 Codex..." : "连接本机 Codex...";
 		this.refresh();
 		const Work = (async () =>
@@ -775,10 +982,12 @@ export default class CodexSidebarPlugin extends Plugin
 						this.SkillStatus = "math-writing: 连接后检查";
 						this.LoadedThread = null;
 						this.LiveThreads.clear();
+						for(const O of this.State.Sync?.Operations ?? []) { if(O.Attempted && ["received", "running"].includes(O.Status)) { update_operation(this.State.Sync!, O.Id, "submission-unknown", { Error: "连接中断, 保留原提交身份待核对" }); } }
 						this.Busy = false;
 						this.TurnId = null;
 						this.Activity = "";
 						this.Status = `${error_text(ErrorValue)}; 重连后核对会话`;
+						this.Runtime.stage(this.State.Sync?.Operations.some(O => O.SessionId === this.State.ActiveId && O.Status === "submission-unknown") ? "submission-unknown" : "offline");
 						this.refresh();
 						this.persist_background();
 					}
@@ -795,14 +1004,11 @@ export default class CodexSidebarPlugin extends Plugin
 				{
 					throw new Error("远程服务绑定的 vault 与当前库不同");
 				}
-				const Restored = await this.remote_http("/state", "GET");
-				if(Restored.state?.Sessions?.length)
-				{
-					const PreviousScope = this.State.Settings.EditScope;
-					this.State = restore_sessions(this.State, Restored.state, this.NoteSessions?.Data.Enabled ? this.NoteSessions.Data.Links.map(Link => Link.SessionId) : [], !this.NoteSessions?.Manual);
-					this.State.Settings.EditScope = edit_scope(PreviousScope);
-				}
-				Connection.set_cursor(Restored.cursor);
+				const Restored = await Connection.restore_state(this.State, this.NoteSessions?.Data.Enabled ? this.NoteSessions.Data.Links.map(Link => Link.SessionId) : [], !this.NoteSessions?.Manual);
+				if(Generation !== this.Generation || this.Unloaded) { throw new PreparationCancelled(); }
+				this.merge_restored(Restored, true);
+				Connection.set_recovery(() => this.recover_remote(Connection));
+				this.restore_runtime();
 				this.refresh();
 			}
 			await Connection.request("initialize", { clientInfo: { name: "obsidian_codex_sidebar", title: "Obsidian Codex Sidebar", version: this.manifest.version }, capabilities: { experimentalApi: true } });
@@ -897,34 +1103,40 @@ export default class CodexSidebarPlugin extends Plugin
 			if(this.Connecting === Work)
 			{
 				this.Connecting = null;
+				if(this.Runtime.Stage === "connecting") { this.Runtime.stage(this.Connection ? this.Runtime.Active ? "preparing" : "idle" : "offline"); }
 			}
 		}
 	}
 
-	private async ensure_thread(): Promise<void>
+	private async ensure_thread(Ticket?: PreparationTicket, ExcludeMessageId?: string, Target = this.state_target()): Promise<void>
 	{
 		await this.ensure_connection();
 		await this.ensure_math_skill();
-		const LiveId = this.LiveThreads.get(this.Session.Id);
+		if(Ticket) { this.Runtime.check(Ticket); }
+		const State = this.target_state(Target), Session = State.Sessions.find(S => S.Id === (Ticket?.SessionId ?? State.ActiveId));
+		if(!Session) { throw new PreparationCancelled(); }
+		const Connection = this.Connection!; Target.Connection = Connection;
+		const Visible = () => !this.Unloaded && Target.Scope === this.local_scope() && this.State.ActiveId === Session.Id && (!Ticket || this.Runtime.current(Ticket));
+		const LiveId = this.LiveThreads.get(Session.Id);
 		if(LiveId)
 		{
-			this.Session.ThreadId = LiveId;
-			this.LoadedThread = LiveId;
+			Session.ThreadId = LiveId;
+			if(Visible()) { this.LoadedThread = LiveId; }
 			return;
 		}
 		const Options = run_options(this.State.Settings, this.Models);
 		const Instructions = this.work_instructions();
 		let Existing: any = null;
-		if(this.Remote.Enabled && this.Session.ThreadId)
+		if(Target.Remote && Session.ThreadId)
 		{
-			Existing = await this.Connection!.request("bridge/resume", { threadId: this.Session.ThreadId });
+			Existing = await Connection.request("bridge/resume", { threadId: Session.ThreadId });
 		}
 		const Params =
 		{
 			cwd: this.host_cwd(),
-			...(this.Remote.Enabled ? { clientSessionId: this.Session.Id } : {}),
+			...(Target.Remote ? { clientSessionId: Session.Id } : {}),
 			ephemeral: true,
-			dynamicTools: [ObsidianTool],
+			dynamicTools: [ObsidianTool, ...(!Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1 ? [HistoryReadTool] : [])],
 			approvalPolicy: "on-request",
 			approvalsReviewer: "user",
 			sandbox: "read-only",
@@ -933,58 +1145,68 @@ export default class CodexSidebarPlugin extends Plugin
 			serviceTier: Options.serviceTier,
 			config: { model_reasoning_summary: "auto", ...(Options.effort ? { model_reasoning_effort: Options.effort } : {}) }
 		};
-		const History = !Existing ? history_items(this.Session.Messages, await this.prepare_pdf(history_pdf_refs(this.Session.Messages))) : [];
-		const Result = Existing ?? await this.Connection!.request("thread/start", Params);
+		const PriorMessages = Session.Messages.filter(M => M.Id !== ExcludeMessageId);
+		const Current = Session.Messages.find(M => M.Id === ExcludeMessageId), Required = [Current?.Quote?.MessageId, Current?.Quote?.RootMessageId].filter((Id): Id is string => !!Id && PriorMessages.some(M => M.Id === Id));
+		const Budget: HistoryBudgetOptions = { ModelContextWindow: Session.EffectiveModel === Options.model ? Session.Usage?.modelContextWindow : undefined, ReservedUtf8Bytes: new TextEncoder().encode(Instructions + (Current?.Prompt ?? "")).byteLength, MaxImages: 8, RequiredMessageIds: Required, UnresolvedMessageIds: State.Sync?.Operations.filter(O => O.SessionId === Session.Id && ["local", "received", "submission-unknown", "running"].includes(O.Status) && PriorMessages.some(M => M.Id === O.MessageId)).map(O => O.MessageId), UserConstraints: ["完整答案最小修补; 思路沿原路线; 工具只读; 只有当前客户端审核后写回. 旧消息来源与未知提交状态不补造."] };
+		Budget.HistoryReadAvailable = !Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1;
+		const Plan = Existing ? null : plan_history_input(PriorMessages, Budget);
+		if(Target.Remote && Plan?.Ledger.OmittedMessageIds.length && (this.HostInfo as any)?.capabilities?.historyRead !== 1) { throw new Error("完整历史已超过保守恢复预算, 当前旧桥没有授权历史分页读取能力; 请升级桥或明确分段/新建会话. 原历史保留"); }
+		const History = Plan ? build_history_input(PriorMessages, Budget, await this.prepare_pdf(history_pdf_refs(Plan.Messages), Target)).Items : [];
+		if(Plan) { this.LastInputLedger.set(Session.Id, Plan.Ledger); } else { this.LastInputLedger.delete(Session.Id); }
+		if(Ticket) { this.Runtime.check(Ticket); }
+		const Result = Existing ?? await Connection.request("thread/start", Params);
 		if(Result.thread.ephemeral !== true || Result.thread.path)
 		{
 			throw new Error("本机 Codex 未返回临时会话. 已停止发送, 请升级支持 ephemeral 的 CLI.");
 		}
-		this.Session.ThreadId = Result.thread.id;
-		this.Session.Private = true;
-		this.LoadedThread = Result.thread.id;
+		Session.ThreadId = Result.thread.id;
+		Session.Private = true;
+		if(Visible()) { this.LoadedThread = Result.thread.id; }
 		if(!Existing)
 		{
-			this.Session.InstructionsHash = "";
+			Session.InstructionsHash = "";
 		}
 		if(History.length && !Existing)
 		{
-			await this.Connection!.request("thread/inject_items", { threadId: Result.thread.id, items: History });
+			await Connection.request("thread/inject_items", { threadId: Result.thread.id, items: History });
 		}
-		this.LiveThreads.set(this.Session.Id, Result.thread.id);
-		this.Model = Result.model ?? Result.thread.model ?? "";
-		this.Session.EffectiveModel = this.Model;
-		this.Session.EffectiveEffort = Result.reasoningEffort ?? Options.effort;
-		this.Session.EffectiveTier = Result.serviceTier ?? "default";
+		if(Target.Scope === this.local_scope() && Connection === this.Connection) { this.LiveThreads.set(Session.Id, Result.thread.id); }
+		Session.EffectiveModel = Result.model ?? Result.thread.model ?? "";
+		Session.EffectiveEffort = Result.reasoningEffort ?? Options.effort;
+		Session.EffectiveTier = Result.serviceTier ?? "default";
+		const Latest = this.target_state(Target).Sessions.find(S => S.Id === Session.Id);
+		if(Latest && Latest !== Session) { Object.assign(Latest, { ThreadId: Session.ThreadId, Private: true, InstructionsHash: Session.InstructionsHash, EffectiveModel: Session.EffectiveModel, EffectiveEffort: Session.EffectiveEffort, EffectiveTier: Session.EffectiveTier }); }
+		if(Visible()) { this.Model = Session.EffectiveModel ?? ""; }
 		for(const Turn of Result.thread.turns ?? [])
 		{
 			for(const Item of Turn.items ?? [])
 			{
 				if(Item.type === "agentMessage")
 				{
-					const Message = this.assistant_message(Item.id, Turn.id);
+					const Message = this.assistant_message(Item.id, Turn.id, "assistant", Session);
 					Message.Text = Item.text;
 				}
 				if(Item.type === "reasoning" && Item.summary?.length)
 				{
-					this.assistant_message(Item.id, Turn.id, "reasoning").Text = Item.summary.join("\n\n");
+					this.assistant_message(Item.id, Turn.id, "reasoning", Session).Text = Item.summary.join("\n\n");
 				}
 			}
-			if(Turn.status === "inProgress")
+			if(Turn.status === "inProgress" && Visible())
 			{
 				this.TurnId = Turn.id;
 				this.Activity = "思考中";
 				this.StartedAt = Date.now();
 			}
 		}
-		if(this.Busy)
+		if(this.Busy && Visible())
 		{
 			this.Activity = "保存会话";
 			this.refresh();
 		}
-		await this.persist();
+		await this.save_target(Target, true);
 	}
 
-	private async prepare_pdf(Refs: PdfImageRef[]): Promise<Map<string, string>>
+	private async prepare_pdf(Refs: PdfImageRef[], Target?: StateTarget): Promise<Map<string, string>>
 	{
 		const Urls = new Map<string, string>();
 		if(!Refs.length) { return Urls; }
@@ -992,19 +1214,21 @@ export default class CodexSidebarPlugin extends Plugin
 		if(Model?.inputModalities && !Model.inputModalities.includes("image")) { throw new Error("当前模型不支持图像, 请明确选择支持图片的模型再提问 PDF"); }
 		this.Activity = "准备 PDF 页图快照"; this.refresh();
 		let Remote: { present: string[]; epoch: string } | null = null;
-		if(this.Remote.Enabled)
+		const RemoteMode = Target?.Remote ?? this.Remote.Enabled, Connection = Target?.Connection ?? this.Connection;
+		if(RemoteMode)
 		{
 			if(this.HostInfo?.pdfPageImages !== 1) { throw new Error("Windows 远程桥尚不支持 PDF 页图, 请更新桥到 0.8.0 后重连; 本轮未提交"); }
-			Remote = await this.Connection!.request("bridge/pdf-images", { action: "has", ids: Refs.map(Ref => Ref.Id) });
+			if(Refs.some(R => R.Kind === "region") && (this.HostInfo as any)?.capabilities?.pdfRegions !== 1) { throw new Error("当前 Windows 桥未协商 PDF 局部图能力, 请升级独立桥; 不改用整页或当前页面替代原图"); }
+			Remote = await Connection!.request("bridge/pdf-images", { action: "has", ids: Refs.map(Ref => Ref.Id) });
 		}
 		for(const Ref of Refs)
 		{
-			if(!Remote?.present.includes(Ref.Id))
+			if(!Remote?.present.includes(Ref.Id) || Ref.Kind === "region")
 			{
 				const Data = await this.PdfImages.get(Ref.Id);
 				const Info = jpeg_info(Data);
 				if(Info.Width !== Ref.Width || Info.Height !== Ref.Height || Info.Bytes !== Ref.Bytes) { throw new Error("PDF 页图与保存快照不一致"); }
-				if(Remote) { await this.Connection!.request("bridge/pdf-images", { action: "put", id: Ref.Id, data: Data, epoch: Remote.epoch }); }
+				if(Remote) { await Connection!.request("bridge/pdf-images", { action: "put", id: Ref.Id, data: Data, epoch: Remote.epoch, ...(Ref.Kind ? { origin: { Kind: Ref.Kind, ...(Ref.Region ? { Region: Ref.Region } : {}) } } : {}) }); }
 				else { Urls.set(Ref.Id, Data); }
 			}
 			if(Remote) { Urls.set(Ref.Id, pdf_reference(Ref.Id)); }
@@ -1034,9 +1258,9 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async send_chat(Question: string, Context: ContextSnapshot | null, Quote: AnswerQuote | null, Options: { Mode?: ComposeAction; Scope?: EditScope; Role?: EditRole } = {}): Promise<boolean>
 	{
-		if(this.Busy || this.ChatPreparing || this.SessionDeleting || this.Capture.Suspended || this.NoteSessions?.Switching) { return false; }
-		const Edit = Options.Mode === "edit";
-		if(!Edit) { return this.send_message(Question, Context, Quote); }
+		if(this.Busy || this.ChatPreparing || this.Runtime.BlocksInput || this.SessionDeleting || this.Capture.Suspended || this.NoteSessions?.Switching) { return false; }
+		if(Options.Mode !== "edit") { return this.send_message(Question, Context, Quote); }
+		const Ticket = this.Runtime.begin(this.local_scope(), this.Session.Id);
 		this.ChatPreparing = true; this.StartedAt = Date.now(); this.Activity = "准备修改目标"; this.refresh();
 		try
 		{
@@ -1046,137 +1270,160 @@ export default class CodexSidebarPlugin extends Plugin
 			if(!this.State.Settings.AttachContext) { throw new Error("修改需要附带目标原文, 请打开附带上下文并捕获笔记"); }
 			if(!Context)
 			{
-				this.Capture.track_view(); Context = await this.Capture.capture("选区") ?? await this.Capture.capture("当前位置");
+				this.Capture.track_view(); Context = await preparation_step(this.Capture.capture("选区", undefined, Ticket.Controller.signal), Ticket, this.Runtime) ?? await preparation_step(this.Capture.capture("当前位置", undefined, Ticket.Controller.signal), Ticket, this.Runtime);
 			}
 			if(!Context) { throw new Error("请先打开 Markdown 并捕获需要修改的选区或段落"); }
-			return await this.Edits.request(Question.trim(), Context, Options.Scope ?? edit_scope(this.State.Settings.EditScope), Options.Role ?? "auto");
+			return await preparation_step(this.Edits.request(Question.trim(), structuredClone(Context), Options.Scope ?? edit_scope(this.State.Settings.EditScope), Options.Role ?? "auto", Ticket.Controller.signal), Ticket, this.Runtime);
 		}
-		catch(ErrorValue) { this.show_error(ErrorValue); return false; }
-		finally { this.ChatPreparing = false; if(!this.Busy) { this.Activity = ""; } this.refresh(); }
+		catch(ErrorValue)
+		{
+			if(Ticket.Controller.signal.aborted || ErrorValue instanceof PreparationCancelled) { return false; }
+			if(this.Runtime.current(Ticket)) { this.Runtime.finish(Ticket); this.show_error(ErrorValue); } return false;
+		}
+		finally { if(!this.Runtime.Active || this.Runtime.Active === Ticket) { this.ChatPreparing = false; if(!this.Busy) { this.Activity = ""; } this.refresh(); } }
 	}
 
-	async send_message(Question: string, Context = this.State.Settings.AttachContext ? this.Capture.Snapshot : null, Quote: AnswerQuote | null = null, Task: TaskSpec | null = null): Promise<boolean>
+	async send_message(Question: string, Context = this.State.Settings.AttachContext ? this.Capture.Snapshot : null, Quote: AnswerQuote | null = null, Task: TaskSpec | null = null, Resume?: { MessageId: string; OperationId: string }): Promise<boolean>
 	{
-		if(Task && Task.Action !== "edit")
-		{
-			new Notice("旧版学习任务仅保留历史记录. 请通过提问或生成修改预览发起新请求.");
-			return false;
-		}
-		if(this.Unloaded || this.Busy || this.SessionDeleting || this.NoteSessions?.Switching || (this.ChatPreparing && Task?.Action !== "edit") || this.Capture.Suspended || !Question.trim())
-		{
-			return false;
-		}
-		this.Busy = true;
-		this.TurnId = null;
-		this.Activity = "准备会话";
-		this.StartedAt = Date.now();
-		this.refresh();
-		let Submitted = false;
+		if(Task && Task.Action !== "edit") { new Notice("旧版学习任务仅保留历史记录. 请通过提问或生成修改预览发起新请求."); return false; }
+		if(this.Unloaded || this.Busy || this.SessionDeleting || this.NoteSessions?.Switching || (this.ChatPreparing && Task?.Action !== "edit") || this.Capture.Suspended || !Question.trim()) { return false; }
+		const ParentTicket = Task?.Action === "edit" && this.Runtime.Active?.SessionId === this.Session.Id && this.Runtime.Stage === "preparing" ? this.Runtime.Active : null;
+		if(this.Runtime.BlocksInput && !ParentTicket) { return false; }
+		const Ticket = ParentTicket ?? this.Runtime.begin(this.local_scope(), this.Session.Id), Target = this.state_target();
+		this.Busy = true; this.TurnId = null; this.Activity = "保存原始问题与待发送状态"; this.StartedAt = Date.now(); this.refresh();
+		let Submitted = false, Message: ChatMessage | undefined, Intent: SendIntent | undefined, Operation: SendOperation | undefined, RecoveredTurn = false;
 		try
 		{
-			await this.ensure_thread();
-			this.Activity = "检查 math-writing";
-			this.refresh();
-			const Skill = await this.ensure_math_skill();
-			if(this.TurnId)
+			const Session = this.target_state(Target).Sessions.find(S => S.Id === Ticket.SessionId)!;
+			const PublicTask = Task ? structuredClone(Task) : undefined; if(PublicTask?.Target) { PublicTask.Target.Before = null; }
+			if(Resume)
 			{
-				this.Status = "已恢复正在运行的回复, 请等待或点击停止";
-				this.refresh();
-				return false;
+				Message = Session.Messages.find(M => M.Id === Resume.MessageId && M.OperationId === Resume.OperationId);
+				Operation = this.State.Sync?.Operations.find(O => O.Id === Resume.OperationId); Intent = this.State.Outbox?.find(I => I.Id === Resume.OperationId);
+				if(!Message || (!Operation && !Intent) || Operation?.Attempted) { throw new Error("原发送记录已变化, 不复用身份盲重发"); }
 			}
-			const Instructions = this.work_instructions();
-			this.Activity = "准备工作说明";
-			this.refresh();
-			const InstructionsHash = await instruction_hash(Instructions);
-			if(this.Session.InstructionsHash !== InstructionsHash)
+			else
 			{
-				this.Activity = "加载工作说明";
-				this.refresh();
-				await this.Connection!.request("thread/inject_items", { threadId: this.Session.ThreadId, items: instruction_items(Instructions) });
-				this.Session.InstructionsHash = InstructionsHash;
-				this.Activity = "保存工作说明";
-				this.refresh();
-				await this.persist();
+				const Prompt = Task ? task_prompt(Task) : build_prompt(Question.trim(), Context, Quote);
+				if(Prompt.length > 95000) { throw new Error("本轮输入超过已核对的协议上限, 请缩小来源或分段; 历史不删除"); }
+				Message = { Id: crypto.randomUUID(), Role: "user", Text: Task ? question_label(Task) : Question.trim(), Prompt, Context: Context ? structuredClone(Context) : null, Quote: Quote ? structuredClone(Quote) : null, Task: PublicTask, ContextLabel: Quote ? "追问选中的回答 / 渲染选区 + 原回答 Markdown" : Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined, Sources: Context ? source_reference(Context, Target.Remote ? "client-snapshot" : "desktop-read") : Quote?.SourceReferences ? structuredClone(Quote.SourceReferences) : undefined };
+				const Refs = message_pdf_refs(Message); if(Refs.length > 2) { throw new Error("每轮最多两张 PDF 图片, 整页和局部图共同占用名额"); }
+				Intent = await send_intent(Target.Scope, Session.Id, Message.Id, { Prompt, Context: Message.Context, Quote: Message.Quote, Task: PublicTask, PdfRefs: Refs, Run: { Model: this.State.Settings.Model, Effort: this.State.Settings.Effort, Fast: this.State.Settings.Fast } });
+				this.Runtime.check(Ticket); Message.OperationId = Intent.Id; Ticket.OperationId = Intent.Id;
+				const Latest = this.target_state(Target).Sessions.find(S => S.Id === Ticket.SessionId);
+				if(!Latest) { throw new PreparationCancelled(); }
+				Latest.Messages.push(Message); (this.target_state(Target).Outbox ??= []).push(Intent); if(Latest.Title === "新会话") { Latest.Title = Question.trim().slice(0, 24); }
 			}
-			const Prompt = Task ? task_prompt(Task) : build_prompt(Question.trim(), Context, Quote);
-			if(Prompt.length > 95000)
+			Ticket.OperationId = Operation?.Id ?? Intent!.Id;
+			Target.OperationId = Ticket.OperationId;
+			await this.save_target(Target); this.Runtime.check(Ticket);
+			this.Activity = "准备会话"; this.refresh();
+			await preparation_step(this.ensure_connection(), Ticket, this.Runtime); Target.Connection = this.Connection;
+			const State = this.target_state(Target); let CurrentSession = State.Sessions.find(S => S.Id === Ticket.SessionId)!;
+			Message = CurrentSession.Messages.find(M => M.Id === Message!.Id)!;
+			const Scope = this.Connection instanceof RemoteConnection ? this.Connection.scope() : Target.Scope;
+			Operation = State.Sync?.Operations.find(O => O.Id === Ticket.OperationId) ?? await create_send_operation(Scope, CurrentSession.Id, Message.Id, Intent?.Input ?? Operation!.Input, Ticket.OperationId);
+			this.Runtime.check(Ticket);
+			const Sync = ensure_sync(this.target_state(Target), Scope);
+			Operation = Sync.Operations.find(O => O.Id === Operation!.Id) ?? Operation;
+			if(!Sync.Operations.some(O => O.Id === Operation!.Id)) { Sync.Operations.push(Operation); }
+			await this.save_target(Target); this.Runtime.check(Ticket);
+			this.target_state(Target).Outbox = this.target_state(Target).Outbox?.filter(I => I.Id !== Operation!.Id);
+			await preparation_step(this.ensure_thread(Ticket, Message.Id, Target), Ticket, this.Runtime);
+			CurrentSession = this.target_state(Target).Sessions.find(S => S.Id === Ticket.SessionId)!; Message = CurrentSession?.Messages.find(M => M.Id === Message!.Id);
+			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId) ?? Operation;
+			if(!CurrentSession || !Message) { throw new PreparationCancelled(); }
+			if(this.TurnId) { RecoveredTurn = true; throw new Error("已恢复原来正在运行的回复; 新问题仅本地保存, 未提交推理"); }
+			this.Activity = "检查 math-writing"; this.refresh(); const Skill = await preparation_step(this.ensure_math_skill(), Ticket, this.Runtime);
+			const Instructions = this.work_instructions(), Hash = await preparation_step(instruction_hash(Instructions), Ticket, this.Runtime);
+			if(CurrentSession.InstructionsHash !== Hash)
 			{
-				throw new Error("任务超过远程输入上限, 请缩小来源或修改范围");
+				this.Activity = "加载工作说明"; this.refresh();
+				await preparation_step(Target.Connection!.request("thread/inject_items", { threadId: CurrentSession.ThreadId, items: instruction_items(Instructions) }), Ticket, this.Runtime);
+				CurrentSession.InstructionsHash = Hash; await this.save_target(Target);
 			}
 			if(Task?.Action === "edit") { await this.Edits?.register(Task); }
-			const PublicTask = Task ? structuredClone(Task) : undefined;
-			if(PublicTask?.Target)
+			Message.InputLedger = this.LastInputLedger.get(CurrentSession.Id);
+			const Refs = message_pdf_refs(Message), Images = image_inputs(Refs, await preparation_step(this.prepare_pdf(Refs, Target), Ticket, this.Runtime));
+			this.Runtime.check(Ticket); this.Activity = "保存提问与待同步操作"; this.refresh(); await preparation_step(this.save_target(Target, true), Ticket, this.Runtime);
+			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId);
+			if(!Operation || Operation.Conflicts?.length) { throw new Error("原发送操作缺失或有冲突, 不自动提交"); }
+			const Chosen = ((Operation.Input as any)?.Run ?? this.State.Settings), Settings = { ...this.State.Settings, Model: Chosen.Model || this.State.Settings.Model, Effort: Chosen.Effort || this.State.Settings.Effort, Fast: Chosen.Fast ?? this.State.Settings.Fast };
+			const Options = run_options(Settings, this.Models), Params = { threadId: CurrentSession.ThreadId, input: [...skill_input(Message.Prompt!, Skill), ...Images], ...Options };
+			let Result: any;
+			const BeforePost = async () =>
 			{
-				PublicTask.Target.Before = null;
-			}
-			const Message: ChatMessage = { Id: crypto.randomUUID(), Role: "user", Text: Task ? question_label(Task) : Question.trim(), Context: Context ? structuredClone(Context) : null, Quote: Quote ? structuredClone(Quote) : null, Prompt, Task: PublicTask, ContextLabel: Quote ? "追问选中的回答 / 渲染选区 + 原回答 Markdown" : Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined };
-			const Refs = message_pdf_refs(Message);
-			if(Refs.length > 2) { throw new Error("每轮最多两张 PDF 页图, 请减少来源后明确重试"); }
-			const Images = image_inputs(Refs, await this.prepare_pdf(Refs));
-			this.Session.Messages.push(Message);
-			if(this.Session.Title === "新会话")
+				this.Runtime.check(Ticket);
+				Operation!.ThreadId = Params.threadId ?? undefined;
+				const Current = this.target_state(Target).Sync!; update_operation(Current, Operation!.Id, "submission-unknown", Operation!);
+				await this.save_target(Target); this.Runtime.check(Ticket);
+				Submitted = true; Ticket.Submitted = true; this.Runtime.stage("submission-unknown", Ticket); this.Activity = "提交推理, 等待接收凭证"; this.refresh();
+			};
+			if(Target.Connection instanceof RemoteConnection)
 			{
-				this.Session.Title = Question.trim().slice(0, 24);
+				const Work = Target.Connection.request_operation(Operation, Params, BeforePost, Ticket.Controller.signal).then(Response => this.commit_send_receipt(Target, Operation!, Response.result, Response.operation));
+				Result = await preparation_step(Work, Ticket, this.Runtime);
 			}
-			this.Activity = "保存提问";
-			this.refresh();
-			await this.persist();
-			this.Status = "Codex 正在思考...";
-			this.Activity = "思考中";
-			this.refresh();
-			Submitted = true;
-			const Options = run_options(this.State.Settings, this.Models);
-			const Result = await this.Connection!.request("turn/start", { threadId: this.Session.ThreadId, input: [...skill_input(Message.Prompt!, Skill), ...Images], ...Options });
-			this.Session.EffectiveModel = Options.model;
-			this.Session.EffectiveEffort = Options.effort;
-			this.Session.EffectiveTier = Options.serviceTier;
-			this.Model = Options.model ?? this.Model;
-			Message.TurnId = Result.turn.id;
-			if(!this.CompletedTurns.has(Result.turn.id))
+			else
 			{
-				this.TurnId = Result.turn.id;
+				Operation.Request = structuredClone(Params); Operation.RequestDigest = await content_digest(Params); Operation.Attempted = true; Operation.Status = "submission-unknown"; Operation.ThreadId = CurrentSession.ThreadId ?? undefined;
+				await BeforePost(); Result = await preparation_step(Target.Connection!.request("turn/start", Params).then(R => this.commit_send_receipt(Target, Operation!, R)), Ticket, this.Runtime);
 			}
-			await this.persist();
-			this.refresh();
+			if(!Result?.turn?.id) { throw new Error("提交已有凭证但尚无可确认的回合ID, 请核对操作状态, 不自动重发"); }
+			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId) ?? Operation;
+			Operation.Result = structuredClone(Result); Operation.TurnId = Result.turn.id; Operation.ThreadId = Params.threadId ?? undefined;
+			const FinalSession = this.target_state(Target).Sessions.find(S => S.Id === Ticket.SessionId), FinalMessage = FinalSession?.Messages.find(M => M.Id === Message!.Id);
+			if(FinalMessage) { FinalMessage.TurnId = Result.turn.id; } else if(!FinalSession) { Operation.SessionDeleted = true; } else if(message_deleted(this.target_state(Target), Ticket.SessionId, Operation.MessageId)) { Operation.MessageDeleted = true; }
+			if(FinalSession) { FinalSession.EffectiveModel = Options.model; FinalSession.EffectiveEffort = Options.effort; FinalSession.EffectiveTier = Options.serviceTier; }
+			await this.save_target(Target);
+			if(this.Runtime.current(Ticket) && !this.Unloaded && this.State.ActiveId === Ticket.SessionId)
+			{
+				this.Model = Options.model; this.Busy = Operation.Status === "running"; this.TurnId = this.Busy ? Result.turn.id : null; this.ChatPreparing = false;
+				if(this.Busy) { this.Runtime.stage("generating", Ticket); this.Status = "Codex 正在回答..."; this.Activity = "思考中"; } else { this.Runtime.finish(Ticket); this.Activity = ""; }
+				this.refresh();
+			}
 			return true;
 		}
 		catch(ErrorValue)
 		{
-			this.Busy = false;
-			this.TurnId = null;
-			this.Activity = "";
-			if(Submitted)
+			const Cancelled = Ticket.Controller.signal.aborted || ErrorValue instanceof PreparationCancelled;
+			if(Ticket.OperationId)
 			{
-				this.Session.Messages.push({ Id: crypto.randomUUID(), Role: "system", Text: `请求结果需核对: ${error_text(ErrorValue)}. 请重连, 不会自动重发此问题.` });
-				this.close_connection();
-				await this.persist();
+				this.update_run_operation(Target, Ticket.OperationId, Submitted ? "submission-unknown" : Cancelled ? "cancelled" : "local", { Error: error_text(ErrorValue) });
+				try { await this.save_target(Target); } catch { /* Original disk intent remains recoverable; no inference retry. */ }
 			}
-			this.show_error(ErrorValue);
+			if(this.Runtime.current(Ticket) && !this.Unloaded)
+			{
+				this.Busy = RecoveredTurn; this.ChatPreparing = false;
+				if(RecoveredTurn) { this.Runtime.stage("generating", Ticket); }
+				else if(Submitted) { this.Runtime.stage("submission-unknown", Ticket); this.Activity = "结果待核对"; }
+				else { this.Runtime.finish(Ticket); this.TurnId = null; this.Activity = ""; }
+				this.Status = Submitted ? "推理提交结果待核对, 原问题已保存, 不自动重发" : error_text(ErrorValue); this.refresh();
+				if(!Cancelled) { new Notice(this.Status, 7000); }
+			}
 			return Submitted;
 		}
 	}
 
 	async stop_turn(): Promise<void>
 	{
-		if(!this.TurnId || !this.Connection)
+		const Pending = this.State.Sync?.Operations.find(O => O.Id === this.Runtime.Active?.OperationId) ?? this.State.Sync?.Operations.find(O => O.SessionId === this.State.ActiveId && ["running", "submission-unknown"].includes(O.Status));
+		if(["preparing", "connecting", "recovering"].includes(this.Runtime.Stage) && !this.Runtime.Active?.Submitted && !Pending?.Attempted)
 		{
-			return;
+			const Ticket = this.Runtime.cancel_preparation(); this.Busy = false; this.ChatPreparing = false; this.Activity = ""; this.Status = "准备已取消, 草稿、引用和来源保留";
+			if(Ticket?.OperationId) { const Target = this.state_target(); this.update_run_operation(Target, Ticket.OperationId, "cancelled", { Error: "用户取消准备, 未提交新的推理" }); await this.save_target(Target); }
+			this.refresh(); return;
 		}
-		try
+		if(this.Runtime.Stage === "submission-unknown" || this.Runtime.Stage === "recovering" && !this.TurnId)
 		{
-			const TurnId = this.TurnId;
-			await this.Connection.request("turn/interrupt", { threadId: this.Session.ThreadId, turnId: TurnId });
-			if(this.Busy && this.TurnId === TurnId)
-			{
-				this.Status = "正在停止...";
-				this.Activity = "正在停止";
-			}
-			this.refresh();
+			const Id = this.Runtime.Active?.OperationId ?? this.State.Sync?.Operations.find(O => O.SessionId === this.State.ActiveId && O.Status === "submission-unknown")?.Id;
+			if(Id) { await this.reconcile_operation(Id); } else { new Notice("提交是否成功尚不明确, 请重连核对. 取消本地请求不等于服务端停止"); } return;
 		}
-		catch(ErrorValue)
-		{
-			this.show_error(ErrorValue);
-		}
+		if(!this.TurnId || !this.Connection) { return; }
+		const TurnId = this.TurnId, ThreadId = this.Session.ThreadId;
+		this.Runtime.stage("stopping"); this.Status = "正在请求停止, 等待后台确认"; this.Activity = "正在停止"; this.refresh();
+		try { await this.Connection.request("turn/interrupt", { threadId: ThreadId, turnId: TurnId }); }
+		catch(ErrorValue) { this.Status = "停止请求结果需核对: " + error_text(ErrorValue); this.Runtime.stage("submission-unknown"); this.refresh(); }
 	}
 
 	async reconnect(): Promise<void>
@@ -1223,6 +1470,7 @@ export default class CodexSidebarPlugin extends Plugin
 			const Notes = this.NoteSessions, Link = Notes?.Data.Links.find(Value => Value.Path === Notes.Path);
 			const Fresh = this.State.ActiveId === Id && Notes?.Data.Enabled && Link?.SessionId === Id;
 			const Plan = delete_session_plan(this.State, Id, Stamp, Fresh ? Notes!.Path!.split("/").at(-1)!.replace(/\.(md|pdf)$/i, "") : undefined, Link?.SessionId);
+			for(const Intent of Plan.State.Outbox ?? []) { if(Intent.SessionId === Id && ["local", "received"].includes(Intent.Status)) { Intent.Status = "cancelled"; Intent.Error = "原会话已删除, 不恢复或提交"; } }
 			await this.persist_snapshot(Plan.State, false);
 			this.State = Plan.State;
 			if(this.Unloaded) { return; }
@@ -1233,7 +1481,7 @@ export default class CodexSidebarPlugin extends Plugin
 			for(const Leaf of this.app.workspace.getLeavesOfType(ViewType)) { if(Leaf.view instanceof CodexView) { Leaf.view.forget_session(Id); } }
 			if(this.Connection instanceof RemoteConnection)
 			{
-				try { await this.Connection.sync_state(JSON.parse(JSON.stringify(this.State))); }
+				try { await this.persist_snapshot(this.State, true); }
 				catch { Warning = "本机已删除会话, 远程同步尚未完成; 重连会保留本机删除标记, 不恢复旧会话"; }
 			}
 			new Notice(Warning || (Fresh ? "会话已删除, 当前笔记已切换到新的空会话" : "会话已删除"));
@@ -1245,7 +1493,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async choose_session(Id?: string, Automatic = false): Promise<void>
 	{
-		if(this.Busy || this.ChatPreparing || this.SessionDeleting || (!Automatic && this.NoteSessions?.Switching))
+		if((this.Runtime.BlocksInput && (Automatic || this.Runtime.Stage !== "submission-unknown")) || this.Busy || this.ChatPreparing || this.SessionDeleting || (!Automatic && this.NoteSessions?.Switching))
 		{
 			new Notice("请先停止当前回复");
 			return;
@@ -1267,11 +1515,14 @@ export default class CodexSidebarPlugin extends Plugin
 			if(!Id && this.NoteSessions?.Data.Enabled && this.NoteSessions.Path) { try { this.NoteSessions.bind_current(); } catch(ErrorValue) { this.NoteSessionError = error_text(ErrorValue); } }
 		}
 		this.AnswerQuote = null;
+		this.Runtime.finish();
 		this.LoadedThread = null;
 		this.TurnId = null;
 		this.Model = "";
 		this.Activity = "";
 		this.Status = this.Session.Messages.length ? "历史会话, 发送后继续" : "新会话, 可以提问";
+		this.restore_runtime();
+		if(this.Runtime.Stage === "submission-unknown") { this.Status = "本会话有提交结果待核对; 原问题保留, 不自动重发"; }
 		await this.persist(!Automatic);
 		this.refresh();
 	}
@@ -1314,6 +1565,7 @@ export default class CodexSidebarPlugin extends Plugin
 		Branch.Messages = branch_prefix(Original.Messages, Id);
 		this.State.Sessions.push(Branch);
 		this.State.ActiveId = Branch.Id;
+		this.Runtime.finish(); this.restore_runtime();
 		this.NoteSessions?.manual();
 		this.LoadedThread = null;
 		this.Busy = true;
@@ -1396,200 +1648,141 @@ export default class CodexSidebarPlugin extends Plugin
 		catch(ErrorValue) { this.show_error(ErrorValue); }
 	}
 
-	private assistant_message(Id: string, TurnId: string, Role: "assistant" | "reasoning" = "assistant"): ChatMessage
+	private assistant_message(Id: string, TurnId: string, Role: "assistant" | "reasoning" = "assistant", Session = this.Session): ChatMessage
 	{
-		let Message = this.Session.Messages.find(Value => Value.Id === Id);
+		if(message_deleted(this.State, Session.Id, Id)) { return { Id, TurnId, Role, Text: "" }; }
+		let Message = Session.Messages.find(Value => Value.Id === Id);
 		if(!Message)
 		{
 			Message = { Id, TurnId, Role, Text: "" };
-			this.Session.Messages.push(Message);
+			Session.Messages.push(Message);
 		}
 		return Message;
 	}
 
+	private add_read_source(Session: ChatSession, TurnId: string, Ref: SourceReference): void
+	{
+		for(const M of Session.Messages.filter(M => M.TurnId === TurnId)) { M.Sources ??= []; if(!M.Sources.some(S => S.Id === Ref.Id)) { M.Sources.push(structuredClone(Ref)); } }
+	}
+
+	private restore_runtime(): void
+	{
+		const Pending = this.State.Sync?.Operations.filter(O => O.SessionId === this.State.ActiveId && !O.SessionDeleted && ["running", "submission-unknown"].includes(O.Status)) ?? [];
+		const Running = Pending.find(O => O.Status === "running" && O.TurnId && O.ThreadId), Unknown = Pending.find(O => O.Status === "submission-unknown");
+		if(Running) { this.TurnId = Running.TurnId!; this.Session.ThreadId = Running.ThreadId!; this.Busy = true; this.Runtime.stage("generating"); this.Activity = "已恢复正在运行的回合"; }
+		else if(Unknown) { this.TurnId = Unknown.TurnId ?? null; this.Busy = false; this.Runtime.stage("submission-unknown"); this.Activity = "提交结果待核对"; }
+		else if(!this.Runtime.Active || this.Runtime.Active.Submitted) { this.Busy = false; this.TurnId = null; this.Runtime.finish(); this.Activity = ""; }
+		else { this.Runtime.stage("preparing", this.Runtime.Active); }
+	}
+
 	private handle_message(Message: RpcMessage): void
 	{
-		if(Message.method === "skills/changed")
-		{
-			this.MathWritingSkill = null;
-			this.SkillStatus = "math-writing 已变更, 下次请求重新检查";
-			this.refresh();
-			return;
-		}
-		if(Message.id !== undefined && Message.method)
-		{
-			void this.handle_request(Message);
-			return;
-		}
+		if(Message.method === "skills/changed") { this.MathWritingSkill = null; this.SkillStatus = "math-writing 已变更, 下次请求重新检查"; this.refresh(); return; }
+		if(Message.id !== undefined && Message.method) { void this.handle_request(Message); return; }
 		const Params = Message.params;
-		if(!Params || Params.threadId !== this.Session.ThreadId)
+		if(Message.method === "bridge/recovering") { this.Runtime.stage("recovering"); this.Status = Params?.message ?? "正在核对状态与恢复事件监听"; this.refresh(); return; }
+		if(Message.method === "bridge/recovered") { this.restore_runtime(); this.refresh(); return; }
+		if(!Params?.threadId) { return; }
+		const Session = this.thread_session(Params.threadId);
+		if(!Session || this.State.DeletedSessionIds?.includes(Session.Id) || (Params.sessionId && Params.sessionId !== Session.Id)) { return; }
+		const Visible = Session.Id === this.State.ActiveId, Target = this.state_target();
+		if(Message.method === "bridge/message-updated")
 		{
-			return;
+			if(message_deleted(this.State, Session.Id, Params.message?.Id)) { return; }
+			const Conflicts = this.State.Sync?.Conflicts ?? (this.State.MessageConflicts ??= []);
+			try { message_checkpoint(Session, Params.message, Conflicts); } catch(E) { if(Visible) { this.Status = error_text(E); } }
+			this.persist_background(); if(Visible) { this.refresh(); } return;
 		}
+		if(Message.method === "bridge/source-read") { if(Params.source) { this.add_read_source(Session, Params.turnId, Params.source); this.persist_background(); } if(Visible) { this.refresh(); } return; }
 		switch(Message.method)
 		{
 			case "turn/started":
-				this.TurnId = Params.turn.id;
+			{
+				const Candidates = this.State.Sync?.Operations.filter(O => O.SessionId === Session.Id && O.ThreadId === Params.threadId && (O.TurnId === Params.turn.id || (O.Attempted && !O.TurnId && ["received", "submission-unknown", "running"].includes(O.Status)))) ?? [];
+				if(Candidates.length === 1)
 				{
-					const User = this.Session.Messages.filter(Value => Value.Role === "user").at(-1);
-					if(User && !User.TurnId) { User.TurnId = Params.turn.id; }
+					const O = Candidates[0]; this.update_run_operation(Target, O.Id, "running", { TurnId: Params.turn.id, ThreadId: Params.threadId });
+					const User = Session.Messages.find(M => M.Id === O.MessageId && M.OperationId === O.Id); if(User) { User.TurnId = Params.turn.id; }
 				}
-				this.Busy = true;
-				this.Activity = "思考中";
-				this.StartedAt = this.StartedAt || Date.now();
-				break;
+				if(Visible && !Candidates.some(O => ["completed", "cancelled", "failed"].includes(O.Status))) { this.TurnId = Params.turn.id; this.Busy = true; this.Runtime.stage("generating"); this.Activity = "思考中"; this.StartedAt ||= Date.now(); }
+				this.persist_background(); break;
+			}
 			case "item/reasoning/summaryTextDelta":
-				{
-					const Summary = this.assistant_message(Params.itemId, Params.turnId, "reasoning");
-					Summary.SummaryParts ??= [];
-					Summary.SummaryParts[Params.summaryIndex] = (Summary.SummaryParts[Params.summaryIndex] ?? "") + Params.delta;
-					Summary.Text = Summary.SummaryParts.filter(Boolean).join("\n\n");
-					this.Activity = "思考中";
-					break;
-				}
-			case "thread/tokenUsage/updated":
-				this.Session.Usage = Params.tokenUsage;
-				this.persist_background();
-				break;
+			{
+				const Summary = this.assistant_message(Params.itemId, Params.turnId, "reasoning", Session); Summary.SummaryParts ??= [];
+				Summary.SummaryParts[Params.summaryIndex] = (Summary.SummaryParts[Params.summaryIndex] ?? "") + Params.delta; Summary.Text = Summary.SummaryParts.filter(Boolean).join("\n\n");
+				if(Visible) { this.Activity = "思考中"; } break;
+			}
+			case "thread/tokenUsage/updated": Session.Usage = Params.tokenUsage; this.persist_background(); break;
 			case "thread/settings/updated":
-				this.Model = Params.threadSettings.model;
-				this.Session.EffectiveModel = Params.threadSettings.model;
-				this.Session.EffectiveEffort = Params.threadSettings.effort;
-				this.Session.EffectiveTier = Params.threadSettings.serviceTier ?? "default";
-				this.persist_background();
-				break;
-			case "thread/compacted":
-				this.Session.InstructionsHash = "";
-				this.persist_background();
-				break;
+				Session.EffectiveModel = Params.threadSettings.model; Session.EffectiveEffort = Params.threadSettings.effort; Session.EffectiveTier = Params.threadSettings.serviceTier ?? "default";
+				if(Visible) { this.Model = Session.EffectiveModel ?? ""; } this.persist_background(); break;
+			case "thread/compacted": Session.InstructionsHash = ""; this.LastInputLedger.delete(Session.Id); this.persist_background(); break;
 			case "item/agentMessage/delta":
-				this.assistant_message(Params.itemId, Params.turnId).Text += Params.delta;
-				this.Status = "Codex 正在回答...";
-				this.Activity = "正在回答";
-				break;
+				this.assistant_message(Params.itemId, Params.turnId, "assistant", Session).Text += Params.delta;
+				if(Visible) { this.Status = "Codex 正在回答..."; this.Activity = "正在回答"; } break;
 			case "item/completed":
-				if(Params.item.type === "agentMessage")
-				{
-					this.assistant_message(Params.item.id, Params.turnId).Text = Params.item.text;
-					this.assistant_message(Params.item.id, Params.turnId).Phase = ["commentary", "final_answer"].includes(Params.item.phase) ? Params.item.phase : null;
-				}
-				if(Params.item.type === "reasoning" && Params.item.summary?.length)
-				{
-					this.assistant_message(Params.item.id, Params.turnId, "reasoning").Text = Params.item.summary.join("\n\n");
-				}
-				if(this.Busy && ["commandExecution", "mcpToolCall", "webSearch"].includes(Params.item.type))
-				{
-					this.Activity = "思考中";
-				}
-				if(Params.item.type === "contextCompaction")
-				{
-					this.Session.InstructionsHash = "";
-				}
-				this.persist_background();
-				break;
+				if(Params.item.type === "agentMessage") { const Reply = this.assistant_message(Params.item.id, Params.turnId, "assistant", Session); Reply.Text = Params.item.text; Reply.Phase = ["commentary", "final_answer"].includes(Params.item.phase) ? Params.item.phase : null; }
+				if(Params.item.type === "reasoning" && Params.item.summary?.length) { this.assistant_message(Params.item.id, Params.turnId, "reasoning", Session).Text = Params.item.summary.join("\n\n"); }
+				if(Visible && this.Busy && ["commandExecution", "mcpToolCall", "webSearch"].includes(Params.item.type)) { this.Activity = "思考中"; }
+				if(Params.item.type === "contextCompaction") { Session.InstructionsHash = ""; this.LastInputLedger.delete(Session.Id); }
+				this.persist_background(); break;
 			case "item/started":
-				if(Params.item.type === "fileChange")
-				{
-					this.ApprovalItems.set(Params.item.id, Params.item.changes);
-				}
-				if(["commandExecution", "mcpToolCall", "webSearch"].includes(Params.item.type))
-				{
-					this.Status = "Codex 正在运行工具...";
-					this.Activity = "正在运行工具";
-				}
-				if(Params.item.type === "reasoning")
-				{
-					this.Activity = "思考中";
-				}
-				break;
+				if(Params.item.type === "fileChange") { this.ApprovalItems.set(Params.item.id, Params.item.changes); }
+				if(Visible && ["commandExecution", "mcpToolCall", "webSearch"].includes(Params.item.type)) { this.Status = "Codex 正在运行工具..."; this.Activity = "正在运行工具"; }
+				if(Visible && Params.item.type === "reasoning") { this.Activity = "思考中"; } break;
 			case "turn/completed":
-				for(const Reply of this.Session.Messages.filter(Value => Value.Role !== "reasoning" && Value.TurnId === Params.turn.id))
+			{
+				for(const Reply of Session.Messages.filter(M => M.Role !== "reasoning" && M.TurnId === Params.turn.id)) { Reply.CompletionStatus = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "interrupted" : "failed"; }
+				this.CompletedTurns.add(this.completed_key(Target.Scope, Params.threadId, Params.turn.id));
+				for(const O of this.State.Sync?.Operations.filter(O => O.SessionId === Session.Id && O.ThreadId === Params.threadId && O.TurnId === Params.turn.id) ?? []) { this.update_run_operation(Target, O.Id, Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "cancelled" : "failed", { Error: Params.turn.error?.message }); }
+				const ActiveOperation = this.State.Sync?.Operations.find(O => O.Id === this.Runtime.Active?.OperationId);
+				if(Visible && (this.TurnId === Params.turn.id || ActiveOperation?.TurnId === Params.turn.id || !this.TurnId && !this.Runtime.Active && !this.Busy))
 				{
-					Reply.CompletionStatus = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "interrupted" : "failed";
+					this.ApprovalItems.clear(); this.Busy = false; this.ChatPreparing = false; this.TurnId = null; this.Activity = ""; this.StartedAt = 0;
+					if(!this.Runtime.Active || this.Runtime.Active.SessionId === Session.Id) { this.Runtime.finish(); }
+					this.Status = Params.turn.status === "completed" ? "回复完成" : Params.turn.status === "interrupted" ? "已停止" : `回复失败: ${Params.turn.error?.message ?? Params.turn.status}`;
 				}
-				this.CompletedTurns.add(Params.turn.id);
-				this.ApprovalItems.clear();
-				this.Busy = false;
-				this.TurnId = null;
-				this.Activity = "";
-				this.StartedAt = 0;
-				this.Status = Params.turn.status === "completed" ? "回复完成" : Params.turn.status === "interrupted" ? "已停止" : `回复失败: ${Params.turn.error?.message ?? Params.turn.status}`;
-				this.persist_background();
-				break;
-			case "error":
-				this.Status = Params.error?.message ?? "Codex 错误";
-				break;
-			case "model/rerouted":
-				this.Model = Params.toModel;
-				this.Session.EffectiveModel = Params.toModel;
-				this.Status = `后端已切换模型: ${Params.toModel}`;
-				break;
+				this.persist_background(); break;
+			}
+			case "error": if(Visible) { this.Status = Params.error?.message ?? "Codex 错误"; } break;
+			case "model/rerouted": Session.EffectiveModel = Params.toModel; if(Visible) { this.Model = Params.toModel; this.Status = `后端已切换模型: ${Params.toModel}`; } break;
 		}
-		this.refresh();
+		if(Visible) { this.refresh(); }
 	}
 
 	private async handle_request(Message: RpcMessage): Promise<void>
 	{
-		const Connection = this.Connection;
+		const Connection = this.Connection, Scope = this.local_scope(), Session = this.thread_session(Message.params?.threadId);
 		let Result: unknown;
 		try
 		{
-			if(Message.method === "item/tool/call" && Message.params?.tool === "obsidian_cli_read")
+			if(!Session || this.State.DeletedSessionIds?.includes(Session.Id)) { Connection?.send({ id: Message.id, error: { code: -32602, message: "请求不属于本作用域中仍存在的会话" } }); return; }
+			const Visible = () => Scope === this.local_scope() && this.State.ActiveId === Session.Id;
+			if(Message.method === "item/tool/call" && [ObsidianTool.name, HistoryReadTool.name].includes(Message.params?.tool))
 			{
-				if(Message.params.threadId !== this.Session.ThreadId)
-				{
-					Connection?.send({ id: Message.id, error: { code: -32602, message: "工具请求不属于当前会话" } });
-					return;
-				}
-				this.Activity = "正在读取 Obsidian CLI";
-				this.refresh();
+				if(Visible()) { this.Activity = "正在读取原始资料"; this.refresh(); }
 				try
 				{
-					Result = await run_obsidian_read(this.obsidian_cli(), this.app.vault.getName(), Message.params.arguments);
+					Result = Message.params.tool === HistoryReadTool.name ? await read_history_page(Session.Id, Session.Messages, Message.params.arguments) : await run_obsidian_read(this.obsidian_cli(), this.app.vault.getName(), Message.params.arguments);
+					const Ref = Message.params.tool === ObsidianTool.name ? tool_read_reference(Message.params.arguments, Result, "desktop-read") : null;
+					if(Ref && Scope === this.local_scope() && this.State.Sessions.includes(Session)) { this.add_read_source(Session, Message.params.turnId, Ref); this.persist_background(); }
 				}
-				catch(ErrorValue)
-				{
-					Result = { success: false, contentItems: [{ type: "inputText", text: error_text(ErrorValue) }] };
-				}
-				this.Activity = this.Busy ? "思考中" : "";
-				this.refresh();
+				catch(E) { Result = { success: false, contentItems: [{ type: "inputText", text: error_text(E) }] }; }
+				if(Visible()) { this.Activity = this.Busy ? "思考中" : ""; this.refresh(); }
 			}
 			else if(Message.method === "item/commandExecution/requestApproval" || Message.method === "item/fileChange/requestApproval")
 			{
-				const Params = Message.params;
-				const Changes = this.ApprovalItems.get(Params.itemId);
+				const Params = Message.params, Changes = this.ApprovalItems.get(Params.itemId);
 				const Description = [Params.reason, Params.command, Params.cwd, Message.method === "item/fileChange/requestApproval" ? `Codex 请求修改文件\n${Changes ? JSON.stringify(Changes, null, 2) : "未收到变更明细"}` : ""].filter(Boolean).join("\n\n");
-				this.Activity = "等待批准";
-				this.refresh();
-				const Decision = await this.ask_approval(Description);
-				this.Activity = this.Busy ? "思考中" : "";
-				this.refresh();
-				Result = { decision: Decision };
+				if(Visible()) { this.Activity = "等待批准"; this.refresh(); }
+				Result = { decision: await this.ask_approval(Description) };
 			}
-			else if(Message.method === "item/tool/requestUserInput")
-			{
-				this.Activity = "等待补充信息";
-				this.refresh();
-				Result = await this.ask_questions(Message.params.questions);
-				this.Activity = this.Busy ? "思考中" : "";
-				this.refresh();
-			}
-			else
-			{
-				Connection?.send({ id: Message.id, error: { code: -32601, message: `Unsupported request: ${Message.method}` } });
-				this.Status = `当前版本不支持 ${Message.method}`;
-				this.refresh();
-				return;
-			}
-			if(Connection === this.Connection)
-			{
-				Connection?.send({ id: Message.id, result: Result });
-			}
+			else if(Message.method === "item/tool/requestUserInput") { Result = await this.ask_questions(Message.params.questions); }
+			else { Connection?.send({ id: Message.id, error: { code: -32601, message: `Unsupported request: ${Message.method}` } }); return; }
+			if(Connection === this.Connection && Scope === this.local_scope()) { Connection?.send({ id: Message.id, result: Result }); }
 		}
-		catch
-		{
-			// The transport may close while an approval modal is open.
-		}
+		catch { /* Transport may close while an owned request is pending. */ }
 	}
 
 	private ask_approval(Description: string): Promise<string>
@@ -1622,6 +1815,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	onunload(): void
 	{
+		this.Runtime.close();
 		this.Unloaded = true;
 		void this.Edits?.Store.close();
 		this.NoteSessions?.dispose();
@@ -1639,777 +1833,6 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		this.Connection?.close();
 		this.Connection = null;
-	}
-}
-
-class CodexView extends ItemView
-{
-	private NoteSessionBind!: HTMLButtonElement;
-	private NavigationSummary: HTMLElement | null = null;
-	private ComposePanel: SidebarPanel | null = null;
-	private ContextSummary: HTMLElement | null = null;
-	private OptionsSummary: HTMLElement | null = null;
-	private StatusElement!: HTMLElement;
-	private ContextElement!: HTMLElement;
-	private ContextKey = "";
-	private SelectionPreview!: SelectionPreview;
-	private CompletionElement!: HTMLElement;
-	private MessagesElement!: HTMLElement;
-	private Input!: HTMLTextAreaElement;
-	private QuoteElement!: HTMLElement;
-	private SelectedAnswer: AnswerQuote | null = null;
-	private ComposeActions!: ComposerActions;
-	private SessionsElement!: HTMLSelectElement;
-	private DeleteSessionButton!: HTMLButtonElement;
-	private ModelElement!: HTMLSelectElement;
-	private EffortElement!: HTMLSelectElement;
-	private FastElement!: HTMLInputElement;
-	private UsageToggle!: HTMLInputElement;
-	private CompletionToggle!: HTMLInputElement;
-	private UsageElement!: HTMLElement;
-	private CatalogElement!: HTMLElement;
-	private ActivityElement!: HTMLElement;
-	private ActivityLabel!: HTMLElement;
-	private ActivityTimer: ReturnType<typeof setInterval> | null = null;
-	private MessageList: MessageList | null = null;
-	private RenderTimer: ReturnType<typeof setTimeout> | null = null;
-	private LastRendered = "";
-	private Rendering = false;
-	private Opened = false;
-	private ReleaseFooter: (() => void) | null = null;
-	private Version = 0;
-	private EditingId = "";
-	private EditingSession = "";
-	private EditText = "";
-
-	constructor(Leaf: WorkspaceLeaf, private Owner: CodexSidebarPlugin)
-	{
-		super(Leaf);
-	}
-
-	getViewType(): string
-	{
-		return ViewType;
-	}
-
-	getDisplayText(): string
-	{
-		return "Codex";
-	}
-
-	getIcon(): string
-	{
-		return "bot";
-	}
-
-	async onOpen(): Promise<void>
-	{
-		this.Opened = true;
-		const Root = this.contentEl;
-		Root.empty();
-		Root.addClass("codex-sidebar");
-		this.ReleaseFooter?.();
-		this.ReleaseFooter = observe_sidebar_footer(Root);
-		const Mobile = Platform.isMobile || Root.ownerDocument.body.classList.contains("is-mobile");
-		const Panel = (Parent: HTMLElement, ClassName: string, Label: string) => sidebar_panel(Parent, ClassName, Label, Mobile, { Storage: localStorage, Key: `codex-sidebar-folds:v1:${this.app.vault.getName()}:${ClassName}` });
-		const Toolbar = Root.createDiv({ cls: "codex-toolbar" });
-		const Navigation = Panel(Toolbar, "codex-navigation", "会话与连接");
-		this.NavigationSummary = Navigation.Summary;
-		const Header = Navigation.Body.createDiv({ cls: "codex-header" });
-		Header.createEl("strong", { text: "Codex" });
-		this.button(Header, "新会话", () => void this.Owner.choose_session());
-		this.button(Header, "重连", () => void this.Owner.reconnect());
-		const SessionRow = Navigation.Body.createDiv({ cls: "codex-session-row" });
-		this.SessionsElement = SessionRow.createEl("select", { cls: "codex-sessions" });
-		accessible_name(this.SessionsElement, "Codex 会话");
-		this.SessionsElement.addEventListener("change", () => void this.Owner.choose_session(this.SessionsElement.value));
-		this.DeleteSessionButton = this.button(SessionRow, "删除会话", () => this.Owner.open_delete_session());
-		this.DeleteSessionButton.addClass("codex-session-delete");
-		this.NoteSessionBind = this.button(Navigation.Body, "将当前会话绑定此笔记", () =>
-		{
-			try { this.Owner.bind_note_session(); } catch(ErrorValue) { this.Owner.NoteSessionError = error_text(ErrorValue); this.Owner.refresh(); new Notice(error_text(ErrorValue)); }
-		});
-		this.StatusElement = Root.createDiv({ cls: "codex-status" });
-		this.SelectionPreview = new SelectionPreview(Root, () => this.Owner.clear_context());
-		const ContextPanel = Panel(Toolbar, "codex-context-tools", "上下文");
-		this.ContextSummary = ContextPanel.Summary;
-		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
-		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
-		this.button(ContextBar, "选择 PDF 页", () => this.Owner.open_pdf());
-		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
-		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
-		this.ContextElement = ContextPanel.Body.createDiv({ cls: "codex-context" });
-		this.CompletionElement = Root.createDiv({ cls: "codex-completion-proposal" });
-		this.MessagesElement = Root.createDiv({ cls: "codex-messages", attr: { role: "log" } });
-		accessible_name(this.MessagesElement, "Codex 对话");
-		this.ActivityElement = Root.createDiv({ cls: "codex-activity", attr: { role: "status", "aria-live": "polite" } });
-		this.ActivityElement.createSpan({ cls: "codex-spinner", attr: { "aria-hidden": "true" } });
-		this.ActivityLabel = this.ActivityElement.createSpan();
-		const Composer = Root.createDiv({ cls: "codex-composer" });
-		this.QuoteElement = Composer.createDiv({ cls: "codex-answer-quote" });
-		const OptionsPanel = Panel(Toolbar, "codex-options", "模型与选项");
-		this.OptionsSummary = OptionsPanel.Summary;
-		const Controls = OptionsPanel.Body.createDiv({ cls: "codex-controls" });
-		const ModelLabel = Controls.createEl("label");
-		ModelLabel.createSpan({ text: "模型" });
-		this.ModelElement = ModelLabel.createEl("select");
-		const EffortLabel = Controls.createEl("label");
-		EffortLabel.createSpan({ text: "思考档次" });
-		this.EffortElement = EffortLabel.createEl("select");
-		const Toggles = OptionsPanel.Body.createDiv({ cls: "codex-run-toggles" });
-		const FastLabel = Toggles.createEl("label");
-		this.FastElement = FastLabel.createEl("input", { type: "checkbox" });
-		FastLabel.createSpan({ text: "Fast" });
-		const UsageLabel = Toggles.createEl("label");
-		this.UsageToggle = UsageLabel.createEl("input", { type: "checkbox" });
-		UsageLabel.createSpan({ text: "上下文占用" });
-		const CompletionLabel = Toggles.createEl("label");
-		this.CompletionToggle = CompletionLabel.createEl("input", { type: "checkbox" });
-		CompletionLabel.createSpan({ text: "行内补全" });
-		this.CompletionToggle.addEventListener("change", () => void this.Owner.set_completion(this.CompletionToggle.checked));
-		const ApplyOptions = () => void this.Owner.update_run_settings(this.ModelElement.value, this.EffortElement.value, this.FastElement.checked);
-		this.ModelElement.addEventListener("change", ApplyOptions);
-		this.EffortElement.addEventListener("change", ApplyOptions);
-		this.FastElement.addEventListener("change", ApplyOptions);
-		this.UsageToggle.addEventListener("change", () =>
-		{
-			this.Owner.State.Settings.ShowUsage = this.UsageToggle.checked;
-			this.Owner.refresh();
-			void this.Owner.persist();
-		});
-		this.CatalogElement = Composer.createDiv({ cls: "codex-catalog-status" });
-		this.UsageElement = OptionsPanel.Body.createDiv({ cls: "codex-usage" });
-		this.ComposePanel = Panel(Composer, "codex-send-tools", "提问与发送");
-		this.Input = this.ComposePanel.Body.createEl("textarea", { attr: { placeholder: "随时提问... Enter 提问, Shift+Enter 换行" } });
-		accessible_name(this.Input, "向 Codex 提问");
-		this.Input.addEventListener("input", () => { this.refresh_compose_summary(); void this.Owner.NoteSessions?.flush(); });
-		const Actions = this.ComposePanel.Body.createDiv({ cls: "codex-compose-actions" });
-		this.ComposeActions = new ComposerActions(Actions, this.Input, Mode => void this.send_input(Mode), () => void this.Owner.stop_turn());
-		this.ActivityTimer = setInterval(() => this.refresh_activity(), 1000);
-		const CaptureAnswer = () => this.capture_answer_selection();
-		this.registerDomEvent(Root.ownerDocument, "selectionchange", CaptureAnswer);
-		this.registerDomEvent(this.MessagesElement, "pointerup", CaptureAnswer);
-		this.registerDomEvent(this.MessagesElement, "keyup", CaptureAnswer);
-		this.refresh();
-	}
-
-	private capture_answer_selection(): void
-	{
-		if(!this.Opened)
-		{
-			return;
-		}
-		const SelectionValue = this.contentEl.ownerDocument.defaultView?.getSelection();
-		const RangeValue = SelectionValue?.rangeCount ? SelectionValue.getRangeAt(0) : null;
-		const NodeValue = RangeValue?.commonAncestorContainer;
-		const ElementValue = NodeValue?.nodeType === 1 ? NodeValue as Element : NodeValue?.parentElement;
-		const Body = ElementValue?.closest<HTMLElement>(".codex-assistant .codex-message-body");
-		const Card = Body?.closest<HTMLElement>(".codex-message");
-		const Message = this.Owner.Session.Messages.find(Value => Value.Id === Card?.dataset.messageId && Value.Role === "assistant");
-		this.SelectedAnswer = RangeValue && !RangeValue.collapsed && Body && !Body.dataset.editStructured && this.MessagesElement.contains(Body) && Message && SelectionValue!.toString().trim()
-			? answer_quote(this.Owner.Session.Id, Message.Id, SelectionValue!.toString(), Message.Text, answer_status(Message, this.Owner.TurnId, this.Owner.Busy)) : null;
-		this.refresh_quote();
-	}
-
-	private refresh_quote(): void
-	{
-		if(this.Owner.AnswerQuote?.SessionId !== this.Owner.Session.Id)
-		{
-			this.Owner.AnswerQuote = null;
-		}
-		if(this.SelectedAnswer?.SessionId !== this.Owner.Session.Id)
-		{
-			this.SelectedAnswer = null;
-		}
-		const Quote = this.Owner.AnswerQuote ?? this.SelectedAnswer;
-		this.ComposeActions?.refresh(this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !!this.Owner.NoteSessions?.Switching, this.Owner.Busy && !!this.Owner.TurnId, !!this.Owner.AnswerQuote);
-		this.refresh_compose_summary();
-		this.QuoteElement.hidden = !Quote;
-		this.Input.placeholder = this.Owner.AnswerQuote ? "针对选中的回答继续提问... Enter 提问, Shift+Enter 换行" : "随时提问... Enter 提问, Shift+Enter 换行";
-		this.QuoteElement.empty();
-		if(!Quote)
-		{
-			return;
-		}
-		this.QuoteElement.createDiv({ text: this.Owner.AnswerQuote ? "已引用回答片段" : "已选中回答片段", cls: "codex-message-context" });
-		this.QuoteElement.createEl("pre", { text: Quote.SelectedText });
-		if(!this.Owner.AnswerQuote)
-		{
-			const Button = this.button(this.QuoteElement, "追问这段", () =>
-			{
-				this.Owner.AnswerQuote = structuredClone(Quote);
-				this.SelectedAnswer = null;
-				this.contentEl.ownerDocument.defaultView?.getSelection()?.removeAllRanges();
-				this.refresh_quote();
-				reveal_sidebar_panel(this.ComposePanel);
-				this.Input.focus();
-			});
-			Button.addEventListener("pointerdown", Event => Event.preventDefault());
-		}
-		else
-		{
-			this.QuoteElement.createDiv({ text: followup_summary(Quote), cls: "codex-message-context" });
-			this.button(this.QuoteElement, "取消引用", () => { this.Owner.AnswerQuote = null; this.refresh_quote(); void this.Owner.NoteSessions?.flush(); });
-		}
-		if(Quote.SelectedTruncated || Quote.SourceTruncated)
-		{
-			this.QuoteElement.createDiv({ text: "引用已按长度限制截断", cls: "codex-message-context" });
-		}
-	}
-
-	private refresh_compose_summary(): void
-	{
-		this.ComposePanel?.Summary?.setText(this.Input.value.trim() ? "提问与发送 · 有草稿" : this.Owner.AnswerQuote ? "提问与发送 · 已引用" : "提问与发送");
-	}
-
-	private refresh_activity(): void
-	{
-		this.ActivityElement.hidden = !this.Owner.Busy && !this.Owner.ChatPreparing;
-		if(this.Owner.Busy || this.Owner.ChatPreparing)
-		{
-			const Seconds = Math.max(0, Math.floor((Date.now() - this.Owner.StartedAt) / 1000));
-			this.ActivityLabel.setText(`${this.Owner.Activity || "思考中"} · ${Seconds} 秒`);
-		}
-	}
-
-	private set_options(ElementValue: HTMLSelectElement, Options: { Value: string; Label: string }[], Current: string): void
-	{
-		const Signature = JSON.stringify(Options);
-		if(ElementValue.dataset.options !== Signature)
-		{
-			ElementValue.empty();
-			for(const Option of Options)
-			{
-				ElementValue.createEl("option", { text: Option.Label, value: Option.Value });
-			}
-			ElementValue.dataset.options = Signature;
-		}
-		ElementValue.value = Current;
-	}
-
-	private refresh_controls(): void
-	{
-		const Settings = this.Owner.State.Settings;
-		const Selected = selected_model(Settings, this.Owner.Models);
-		this.OptionsSummary?.setText(`模型与选项 · ${[Settings.Model || "加载中", Settings.Effort, Settings.Fast ? "Fast" : ""].filter(Boolean).join(" / ")}`);
-		const ModelOptions = this.Owner.Models.map(Value => ({ Value: Value.model, Label: Value.displayName }));
-		if(Settings.Model && !ModelOptions.some(Value => Value.Value === Settings.Model))
-		{
-			ModelOptions.push({ Value: Settings.Model, Label: `${Settings.Model} (${this.Owner.Models.length ? "当前不可用" : "加载中"})` });
-		}
-		if(!ModelOptions.length)
-		{
-			ModelOptions.push({ Value: "", Label: "加载模型..." });
-		}
-		this.set_options(this.ModelElement, ModelOptions, Settings.Model);
-		const EffortOptions = (Selected?.supportedReasoningEfforts ?? []).map(Value => ({ Value: Value.reasoningEffort, Label: Value.reasoningEffort }));
-		if(Settings.Effort && !EffortOptions.some(Value => Value.Value === Settings.Effort))
-		{
-			EffortOptions.push({ Value: Settings.Effort, Label: `${Settings.Effort} (请重新选择)` });
-		}
-		if(!EffortOptions.length)
-		{
-			EffortOptions.push({ Value: "", Label: "加载思考档次..." });
-		}
-		this.set_options(this.EffortElement, EffortOptions, Settings.Effort);
-		this.ModelElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !this.Owner.Models.length;
-		this.EffortElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !Selected;
-		this.FastElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || (!fast_tier(Selected) && !Settings.Fast);
-		this.FastElement.checked = Settings.Fast;
-		this.UsageToggle.checked = Settings.ShowUsage;
-		this.CompletionToggle.checked = Settings.Completion;
-		this.CatalogElement.setText(this.Owner.CatalogError);
-		this.CatalogElement.hidden = !this.Owner.CatalogError;
-		this.UsageElement.hidden = !Settings.ShowUsage;
-		this.UsageElement.empty();
-		if(Settings.ShowUsage)
-		{
-			const Usage = context_usage(this.Owner.Session.Usage);
-			if(!Usage)
-			{
-				this.UsageElement.setText("上下文: 等待后端用量报告");
-			}
-			else
-			{
-				const Format = (Value: number) => Value.toLocaleString("en-US");
-				this.UsageElement.createSpan({ text: `上下文${Usage.Percent !== null ? ` ~${Usage.Percent.toFixed(1)}%` : ""}: ${Format(Usage.Used)}${Usage.Window ? ` / ${Format(Usage.Window)}` : " tokens (窗口未知)"}` });
-				if(Usage.Percent !== null)
-				{
-					const Progress = this.UsageElement.createEl("progress", { attr: { max: "100" } });
-					accessible_name(Progress, "上下文占用估计");
-					Progress.value = Usage.Percent;
-				}
-			}
-		}
-	}
-
-	private button(Parent: HTMLElement, Label: string, Callback: () => void): HTMLButtonElement
-	{
-		const Button = Parent.createEl("button", { text: Label, attr: { type: "button" } });
-		Button.addEventListener("click", Callback);
-		return Button;
-	}
-
-	private async send_input(Mode: ComposeAction): Promise<void>
-	{
-		const Text = this.Input.value;
-		const Quote = this.Owner.AnswerQuote;
-		const Accepted = await this.Owner.send_chat(Text, Quote ? null : this.Owner.State.Settings.AttachContext ? this.Owner.Capture.Snapshot : null, Quote, { Mode, Scope: edit_scope(this.Owner.State.Settings.EditScope), Role: "auto" });
-		if(Accepted && this.Input.value === Text)
-		{
-			this.Input.value = "";
-			if(this.Owner.AnswerQuote === Quote)
-			{
-				this.Owner.AnswerQuote = null;
-				this.refresh_quote();
-			}
-		}
-		void this.Owner.NoteSessions?.flush();
-	}
-	has_pending_input(): boolean { return !!this.Input?.value.trim() || !!this.EditingId; }
-
-	refresh(): void
-	{
-		if(!this.Opened || !this.StatusElement)
-		{
-			return;
-		}
-		const Session = this.Owner.Session;
-		this.NavigationSummary?.setText(`会话与连接 · ${Session.Title}`);
-		const Effective = [Session.EffectiveModel, Session.EffectiveEffort, Session.EffectiveTier === "priority" || Session.EffectiveTier === "fast" ? "Fast" : ""].filter(Boolean).join(" / ");
-		this.StatusElement.setText(`${this.Owner.Status}${Effective ? ` | 最近请求: ${Effective}` : ""} | ${this.Owner.SkillStatus}`);
-		const Notes = this.Owner.NoteSessions;
-		this.NoteSessionBind.disabled = !Notes?.Path || this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !!Notes?.Switching;
-		if(this.DeleteSessionButton) { this.DeleteSessionButton.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !!Notes?.Switching; }
-		this.refresh_activity();
-		this.refresh_controls();
-		this.refresh_completion();
-		this.refresh_quote();
-		const Options = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
-		if(this.SessionsElement.dataset.options !== Options)
-		{
-			this.SessionsElement.empty();
-			for(const Value of this.Owner.State.Sessions.slice().reverse())
-			{
-				this.SessionsElement.createEl("option", { text: Value.Title, value: Value.Id });
-			}
-			this.SessionsElement.dataset.options = Options;
-		}
-		this.SessionsElement.value = Session.Id;
-		this.SessionsElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !!Notes?.Switching;
-		const Snapshot = this.Owner.Capture.Snapshot;
-		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
-		this.refresh_compose_summary();
-		this.ContextSummary?.setText(Snapshot ? `上下文 · ${Snapshot.Kind}${Snapshot.Truncated ? " (已截断)" : ""}` : "上下文");
-		const ContextKey = JSON.stringify(Snapshot);
-		if(ContextKey !== this.ContextKey)
-		{
-			this.ContextKey = ContextKey; this.ContextElement.empty();
-			if(Snapshot)
-			{
-				const Label = this.ContextElement.createEl("label", { cls: "codex-context-label" });
-				const Checkbox = Label.createEl("input", { type: "checkbox" });
-				Checkbox.checked = this.Owner.State.Settings.AttachContext;
-				Checkbox.addEventListener("change", () =>
-				{
-					this.Owner.State.Settings.AttachContext = Checkbox.checked;
-					this.SelectionPreview.update(this.Owner.Capture.Snapshot, Checkbox.checked);
-					void this.Owner.persist();
-				});
-				Label.createSpan({ text: `附带 ${Snapshot.Kind} (${Snapshot.Mode}, ${Snapshot.Mapping})` });
-				const Details = this.ContextElement.createEl("details");
-				Details.createEl("summary", { text: `${Snapshot.Path}${Snapshot.LineStart !== null ? `:${Snapshot.LineStart + 1}` : ""}` });
-				Details.createDiv({ text: Snapshot.Heading || "未定位标题", cls: "codex-context-heading" });
-				Details.createEl("pre", { text: Snapshot.Text });
-				pdf_preview(Details, Snapshot, this.Owner.PdfImages);
-				if(Snapshot.Truncated)
-				{
-					Details.createDiv({ text: "内容已截断到上下文长度限制" });
-				}
-				this.button(this.ContextElement, "清除上下文", () =>
-				{
-					this.Owner.clear_context();
-				});
-			}
-			else
-			{
-				this.ContextElement.setText("在笔记中选中文字, 或捕获当前阅读位置");
-			}
-		}
-		const ContextCheckbox = this.ContextElement.querySelector<HTMLInputElement>(".codex-context-label input");
-		if(ContextCheckbox) { ContextCheckbox.checked = this.Owner.State.Settings.AttachContext; }
-
-		if(!this.RenderTimer)
-		{
-			this.RenderTimer = setTimeout(() =>
-			{
-				this.RenderTimer = null;
-				void this.render_messages();
-			}, 100);
-		}
-		void this.Owner.NoteSessions?.flush();
-	}
-
-	forget_session(Id: string): void
-	{
-		this.Version++; this.LastRendered = "";
-		if(this.SelectedAnswer?.SessionId === Id) { this.SelectedAnswer = null; }
-		if(this.EditingSession === Id) { this.EditingSession = ""; this.EditingId = ""; this.EditText = ""; }
-		this.MessageList?.forget(JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Id]));
-	}
-	private async render_messages(): Promise<void>
-	{
-		if(this.Rendering || !this.Opened) { return; }
-		const Session = this.Owner.Session, Messages = Session.Messages.map(Message => ({ ...Message }));
-		const SourcePath = this.Owner.Capture.LastView?.file?.path ?? "";
-		const Context = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Session.Id]);
-		if(this.EditingSession !== Session.Id) { this.EditingId = ""; }
-		const Signature = this.message_signature();
-		if(Signature === this.LastRendered && this.MessageList) { return; }
-		this.Rendering = true;
-		const Version = ++this.Version;
-		this.MessageList ??= new MessageList(this.MessagesElement);
-		try
-		{
-			const Items = Messages.map(Message =>
-			{
-				const Task = structured_task(Messages, Message), Record = Task?.Action === "edit" ? this.Owner.Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id) : null;
-				const EditState = Task?.Action === "edit" ? [this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, Record?.Status, Record?.Error, this.Owner.Edits?.Store.Data.Writes.filter(Value => Value.TaskId === Task.Id).map(Value => [Value.Id, Value.State, Value.Error])] : null;
-				return { Id: Message.Id, Key: JSON.stringify([Message, SourcePath, Message.Role === "user" ? [this.Owner.Busy, this.EditingId === Message.Id] : null, EditState]), Render: () => this.render_card(Message, Messages) };
-			});
-			if(!Items.length)
-			{
-				Items.push({ Id: "welcome", Key: "welcome", Render: async () =>
-				{
-					const Element = this.MessagesElement.ownerDocument.createElement("div"); Element.className = "codex-welcome";
-					Element.textContent = "可以直接提问, 或选中笔记内容后点击解释选区 / 检查证明. 阅读模式会附带原始 Markdown 源块.";
-					return { Element, Dispose: () => {} };
-				} });
-			}
-			if(await this.MessageList.update(Context, Items, () => this.Opened && Version === this.Version && this.Owner.Session.Id === Session.Id && SourcePath === (this.Owner.Capture.LastView?.file?.path ?? "") && Context === JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Session.Id]))) { this.LastRendered = Signature; }
-			else if(this.Opened) { this.refresh(); }
-		}
-		finally
-		{
-			this.Rendering = false;
-			if(this.Opened && Signature !== this.message_signature()) { this.refresh(); }
-		}
-	}
-
-	private async render_card(Message: ChatMessage, Messages: ChatMessage[]): Promise<MessageNode>
-	{
-		const RenderComponent = new Component(); RenderComponent.load();
-		try
-		{
-			const Card = this.MessagesElement.ownerDocument.createElement("div");
-			Card.className = `codex-message codex-${Message.Role}`;
-			const Structured = structured_task(Messages, Message);
-			Card.dataset.messageId = Message.Id;
-			const Header = Card.createDiv({ cls: "codex-message-label" });
-			Header.createSpan({ text: Message.Role === "user" ? "你" : Message.Role === "assistant" ? "Codex" : Message.Role === "reasoning" ? "思考摘要" : "状态" });
-			if(Message.Role === "assistant")
-			{
-				this.button(Header, "复制", () =>
-				{
-					if(!navigator.clipboard?.writeText)
-					{
-						new Notice("当前环境无法访问剪贴板, 请选中文字后使用系统复制");
-						return;
-					}
-					void navigator.clipboard.writeText(Message.Text).catch(() => new Notice("复制失败, 请使用系统复制"));
-				});
-			}
-			if(Message.Role === "user" && (!Message.Task || Message.Task.Action === "edit"))
-			{
-				this.button(Header, "编辑", () =>
-				{
-					if(this.Owner.Busy)
-					{
-						return;
-					}
-					this.EditingId = Message.Id;
-					this.EditingSession = this.Owner.Session.Id;
-					this.EditText = Message.Text;
-					this.refresh();
-				}).disabled = this.Owner.Busy;
-				this.button(Header, "重新发送", () => void this.Owner.resend_message(Message.Id)).disabled = this.Owner.Busy;
-			}
-			if(Message.ContextLabel)
-			{
-				Card.createDiv({ cls: "codex-message-context", text: Message.ContextLabel });
-			}
-			const Content = Message.Role === "reasoning" ? Card.createEl("details") : Card;
-			if(Message.Role === "reasoning")
-			{
-				Content.createEl("summary", { text: "查看 Codex 返回的思考摘要" });
-			}
-			const Body = Content.createDiv({ cls: "codex-message-body markdown-rendered" });
-			if(Message.Role === "user" && this.EditingId === Message.Id)
-			{
-				const Editor = Body.createEl("textarea", { cls: "codex-edit-message" });
-				accessible_name(Editor, "编辑已发送内容");
-				Editor.value = this.EditText;
-				Editor.addEventListener("input", () => { this.EditText = Editor.value; });
-				const Actions = Body.createDiv({ cls: "codex-edit-actions" });
-				this.button(Actions, "保存并重发", () =>
-				{
-					if(this.Owner.Busy || !this.EditText.trim() || this.EditingSession !== this.Owner.Session.Id)
-					{
-						return;
-					}
-					const Text = this.EditText;
-					this.EditingId = "";
-					void this.Owner.resend_message(Message.Id, Text);
-				}).disabled = this.Owner.Busy;
-				this.button(Actions, "取消", () => { this.EditingId = ""; this.refresh(); });
-				Body.createDiv({ cls: "codex-message-context", text: "将使用原消息上下文创建分支, 原会话保留." });
-			}
-			else if(Structured?.Action === "edit")
-			{
-				await render_edit(this.app, Body, this.Owner.Edits, Structured, RenderComponent, () => this.Owner.refresh(), () => this.Owner.Edits!.retry_result(Structured.Id, this.Owner.Session.Messages));
-				const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始修改输出" }); Raw.createEl("pre", { text: Message.Text });
-			}
-			else if(Message.Role === "assistant" || Message.Role === "reasoning")
-			{
-				const WorkTask = Messages.find(Value => Value.Role === "user" && Value.TurnId === Message.TurnId)?.Task;
-				if(WorkTask && (WorkTask.Action !== "edit" || !safe_math_markdown(Message.Text))) { Body.createEl("pre", { text: Message.Text }); }
-				else { await MarkdownRenderer.render(this.app, Message.Text || "...", Body, this.Owner.Capture.LastView?.file?.path ?? "", RenderComponent); }
-			}
-			else
-			{
-				Body.setText(Message.Task ? question_label(Message.Task) : Message.Text);
-			}
-			return { Element: Card, Dispose: () => RenderComponent.unload() };
-		}
-		catch(ErrorValue) { RenderComponent.unload(); throw ErrorValue; }
-	}
-
-	private refresh_completion(): void
-	{
-		const Proposal = this.Owner.Inline.get_suggestion();
-		const Signature = JSON.stringify(Proposal ? [Proposal.Path, Proposal.Text] : null);
-		if(this.CompletionElement.dataset.signature === Signature)
-		{
-			return;
-		}
-		this.CompletionElement.dataset.signature = Signature;
-		this.CompletionElement.empty();
-		this.CompletionElement.hidden = !Proposal;
-		if(!Proposal)
-		{
-			return;
-		}
-		this.CompletionElement.createEl("strong", { text: "待确认补全" });
-		this.CompletionElement.createDiv({ cls: "codex-message-context", text: Proposal.Path });
-		this.CompletionElement.createEl("pre", { text: Proposal.Text });
-		const Actions = this.CompletionElement.createDiv({ cls: "codex-edit-actions" });
-		this.button(Actions, "确认插入", () =>
-		{
-			if(!this.Owner.Inline.accept(Proposal.View))
-			{
-				new Notice("建议已失效, 请在笔记中重新请求补全");
-			}
-			this.refresh();
-		}).addClass("mod-cta");
-		this.button(Actions, "取消", () => { this.Owner.Inline.dismiss_suggestion(Proposal.View); this.refresh(); });
-	}
-
-	async onClose(): Promise<void>
-	{
-		this.ReleaseFooter?.(); this.ReleaseFooter = null;
-		this.Opened = false;
-		this.Version++;
-		if(this.RenderTimer)
-		{
-			clearTimeout(this.RenderTimer);
-			this.RenderTimer = null;
-		}
-		if(this.ActivityTimer)
-		{
-			clearInterval(this.ActivityTimer);
-			this.ActivityTimer = null;
-		}
-		this.MessageList?.dispose(); this.MessageList = null; this.ContextKey = "";
-		this.Owner.refresh();
-	}
-
-	private message_signature(): string
-	{
-		return JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Capture.LastView?.file?.path ?? "", this.Owner.Session.Id, this.Owner.Session.Messages, this.Owner.Busy, this.EditingId, this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, this.Owner.Edits?.Store.Data.Records.map(Value => [Value.Spec.Id, Value.Status, Value.Error]), this.Owner.Edits?.Store.Data.Writes.map(Value => [Value.Id, Value.State, Value.Error])]);
-	}
-}
-
-class CodexSettings extends PluginSettingTab
-{
-	constructor(AppValue: App, private Owner: CodexSidebarPlugin)
-	{
-		super(AppValue, Owner);
-	}
-
-	display(): void
-	{
-		this.containerEl.empty();
-		this.containerEl.createEl("h2", { text: "Codex Sidebar" });
-		const Notes = this.Owner.NoteSessions;
-		const NoteError = this.Owner.NoteSessionError || Notes?.Error;
-		new Setting(this.containerEl).setName("随笔记切换会话").setDesc(NoteError || "打开 Markdown 笔记或 PDF 时切换到对应会话. 已有会话和关联保留; 有草稿或正在回复时等待当前操作结束.")
-			.addToggle(Toggle => Toggle.setValue(!!Notes?.Data.Enabled).setDisabled(!Notes).onChange(async Value =>
-			{
-				try { await this.Owner.set_note_sessions(Value); }
-				catch(ErrorValue) { this.Owner.NoteSessionError = error_text(ErrorValue); new Notice(error_text(ErrorValue)); }
-				this.display();
-			}));
-		new Setting(this.containerEl).setName("修改范围").setDesc("用于新发起的“生成修改预览”. 原文类型由 AI 辨识; 已发送任务重发时保留原范围. 采用修改前仍需确认差异.")
-			.addDropdown(Dropdown =>
-			{
-				for(const [Value, Label] of EditScopeOptions) { Dropdown.addOption(Value, Label); }
-				Dropdown.setValue(edit_scope(this.Owner.State.Settings.EditScope)).onChange(async Value =>
-				{
-					this.Owner.State.Settings.EditScope = edit_scope(Value);
-					await this.Owner.persist();
-				});
-			});
-		new Setting(this.containerEl).setName("独立远程连接").setDesc("iPad 使用独立后台 Codex 进程和会话记录. 桌面本机会话单独保留.").addToggle(Toggle => Toggle.setValue(this.Owner.Remote.Enabled).setDisabled(Platform.isMobileApp).onChange(async Value =>
-		{
-			try
-			{
-				await this.Owner.set_remote_mode(Value);
-				this.display();
-			}
-			catch(ErrorValue)
-			{
-				new Notice(error_text(ErrorValue));
-			}
-		}));
-		let RemoteUrl = this.Owner.Remote.Url;
-		let RemoteToken = this.Owner.Remote.Token;
-		let RemoteTransport = this.Owner.Remote.Transport ?? "browser";
-		new Setting(this.containerEl).setName("远程服务地址").setDesc("填写电脑私有 HTTPS 地址. 地址与密钥只保存在此设备, 不写入同步的桌面设置.").addText(Value => Value.setValue(RemoteUrl).setPlaceholder("https://电脑地址:8445").onChange(Text => { RemoteUrl = Text.trim(); }));
-		new Setting(this.containerEl).setName("配对密钥").addText(Value =>
-		{
-			Value.inputEl.type = "password";
-			Value.setValue(RemoteToken).onChange(Text => { RemoteToken = Text.trim(); });
-		});
-		if(Platform.isMobileApp)
-		{
-			new Setting(this.containerEl).setName("移动网络传输").setDesc("浏览器请求超时时可手动切换原生请求, 绕过网页 CORS 预检. 两种方式都不自动重发; 原生请求超时后可能仍在服务端进行.").addDropdown(Value => Value.addOption("browser", "浏览器 Fetch").addOption("native", "Obsidian 原生请求").setValue(RemoteTransport).onChange(Text => { RemoteTransport = Text as "browser" | "native"; }));
-		}
-		new Setting(this.containerEl).setName("连接独立远程 Agent").addButton(Button => Button.setButtonText("保存并连接").onClick(async () =>
-		{
-			Button.setDisabled(true).setButtonText("连接中...");
-			try
-			{
-				await this.Owner.configure_remote(RemoteUrl, RemoteToken, RemoteTransport);
-				new Notice("独立远程会话已连接");
-				this.display();
-			}
-			catch(ErrorValue)
-			{
-				this.Owner.Status = error_text(ErrorValue);
-				this.Owner.refresh();
-				new Notice(error_text(ErrorValue));
-			}
-			finally
-			{
-				Button.setDisabled(false).setButtonText("保存并连接");
-			}
-		}));
-		new Setting(this.containerEl).setName("math-writing 技能").setDesc(`${this.Owner.SkillStatus}. 从${this.Owner.Remote.Enabled ? "Windows 服务端" : "本机"} Codex 的 skills/list 自动发现, 聊天与补全每次通过 skill 输入加载. 技能未安装或被禁用时明确报错; 不更改全局配置.`).addButton(Button => Button.setButtonText("重新检查").onClick(async () =>
-		{
-			try
-			{
-				await this.Owner.ensure_connection();
-				this.Owner.MathWritingSkill = null;
-				await this.Owner.ensure_math_skill();
-			}
-			catch(ErrorValue)
-			{
-				new Notice(error_text(ErrorValue));
-			}
-			this.display();
-		}));
-		new Setting(this.containerEl).setName("数学内容修改准则").setDesc("题目可判断并标注补充条件; 完整答案最小修补, 需推倒重来时先由你决定; 解题思路严格沿原路线证明; 模仿原稿语言. 固定随请求注入, 自定义工作提示词仍保留.");
-		new Setting(this.containerEl).setName("修改与还原缓存保留轮数").setDesc("默认 1. 修改预览生成后, 或采用/安全还原后重新计时, 在同一会话后续完成 N 轮对话时清理对应预览和还原数据. 输入 1-1000 或“永不”. 未采用预览也会到期; 聊天和笔记保留, 旧记录不追溯清理. " + (this.Owner.Edits?.Cache.Error ?? "")).addText(Value => Value.setValue(this.Owner.Edits?.Cache.Turns === 0 ? "永不" : String(this.Owner.Edits?.Cache.Turns ?? 1)).setPlaceholder("1 或 永不").onChange(async Text =>
-		{
-			const Input = Text.trim(), Turns = ["永不", "never", "0"].includes(Input.toLowerCase()) ? 0 : /^\d+$/.test(Input) ? Number(Input) : NaN;
-			if(!Number.isSafeInteger(Turns) || Turns < 0 || Turns > 1000) { Value.inputEl.setCustomValidity?.("输入 1-1000 或 永不"); return; }
-			Value.inputEl.setCustomValidity?.("");
-			try { await this.Owner.Edits?.Cache.set_turns(Turns); } catch(ErrorValue) { new Notice(error_text(ErrorValue)); }
-		}));
-		let ConfirmEdits = false;
-		new Setting(this.containerEl).setName("本设备修改记录").setDesc("普通聊天的修改提案、原文基线与撤销记录仅存本设备, 不随远程聊天覆盖. 导出含原文, 请自行保管. 清除后不能采用或安全撤销旧提案, 不会改动笔记.")
-			.addButton(Button => Button.setButtonText("导出记录").onClick(() => { if(this.Owner.Edits) { export_edits(this.app, this.Owner.Edits.Store.export_records()); } }))
-			.addButton(Button => Button.setButtonText("清除记录...").onClick(async () =>
-			{
-				if(!ConfirmEdits) { ConfirmEdits = true; Button.setButtonText("确认清除此设备记录"); return; }
-				try { await this.Owner.Edits?.clear(); this.Owner.refresh(); new Notice("本设备修改记录已清除, 笔记未改动"); }
-				catch(ErrorValue) { new Notice(error_text(ErrorValue)); }
-				this.display();
-			}));
-		let ConfirmClear = false;
-		new Setting(this.containerEl).setName("PDF 页图缓存").setDesc("页图在当前设备单独保存, 远程桥按配对设备隔离. 清除会保留聊天和修改记录, 但缺少原图的请求不能重发. 不会删除 PDF 或撤回模型已收到的图片.").addButton(Button => Button.setButtonText("清除页图缓存...").onClick(async () =>
-		{
-			if(!ConfirmClear) { ConfirmClear = true; Button.setButtonText("确认清除本设备页图"); return; }
-			Button.setDisabled(true);
-			try { await this.Owner.clear_pdf_images(); new Notice(this.Owner.Status); }
-			catch(ErrorValue) { new Notice(error_text(ErrorValue)); }
-			finally { this.display(); }
-		}));
-		new Setting(this.containerEl).setName("行内补全").setDesc("编辑停顿后显示灰色建议. 在侧栏确认插入, Esc 取消, Ctrl+Alt+Space 手动请求. 保留 Obsidian 原生 Tab. 自动请求会消耗 Codex 用量, 使用当前模型的 low 档次.").addToggle(Toggle => Toggle.setValue(this.Owner.State.Settings.Completion).onChange(Value => this.Owner.set_completion(Value)));
-		new Setting(this.containerEl).setName("补全等待时间 (毫秒)").setDesc("默认 1200, 最小 500. 继续输入或移动光标会取消旧请求.").addText(TextValue => TextValue.setValue(String(this.Owner.State.Settings.CompletionDelay)).onChange(async Value =>
-		{
-			const Delay = Number(Value);
-			if(Number.isFinite(Delay) && Delay >= 500 && Delay <= 30000)
-			{
-				this.Owner.State.Settings.CompletionDelay = Math.round(Delay);
-				await this.Owner.persist();
-			}
-		}));
-		if(!this.Owner.Remote.Enabled)
-		{
-			new Setting(this.containerEl).setName("Obsidian CLI 路径").setDesc("默认检测当前 Obsidian 安装的 Obsidian.com, 将实际路径和 vault 注入工作提示词. 也可填写自定义路径.").addText(TextValue => TextValue.setValue(this.Owner.State.Settings.ObsidianCliPath).onChange(async Value =>
-			{
-				this.Owner.State.Settings.ObsidianCliPath = Value.trim();
-				await this.Owner.persist();
-			}));
-			new Setting(this.containerEl).setName("Codex 可执行文件").setDesc("留空时从 PATH 查找 codex.exe. 使用本机 Codex 登录.").addText(TextValue => TextValue
-				.setValue(this.Owner.State.Settings.CliPath).setPlaceholder("C:\\...\\codex.exe").onChange(async Value =>
-				{
-					this.Owner.State.Settings.CliPath = Value.trim();
-					await this.Owner.persist();
-				}));
-		}
-		new Setting(this.containerEl).setName("模型与思考档次").setDesc("在侧栏直接选择. 选择状态自动保存, 收起后重开或重载插件都会恢复上次选择.");
-		new Setting(this.containerEl).setName("内置工作提示词").setDesc("作为 Codex developer 消息注入会话, 保留其基础工具指令. 默认说明 Obsidian 阅读与研究工作及 Markdown/MathJax 渲染规则. 修改后在下一次发送更新当前会话.").addTextArea(TextValue =>
-		{
-			TextValue.inputEl.rows = 12;
-			TextValue.inputEl.addClass("codex-instructions-input");
-			TextValue.setValue(this.Owner.State.Settings.Instructions).onChange(async Value =>
-			{
-				this.Owner.State.Settings.Instructions = Value;
-				await this.Owner.persist();
-			});
-		});
-		new Setting(this.containerEl).setName("恢复默认工作提示词").addButton(Button => Button.setButtonText("恢复默认").onClick(async () =>
-		{
-			this.Owner.State.Settings.Instructions = DefaultInstructions;
-			await this.Owner.persist();
-			this.display();
-		}));
-		new Setting(this.containerEl).setName("自动捕获选区").setDesc("选中文字后更新上下文卡片. 点击快捷动作或发送按钮后提问.").addToggle(Toggle => Toggle
-			.setValue(this.Owner.State.Settings.AutoCapture).onChange(async Value =>
-			{
-				this.Owner.State.Settings.AutoCapture = Value;
-				await this.Owner.persist();
-			}));
-		new Setting(this.containerEl).setName("默认附带上下文").addToggle(Toggle => Toggle
-			.setValue(this.Owner.State.Settings.AttachContext).onChange(async Value =>
-			{
-				this.Owner.State.Settings.AttachContext = Value;
-				this.Owner.refresh();
-				await this.Owner.persist();
-			}));
-		new Setting(this.containerEl).setName("重新连接").addButton(Button => Button.setButtonText("重连 Codex").onClick(() => void this.Owner.reconnect()));
 	}
 }
 

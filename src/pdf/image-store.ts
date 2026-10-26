@@ -1,8 +1,8 @@
-import { jpeg_info, pdf_hash, PdfCacheLimit, type PdfImageRef } from "./types";
+import { jpeg_info, pdf_hash, PdfCacheLimit, validate_image_origin, validate_origin_image, type PdfImageRef, type PdfImageOrigin } from "./types";
 
 export interface PdfImages
 {
-	put(Data: string): Promise<PdfImageRef>;
+	put(Data: string, Origin?: PdfImageOrigin): Promise<PdfImageRef>;
 	get(Id: string): Promise<string>;
 	clear(): Promise<void>;
 }
@@ -29,10 +29,12 @@ export class BrowserPdfImages implements PdfImages
 		return this.Database;
 	}
 
-	async put(Data: string): Promise<PdfImageRef>
+	async put(Data: string, Origin?: PdfImageOrigin): Promise<PdfImageRef>
 	{
+		if(Origin) { validate_image_origin(Origin); }
 		const Generation = this.Generation;
 		const Info = jpeg_info(Data);
+		if(Origin) { validate_origin_image(Origin, Info); }
 		const Id = await pdf_hash(Data);
 		const Database = await this.database();
 		if(Generation !== this.Generation) { throw new Error("PDF 捕获已被缓存清除取消"); }
@@ -49,13 +51,14 @@ export class BrowserPdfImages implements PdfImages
 				{
 					Failure = "PDF 页图缓存已满, 请在插件设置中清除页图缓存"; Transaction.abort(); return;
 				}
-				Store.put({ Key: this.Scope + ":" + Id, Scope: this.Scope, Id, Data });
+				const Previous = Entries.find(Value => Value.Id === Id), Origins = [...new Map([...(Previous?.Origins ?? []), ...(Origin ? [Origin] : [])].map(Value => [JSON.stringify(Value), Value])).values()];
+				Store.put({ Key: this.Scope + ":" + Id, Scope: this.Scope, Id, Data, ...(Origins.length ? { Origins } : {}) });
 			};
 			Transaction.oncomplete = () => Resolve();
 			Transaction.onabort = Transaction.onerror = () => Reject(new Error(Failure));
 		});
 		if(Generation !== this.Generation) { throw new Error("PDF 捕获已被缓存清除取消"); }
-		return { Id, ...Info };
+		return { Id, ...Info, ...(Origin ? structuredClone(Origin) : {}) };
 	}
 
 	async get(Id: string): Promise<string>

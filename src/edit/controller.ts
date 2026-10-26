@@ -30,10 +30,12 @@ export class ChatEdits
 		});
 		this.Cache = new EditCache(Store, Key => Host.cache_context?.(Key) ?? null, () => this.Writer.is_busy() || this.Processing.size > 0, () => Host.changed());
 	}
-	async request(Request: string, Source: ContextSnapshot, Scope: EditScope, Role: EditRole): Promise<boolean>
+	async request(Request: string, Source: ContextSnapshot, Scope: EditScope, Role: EditRole, Signal?: AbortSignal): Promise<boolean>
 	{
+		const Check = () => { if(Signal?.aborted) { throw new Error("准备已取消, 未提交修改请求"); } }; Check();
 		const Generation = this.Store.Generation;
 		const Bound = await bind_edit(this.Host, Source, Scope, Role);
+		Check();
 		if(Generation !== this.Store.Generation) { throw new Error("修改记录已清除, 拒绝迟到任务"); }
 		const Task = make_task("edit", Source, Request, Bound.Role); Task.Scope = "note-edit";
 		Task.Target = Bound.Target; Task.WriteUnit = { ...Bound.Source, SelectedText: "" };
@@ -41,6 +43,7 @@ export class ChatEdits
 		if(Role === "auto") { Task.EditRoleMode = "auto"; }
 		if(this.Host.protected_source({ ...Task, Target: { ...Task.Target, Range: Bound.Focus } })) { throw new Error("此范围包含标为只读的源书或教师原题, 不生成写回提案"); }
 		await this.register(Task);
+		Check();
 		if(Generation !== this.Store.Generation) { throw new Error("修改记录已清除, 拒绝迟到任务"); }
 		this.Error = ""; this.ErrorTaskId = null;
 		try

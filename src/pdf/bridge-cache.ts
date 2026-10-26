@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, unlinkSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { jpeg_info, reference_id, PdfCacheLimit } from "./types";
+import { jpeg_info, reference_id, PdfCacheLimit, validate_image_origin, validate_origin_image, type PdfImageOrigin } from "./types";
 
 export class BridgePdfImages
 {
@@ -40,7 +40,7 @@ export class BridgePdfImages
 	resolve(Url: unknown): string { return this.get(reference_id(Url)); }
 	request(Params: any): any
 	{
-		const Allowed: Record<string, string[]> = { has: ["action", "ids"], put: ["action", "id", "data", "epoch"], clear: ["action"] };
+		const Allowed: Record<string, string[]> = { has: ["action", "ids"], put: ["action", "id", "data", "epoch", "origin"], clear: ["action"] };
 		if(!Params || !Allowed[Params.action] || Object.keys(Params).some(Key => !Allowed[Params.action].includes(Key))) { throw new Error("未知 PDF 缓存操作或字段"); }
 		this.directory();
 		if(Params.action === "has")
@@ -50,22 +50,35 @@ export class BridgePdfImages
 		}
 		if(Params.action === "put")
 		{
+			const Origin = Params.origin as PdfImageOrigin | undefined; if(Origin !== undefined) { validate_image_origin(Origin); }
 			if(Params.epoch !== this.Epoch) { throw new Error("PDF 缓存已被清除, 拒绝迟到上传"); }
 			const File = this.file(Params.id); const Info = jpeg_info(Params.data);
+			if(Origin) { validate_origin_image(Origin, Info); }
 			if(createHash("sha256").update(Params.data).digest("hex") !== Params.id) { throw new Error("上传页图的哈希不匹配"); }
-			if(existsSync(File)) { this.get(Params.id); return { Id: Params.id, ...Info }; }
+			const SaveOrigin = () =>
+			{
+				if(!Origin) { return; }
+				const OriginFile = File + ".origin.json";
+				if(existsSync(OriginFile) && (!lstatSync(OriginFile).isFile() || lstatSync(OriginFile).isSymbolicLink() || lstatSync(OriginFile).size > 16000)) { throw new Error("PDF 图像来源缓存无效"); }
+				const Old: PdfImageOrigin[] = existsSync(OriginFile) ? JSON.parse(readFileSync(OriginFile, "utf8")) : [];
+				if(!Array.isArray(Old)) { throw new Error("PDF 图像来源缓存损坏"); } Old.forEach(validate_image_origin);
+				const Values = [...new Map([...Old, Origin].map(Value => [JSON.stringify(Value), Value])).values()];
+				if(Values.length > 32) { throw new Error("PDF 同图来源记录超过上限, 原记录保留"); }
+				writeFileSync(OriginFile + ".tmp", JSON.stringify(Values), { mode: 0o600 }); renameSync(OriginFile + ".tmp", OriginFile);
+			};
+			if(existsSync(File)) { this.get(Params.id); SaveOrigin(); return { Id: Params.id, ...Info, ...(Origin ?? {}) }; }
 			const Files = readdirSync(this.Root).filter(Name => /^[0-9a-f]{64}\.jpeg-data$/.test(Name));
 			const Size = Files.reduce((Sum, Name) => Sum + lstatSync(join(this.Root, Name)).size, 0);
 			if(Size + Params.data.length > PdfCacheLimit) { throw new Error("本设备远程 PDF 缓存已满, 请清除页图缓存"); }
 			writeFileSync(File + ".tmp", Params.data, { mode: 0o600, flag: "wx" }); renameSync(File + ".tmp", File);
-			return { Id: Params.id, ...Info };
+			SaveOrigin(); return { Id: Params.id, ...Info, ...(Origin ?? {}) };
 		}
 		if(Params.action === "clear")
 		{
 			this.Epoch = randomUUID(); writeFileSync(join(this.Root, "epoch"), this.Epoch, { mode: 0o600 });
 			for(const Name of readdirSync(this.Root))
 			{
-				if(/^[0-9a-f]{64}\.jpeg-data(?:\.tmp)?$/.test(Name) && lstatSync(join(this.Root, Name)).isFile() && !lstatSync(join(this.Root, Name)).isSymbolicLink()) { unlinkSync(join(this.Root, Name)); }
+				if(/^[0-9a-f]{64}\.jpeg-data(?:\.origin\.json)?(?:\.tmp)?$/.test(Name) && lstatSync(join(this.Root, Name)).isFile() && !lstatSync(join(this.Root, Name)).isSymbolicLink()) { unlinkSync(join(this.Root, Name)); }
 			}
 			return {};
 		}

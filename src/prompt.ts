@@ -88,6 +88,7 @@ export interface ContextSnapshot
 	FocusLine?: number;
 	Pdf?: import("./pdf/types").PdfSnapshot;
 	Selection?: { From: number; To: number };
+	Explanation?: import("./markdown-blocks").ContextWindow;
 }
 
 export interface AnswerQuote
@@ -100,6 +101,14 @@ export interface AnswerQuote
 	SourceTruncated: boolean;
 	FollowupMode?: "integrated-v1";
 	SourceStatus?: "completed" | "incomplete" | "unknown";
+	SourceVersion?: string;
+	SourcePath?: string;
+	SourceRange?: { From: number; To: number; Total: number };
+	SourceBlocks?: { Id: string; Kind: string; From: number; To: number; Text: string }[];
+	Mapping?: "source-blocks" | "candidate-blocks" | "full-answer" | "unknown";
+	RootMessageId?: string;
+	ParentMessageId?: string;
+	SourceReferences?: import("./sources").SourceReference[];
 }
 
 export function bound_text(Text: string, Limit = 24000): { Text: string; Truncated: boolean }
@@ -120,17 +129,19 @@ export function build_prompt(Question: string, Context: ContextSnapshot | null, 
 			`笔记: ${Context.Path}`,
 			`模式: ${Context.Mode}; 范围: ${Context.Kind}; 映射: ${Context.Mapping}; ${Location}`,
 			`标题: ${Context.Heading || "未定位"}; 捕获时间: ${Context.CapturedAt}`,
+			`捕获版本: ${Context.Version ?? "未知"}. 这是客户端当时快照, 远程工具可能读取 Windows 的不同同步副本.`,
 			Context.Truncated ? "材料因长度限制已截断." : "",
 			Context.SelectedText ? `用户选中的渲染文本或精确源文本:\n${Context.SelectedText}` : "",
-			Context.Pdf ? "PDF 是只读参考来源. 文字层不是原始 LaTeX, 顺序与数学符号可能丢失; 附带的是本次页面的渲染图, 不是精确选区裁图. 无文字层时依据页图识读, 不清楚的符号明确说明, 不编造全文或补充为原文. 引用实际 PDF 页码, 不把它冒充书内页码. 页图引用: " + Context.Pdf.Pages.map(Page => `${Page.Number}:${Page.Image.Id}`).join(", ") : "",
+			Context.Pdf ? "PDF 是只读参考来源. 文字层不是原始 LaTeX, 顺序与数学符号可能丢失; 整页图与局部图按下列元数据区分, 局部矩形不等于用户精确文本选区. 无文字层时依据页图识读, 不清楚的符号明确说明, 不编造全文或补充为原文. 引用实际 PDF 页码, 不把它冒充书内页码. 原图引用及裁切缩放元数据: " + JSON.stringify(Context.Pdf.Pages.map(Page => ({ page: Page.Number, image: Page.Image.Id, kind: Page.Kind ?? "page", ...(Page.Region ? { region: Page.Region } : {}) }))) : "",
 			"<obsidian_source>",
 			Context.Text,
-			"</obsidian_source>"
+			"</obsidian_source>",
+			...(Context.Explanation ? ["解释背景 (仅帮助理解, 不扩大选区或允许写回的范围):", `原文字符 ${Context.Explanation.From + 1}-${Context.Explanation.To}; 源行 ${Context.Explanation.LineStart + 1}-${Context.Explanation.LineEnd + 1}; 结构${Context.Explanation.Closed ? "闭合" : "未完整闭合"}.`, Context.Explanation.Truncated ? "解释背景超预算或结构不完整; 缺失原文范围: " + JSON.stringify(Context.Explanation.Missing) + ". 按原路径与版本分页补读, 不补造闭合符号或缺失证明." : "", "<obsidian_explanation>", Context.Explanation.Text, "</obsidian_explanation>"] : [])
 		].filter(Value => Value !== "").join("\n");
 	}
 	if(Quote)
 	{
-		Prompt += "\n\n" + followup_instructions(Quote) + "\n" + JSON.stringify({ reference: "selected_assistant_answer", session_id: Quote.SessionId, message_id: Quote.MessageId, selected_text: Quote.SelectedText, original_answer_markdown: Quote.SourceText, selected_text_truncated: Quote.SelectedTruncated, original_answer_truncated: Quote.SourceTruncated, followup_mode: Quote.FollowupMode, original_answer_status: Quote.SourceStatus });
+		Prompt += "\n\n" + followup_instructions(Quote) + "\n" + JSON.stringify({ reference: "selected_assistant_answer", session_id: Quote.SessionId, message_id: Quote.MessageId, selected_text: Quote.SelectedText, original_answer_markdown: Quote.SourceText, selected_text_truncated: Quote.SelectedTruncated, original_answer_truncated: Quote.SourceTruncated, followup_mode: Quote.FollowupMode, original_answer_status: Quote.SourceStatus, source_version: Quote.SourceVersion, source_range: Quote.SourceRange, source_blocks: Quote.SourceBlocks, source_path: Quote.SourcePath, source_references: Quote.SourceReferences, mapping: Quote.Mapping, root_message_id: Quote.RootMessageId, parent_message_id: Quote.ParentMessageId });
 	}
 	return Prompt;
 }

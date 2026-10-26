@@ -3,6 +3,8 @@ import { bound_text, heading_at, source_excerpt, type ContextSnapshot } from "./
 import { version_of } from "./edit/document";
 import { PdfReader, is_pdf_view, pdf_location } from "./pdf/reader";
 import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
+import { context_window, markdown_blocks, type ContextWindow } from "./markdown-blocks";
+import type { PdfCaptureRequest } from "./pdf/types";
 
 export class ContextCapture
 {
@@ -32,10 +34,10 @@ export class ContextCapture
 		const Active = this.App.workspace.activeLeaf?.view;
 		const View = this.App.workspace.getActiveViewOfType(MarkdownView)
 			?? (is_pdf_view(Active) ? Active : null)
-			?? (this.LastView?.containerEl.isConnected ? this.LastView : null)
 			?? this.App.workspace.getLeavesOfType("pdf").map(Leaf => Leaf.view).find(Value => is_pdf_view(Value) && Value.file?.path === ActiveFile?.path)
 			?? this.App.workspace.getLeavesOfType("markdown").map(Leaf => Leaf.view)
 				.find(Value => Value instanceof MarkdownView && Value.file?.path === ActiveFile?.path)
+			?? (this.LastView?.containerEl.isConnected ? this.LastView : null)
 			?? this.App.workspace.getLeavesOfType("markdown").map(Leaf => Leaf.view)
 				.find(Value => Value instanceof MarkdownView);
 		if(View)
@@ -46,9 +48,9 @@ export class ContextCapture
 		}
 	}
 
-	async capture(Kind: "选区" | "当前位置", View = this.LastView): Promise<ContextSnapshot | null>
+	async capture(Kind: "选区" | "当前位置", View = this.LastView, Signal?: AbortSignal): Promise<ContextSnapshot | null>
 	{
-		if(this.Suspended || !View?.file || !View.containerEl.isConnected)
+		if(Signal?.aborted || this.Suspended || !View?.file || !View.containerEl.isConnected)
 		{
 			return null;
 		}
@@ -57,7 +59,7 @@ export class ContextCapture
 		{
 			const Location = pdf_location(View.containerEl, Kind);
 			if(!Location) { return null; }
-			return this.capture_pdf(View.file!, Location.Pages, View.containerEl.ownerDocument, Kind, Location.SelectedText, Location.Truncated);
+			return this.capture_pdf(View.file!, Location.Pages, View.containerEl.ownerDocument, Kind, Location.SelectedText, Location.Truncated, Signal);
 		}
 		if(!(View instanceof MarkdownView)) { return null; }
 		const Generation = ++this.Generation;
@@ -70,6 +72,7 @@ export class ContextCapture
 		let FocusLine: number | undefined;
 		let Mapping: ContextSnapshot["Mapping"] = "源文本";
 		let Selection: ContextSnapshot["Selection"];
+		let Explanation: ContextWindow | undefined;
 		const Mode = View.getMode() === "preview" ? "阅读" : "编辑";
 		let ContextPath = Path;
 		if(Mode === "编辑")
@@ -84,9 +87,15 @@ export class ContextCapture
 			const To = Editor.getCursor(Kind === "选区" ? "to" : "head");
 			if(Kind === "选区" && SelectedText) { Selection = { From: Editor.posToOffset(From), To: Editor.posToOffset(To) }; }
 			FocusLine = From.line;
-			Start = Math.max(0, From.line - 5);
-			End = Math.min(Editor.lineCount() - 1, To.line + 5);
+			const FromOffset = Editor.posToOffset(From), ToOffset = Editor.posToOffset(To);
+			if(Kind === "选区") { Start = From.line; End = To.line; }
+			else
+			{
+				const Block = markdown_blocks(Source).find(B => B.From <= FromOffset && B.To >= FromOffset);
+				Start = Block?.LineStart ?? From.line; End = Block?.LineEnd ?? From.line;
+			}
 			Text = source_excerpt(Source, Start, End);
+			Explanation = context_window(Source, FromOffset, ToOffset);
 		}
 		else
 		{
@@ -130,6 +139,8 @@ export class ContextCapture
 					VersionSource = ContextSource;
 					Text = source_excerpt(ContextSource, Start, End);
 					Mapping = "源块";
+					const From = ContextSource.split("\n").slice(0, Start).reduce((N, Line) => N + Line.length + 1, 0);
+					Explanation = context_window(ContextSource, From, Math.min(ContextSource.length, From + Text.length));
 				}
 			}
 			if(!Text)
@@ -149,9 +160,16 @@ export class ContextCapture
 		}
 		const Bounded = bound_text(Text);
 		const ContextFile = this.App.vault.getFileByPath(ContextPath);
-		const Headings = ContextFile ? this.App.metadataCache.getFileCache(ContextFile)?.headings ?? [] : [];
+		const SourceLines = VersionSource.split("\n"), CachedHeadings = ContextFile ? this.App.metadataCache.getFileCache(ContextFile)?.headings ?? [] : [];
+		const Headings = markdown_blocks(VersionSource).filter(Block => Block.Kind === "heading").map(Block => { const Match = Block.Text.match(/^\s*(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/)!; return { heading: Match[2], level: Match[1].length, position: { start: { line: Block.LineStart } } }; });
+		for(const Heading of CachedHeadings)
+		{
+			const Line = Heading.position.start.line;
+			if(SourceLines[Line]?.trim() === Heading.heading && /^\s*(?:=+|-+)\s*$/.test(SourceLines[Line + 1] ?? "")) { Headings.push(Heading); }
+		}
+		Headings.sort((A, B) => A.position.start.line - B.position.start.line);
 		const Version = await version_of(VersionSource);
-		if(Generation !== this.Generation) { return null; }
+		if(Signal?.aborted || Generation !== this.Generation) { return null; }
 		this.Snapshot =
 		{
 			Path: ContextPath,
@@ -167,20 +185,22 @@ export class ContextCapture
 			Truncated: Bounded.Truncated || SelectedText.length > 12000,
 			Version,
 			...(Selection ? { Selection } : {}),
+			...(Explanation ? { Explanation } : {}),
 			FocusLine: FocusLine ?? Start ?? undefined
 		};
 		return this.Snapshot;
 	}
 
-	async capture_pdf(File: TFile, Pages: number[], OwnerDocument: Document, Kind: "选区" | "当前位置" = "当前位置", SelectedText = "", Truncated = false): Promise<ContextSnapshot | null>
+	async capture_pdf(File: TFile, Pages: (number | PdfCaptureRequest)[], OwnerDocument: Document, Kind: "选区" | "当前位置" = "当前位置", SelectedText = "", Truncated = false, Signal?: AbortSignal): Promise<ContextSnapshot | null>
 	{
+		if(Signal?.aborted) { return null; }
 		if(this.Suspended) { throw new Error("PDF 缓存正在清除, 请稍后重新捕获"); }
 		const Generation = ++this.Generation;
 		this.PdfPending++;
 		try
 		{
-			const Snapshot = await this.Pdf.capture(File, Pages, OwnerDocument, Kind, SelectedText, Truncated);
-			if(Generation !== this.Generation) { return null; }
+			const Snapshot = await this.Pdf.capture(File, Pages, OwnerDocument, Kind, SelectedText, Truncated, Signal);
+			if(Signal?.aborted || Generation !== this.Generation) { return null; }
 			this.Snapshot = Snapshot; return Snapshot;
 		}
 		catch(ErrorValue)

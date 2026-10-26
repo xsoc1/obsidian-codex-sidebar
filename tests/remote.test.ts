@@ -67,3 +67,45 @@ test("state writes stay ordered per connection and closed queues cannot post old
 	Release(); await First; await Rejected; Fresh.close();
 	assert.equal(Posted.length, 1);
 });
+
+test("transient polling failure restores a snapshot cursor, keeps one poller and emits later events once", async () =>
+{
+	let Polls = 0, InFlight = 0, MaxInFlight = 0, Recoveries = 0, Posts = 0, Closed = 0;
+	let Done!: () => void; const Complete = new Promise<void>(Resolve => { Done = Resolve; }); const Messages: string[] = [];
+	const Config = { Enabled: true, Url: "https://example.test", Token: "fixture", Server: "", Cursor: 0 };
+	const C = new RemoteConnection(async (Path, Method) =>
+	{
+		if(Method !== "GET") { Posts++; }
+		if(Path === "/info") { return { server: "original-process", client: "original-client" }; }
+		if(Path.startsWith("/events"))
+		{
+			Polls++; InFlight++; MaxInFlight = Math.max(MaxInFlight, InFlight);
+			await new Promise(Resolve => setTimeout(Resolve, 10)); InFlight--;
+			if(Polls === 1) { throw Error("Original short network failure"); }
+			assert.match(Path, /after=5/); return { server: "original-process", events: [{ seq: 6, message: { method: "original-later-event" } }], cursor: 6 };
+		}
+		throw Error("Unexpected original request " + Path);
+	}, Config, M => { if(M.method === "original-later-event") { Messages.push(M.method); C.close(); Done(); } }, () => { Closed++; }, () => {});
+	C.set_recovery(async () => { Recoveries++; C.set_cursor(5); }); await C.connect(); C.start(); C.start(); C.resume();
+	const Timeout = setTimeout(() => Done(), 3000); await Complete; clearTimeout(Timeout); C.close();
+	assert.deepEqual(Messages, ["original-later-event"]); assert.equal(MaxInFlight, 1); assert.equal(Posts, 0); assert.equal(Closed, 0); assert.ok(Recoveries >= 1); assert.equal(Config.Cursor, 6);
+	const Before = Polls; C.resume(); C.start(); await new Promise(Resolve => setTimeout(Resolve, 30)); assert.equal(Polls, Before);
+});
+
+test("process restart with stable data scope restores while changed data identity stops without inference retry", async () =>
+{
+	let Checks = 0, Recoveries = 0, Failure = "", Changed = false; let Done!: () => void;
+	const End = new Promise<void>(Resolve => { Done = Resolve; });
+	const C = new RemoteConnection(async (Path, Method) =>
+	{
+		assert.equal(Method, "GET");
+		if(Path === "/info") { Checks++; return { server: Checks === 1 ? "original-process" : "restarted-process", client: "original-client", dataIdentity: Changed ? "different-data" : "original-data" }; }
+		if(Path.startsWith("/events")) { return { server: "restarted-process", events: [], cursor: 0 }; }
+		throw Error("Unexpected original request");
+	}, { Enabled: true, Url: "https://example.test", Token: "fixture", Server: "", Cursor: 9 }, () => {}, E => { Failure = E.message; Done(); }, () => {});
+	C.set_recovery(async () => { Recoveries++; C.set_cursor(0); if(Recoveries === 1) { Changed = true; } });
+	await C.connect(); const Scope = C.scope(); C.start();
+	const Wait = setInterval(() => { if(Recoveries === 1) { clearInterval(Wait); C.resume(); } }, 20);
+	const Timeout = setTimeout(() => Done(), 3500); await End; clearTimeout(Timeout); clearInterval(Wait); C.close();
+	assert.equal(Scope, "original-data:original-client"); assert.equal(Recoveries, 1); assert.match(Failure, /稳定身份/);
+});

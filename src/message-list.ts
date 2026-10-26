@@ -48,7 +48,7 @@ export class MessageList
 	private remember_anchor(): void
 	{
 		const Top = this.Root.getBoundingClientRect().top;
-		const Element = [...this.Root.children].find(Child => Child.getBoundingClientRect().bottom > Top) as HTMLElement | undefined;
+		const Element = [...this.Root.children].find(Child => (Child as HTMLElement).dataset?.historyControls !== "true" && Child.getBoundingClientRect().bottom > Top) as HTMLElement | undefined;
 		this.Anchor = Element ? { Element, Offset: Element.getBoundingClientRect().top - Top } : null;
 	}
 	private apply_scroll(): void
@@ -78,6 +78,7 @@ export class MessageList
 			for(const Entry of Value.Entries.values()) { Entry.Dispose(); }
 		}
 	}
+	has_context(Context: string): boolean { return this.Context === Context || this.Cache.has(Context); }
 	async update(Context: string, Items: readonly MessageRender[], Current: () => boolean): Promise<boolean>
 	{
 		if(this.Closed) { return false; }

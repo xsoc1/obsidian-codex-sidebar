@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { answer_quote, answer_status } from "../src/quote";
+import { answer_quote, answer_status, bind_answer_blocks, quote_blocks } from "../src/quote";
+import { markdown_blocks } from "../src/markdown-blocks";
 import { build_prompt } from "../src/prompt";
 import { branch_prefix, history_items, type ChatMessage } from "../src/history";
 
@@ -82,4 +83,18 @@ test("unfinished, interrupted and commentary quotes are labelled without treatin
 		assert.equal(Prompt.includes("原回答快照已截断或捕获时尚未完成"), CompletionStatus !== "completed");
 	}
 	assert.equal(answer_status({ ...Message, CompletionStatus: "completed", Phase: "commentary" }, null, false), "incomplete");
+});
+
+test("tail formulas and repeated paragraphs bind actual source blocks instead of replaying a fixed prefix", () =>
+{
+	const Source = Array.from({ length: 180 }, () => "重复段落. " + "原始论证材料 ".repeat(40)).join("\n\n") + "\n\n$$\n\\int_0^1 x^2\\,dx=\\frac13\n$$\n\n尾部结论.";
+	const Blocks = markdown_blocks(Source), Nodes: any[] = Blocks.map(B => ({ tagName: B.Kind === "math" ? "DIV" : "P", textContent: B.Text, dataset: {}, classList: { contains: () => false }, matches: () => false, querySelector: () => B.Kind === "math" ? {} : null }));
+	const Root: any = { children: Nodes, dataset: {}, contains: () => true, querySelectorAll: () => Nodes.filter(N => N.dataset.codexAnswerBlock) };
+	assert.equal(bind_answer_blocks(Root, Source), true);
+	const Index = Blocks.findIndex(B => B.Kind === "math"), Range: any = { commonAncestorContainer: Root, intersectsNode: (N: any) => N === Nodes[Index] };
+	const Location = quote_blocks(Root, Range, Source), Quote = answer_quote("s", "a", "∫₀¹ x² dx = ⅓", Source, "completed", Location);
+	assert.equal(Quote.Mapping, "source-blocks"); assert.ok(Quote.SourceRange!.From > 24000); assert.match(Quote.SourceText, /\\int_0\^1/); assert.match(Quote.SourceText, /尾部结论/); assert.equal(Quote.SourceTruncated, true);
+	assert.match(build_prompt("解释尾部", null, Quote), /选中的实际 Markdown 源块/);
+	const Repeated = quote_blocks(Root, { ...Range, intersectsNode: (N: any) => N === Nodes[175] } as any, Source); assert.equal(Repeated.Range!.From, Blocks[175].From);
+	assert.deepEqual(quote_blocks(Root, Range, Source + " changed"), { Mapping: "unknown" });
 });

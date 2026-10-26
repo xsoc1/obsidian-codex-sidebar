@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import { answer_quote } from "../src/quote";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import { runInNewContext } from "node:vm";
 import { webcrypto, randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
@@ -10,6 +12,30 @@ import { version_of } from "../src/edit/document";
 import { IDBFactory } from "fake-indexeddb";
 import { open_edit_store } from "../src/edit/database";
 import { session_stamp } from "../src/sessions";
+
+test("message tombstones survive stale snapshots, late stream frames and restart without deleting the same ID in another branch", async () =>
+{
+	const F = await mobile_fixture(bootstrap_http()), P = F.Instance; P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture";
+	let SessionId = "";
+	try
+	{
+		await P.ensure_connection(); SessionId = P.Session.Id; P.Session.ThreadId = "original-deleted-thread";
+		const Source = { Id: "kept-question", Role: "user", Text: "original question", Prompt: "original $x$", TurnId: "original-deleted-turn" }, Reply = { Id: "deleted-answer", Role: "assistant", Text: "old proof", TurnId: "original-deleted-turn" };
+		P.Session.Messages.push(Source, Reply); P.State.Sessions.push({ Id: "independent-branch", Title: "branch", ParentId: SessionId, ThreadId: null, Messages: [structuredClone(Reply)] });
+		const Stale = structuredClone(P.State); P.State.DeletedMessages = [{ SessionId, MessageId: Reply.Id }]; P.merge_restored(Stale);
+		assert.deepEqual([...P.Session.Messages.map((M: any) => M.Id)], [Source.Id]);
+		P.handle_message({ method: "item/agentMessage/delta", params: { threadId: "original-deleted-thread", itemId: Reply.Id, turnId: Source.TurnId, delta: "late" } });
+		P.handle_message({ method: "bridge/message-updated", params: { threadId: "original-deleted-thread", sessionId: SessionId, message: { ...Reply, Text: "late full proof", SyncVersion: { Origin: "scope", Revision: 9, Digest: "late" } } } });
+		assert.equal(P.Session.Messages.some((M: any) => M.Id === Reply.Id), false); assert.equal(P.State.Sessions.find((S: any) => S.Id === "independent-branch").Messages[0].Text, "old proof");
+		await P.persist(false);
+	}
+	finally { P.onunload(); }
+	const R = await mobile_fixture(bootstrap_http(), { Files: F.Files, Local: F.Local });
+	try { assert.equal(R.Instance.State.Sessions.find((S: any) => S.Id === SessionId).Messages.some((M: any) => M.Id === "deleted-answer"), false); assert.equal(R.Instance.State.Sessions.find((S: any) => S.Id === "independent-branch").Messages.length, 1); }
+	finally { R.Instance.onunload(); }
+});
+import { RemoteBridge, token_hash } from "../src/bridge";
+import { content_digest } from "../src/sync/types";
 
 const Databases = new WeakMap<Map<string, string>, IDBFactory>();
 
@@ -110,7 +136,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	const Define = () => ({});
 	let BrowserRequests = 0;
 	runInNewContext(readFileSync(process.env.CODEX_SIDEBAR_TEST_BUNDLE ?? "main.js", "utf8"), {
-		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, indexedDB: Databases.get(Local), DOMException, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, atob, setTimeout, clearTimeout, setInterval, clearInterval,
+		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, indexedDB: Databases.get(Local), DOMException, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, atob, btoa, setTimeout, clearTimeout, setInterval, clearInterval,
 		fetch: async (Url: string, Params: any) =>
 		{
 			BrowserRequests++;
@@ -142,6 +168,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 
 function bootstrap_http(Before?: (Params: any) => Promise<void>)
 {
+	let Threads = 0, Turns = 0;
 	return async (Params: any) =>
 	{
 		await Before?.(Params);
@@ -174,20 +201,31 @@ function bootstrap_http(Before?: (Params: any) => Promise<void>)
 		}
 		else if(Body?.method === "thread/start")
 		{
-			Value = { model: "test-model", reasoningEffort: "low", thread: { id: "fixture-thread", ephemeral: true, path: null, turns: [] } };
+			Threads++; Value = { model: "test-model", reasoningEffort: "low", thread: { id: "fixture-thread" + (Threads > 1 ? "-" + Threads : ""), ephemeral: true, path: null, turns: [] } };
 		}
 		else if(Body?.method === "turn/start")
 		{
-			Value = { turn: { id: "fixture-turn" } };
+			Turns++; Value = { turn: { id: "fixture-turn" + (Turns > 1 ? "-" + Turns : "") } };
 		}
 		return { status: 200, json: Value };
 	};
 }
 
+function deferred<T = void>()
+{
+	let Resolve!: (Value: T | PromiseLike<T>) => void;
+	const PromiseValue = new Promise<T>(R => { Resolve = R; }); return { Promise: PromiseValue, resolve: Resolve };
+}
+async function wait_until(Check: () => boolean, Description: string): Promise<void>
+{
+	for(let I = 0; I < 300 && !Check(); I++) { await new Promise(R => setTimeout(R, 5)); }
+	assert.ok(Check(), Description);
+}
+
 function source_view(Fixture: Awaited<ReturnType<typeof mobile_fixture>>, Path: string, Text: string)
 {
 	const View = new Fixture.MarkdownView() as any;
-	Object.assign(View, { file: { path: Path }, containerEl: { isConnected: true }, getViewType: () => "markdown", getMode: () => "source", getViewData: () => Text, editor: { getSelection: () => "", getCursor: () => ({ line: 0, ch: 0 }), lineCount: () => Text.split("\n").length } });
+	Object.assign(View, { file: { path: Path }, containerEl: { isConnected: true }, getViewType: () => "markdown", getMode: () => "source", getViewData: () => Text, editor: { getSelection: () => "", getCursor: () => ({ line: 0, ch: 0 }), posToOffset: (Pos: { line: number; ch: number }) => Text.split("\n").slice(0, Pos.line).reduce((N, L) => N + L.length + 1, 0) + Pos.ch, lineCount: () => Text.split("\n").length } });
 	const Workspace = Fixture.Instance.app.workspace;
 	Workspace.activeLeaf = { view: View }; Workspace.getActiveViewOfType = () => Workspace.activeLeaf?.view.getViewType() === "markdown" ? Workspace.activeLeaf.view : null;
 	Workspace.getActiveFile = () => Workspace.activeLeaf?.view.file ?? null;
@@ -332,7 +370,7 @@ test("ordinary mobile chat edits use the two-input skilled turn and the local co
 		await Instance.Edits.undo(Plan.Id); assert.equal(Current, Before);
 		const User = Instance.Session.Messages.find((Value: any) => Value.Role === "user");
 		Instance.Capture.Snapshot = { ...Source, Path: "unrelated.md", Text: "new-focus" };
-		await Instance.resend_message(User.Id);
+		assert.equal(await Instance.resend_message(User.Id), true);
 		const Replay = Instance.Session.Messages.findLast((Value: any) => Value.Role === "user");
 		assert.equal(Replay.Task.Source.Path, "scratch.md"); assert.equal(Replay.Task.Source.CapturedAt, "original-time"); assert.notEqual(Replay.Task.Id, User.Task.Id);
 		const Persisted = await open_edit_store({ getItem: Key => Local.get(Key) ?? null, setItem: () => {} }, "test", Databases.get(Local));
@@ -454,7 +492,7 @@ test("explicitly requesting a short proof preview produces a real preview before
 		assert.equal(Writes, 1); assert.equal(Current, Before.replace(Original, Markdown));
 		await Instance.Edits.undo(Plan.Id); assert.equal(Current, Before);
 		Instance.Capture.Snapshot = { ...Source, Path: "unrelated.md", Text: "different focus" };
-		await Instance.resend_message(User.Id);
+		assert.equal(await Instance.resend_message(User.Id), true);
 		const Replay = Instance.Session.Messages.findLast((Value: any) => Value.Role === "user");
 		assert.equal(Replay.Task.Action, "edit"); assert.notEqual(Replay.Task.Id, User.Task.Id);
 		assert.equal(Replay.Task.Source.Path, "scratch.md"); assert.equal(Replay.Task.Source.CapturedAt, "original-time");
@@ -522,7 +560,12 @@ test("built mobile entry loads and initializes without Node, Electron or desktop
 	assert.equal(Instance.Remote.Enabled, true);
 	assert.equal(Instance.State.Sessions.length, 1);
 	assert.ok(Required.every(Name => ["obsidian", "@codemirror/state", "@codemirror/view"].includes(Name)));
-	await Instance.persist(); assert.equal(Files.size, 1);
+	await Instance.persist();
+	const Canonical = Instance.RemoteStatePath;
+	assert.deepEqual([...Files.keys()].sort(), [Canonical, Canonical + ".save.stage.json", Canonical + ".save.journal.json", Canonical + ".last-committed.json"].sort());
+	const Data = JSON.parse(Files.get(Canonical)!); assert.equal(Data.SchemaVersion, 2); assert.equal(JSON.stringify(Data.Sessions), JSON.stringify(Instance.State.Sessions));
+	assert.equal(JSON.parse(Files.get(Canonical + ".save.journal.json")!).Status, "committed");
+	assert.equal(Files.get(Canonical), Files.get(Canonical + ".last-committed.json")); Instance.onunload();
 });
 
 test("removed workbench stays inactive while old local records and task snapshots survive restart", async () =>
@@ -605,14 +648,17 @@ test("loading legacy state normalizes an absent or unsupported edit range withou
 		const F = await mobile_fixture();
 		F.Instance.Session.Messages.push({ Id: "saved", Role: "assistant", Text: "原文 $x=1$." });
 		await F.Instance.persist(); F.Instance.onunload();
-		const Path = [...F.Files.keys()].find(Value => Value.endsWith("-state.json"))!;
-		const Data = JSON.parse(F.Files.get(Path)!); Data.Settings.EditScope = Scope;
-		const History = JSON.stringify(Data.Sessions); F.Files.set(Path, JSON.stringify(Data));
-		const Restart = await mobile_fixture(undefined, { Files: F.Files, Local: F.Local });
+		const Path = `${F.Instance.manifest.dir}/remote-${F.Instance.Remote.CacheId}-state.json`, Data = JSON.parse(F.Files.get(F.Instance.RemoteStatePath)!); delete Data.SchemaVersion; Data.Settings.EditScope = Scope;
+		const History = JSON.stringify(Data.Sessions), LegacyRaw = JSON.stringify(Data), LegacyFiles = new Map([[Path, LegacyRaw]]);
+		const Restart = await mobile_fixture(undefined, { Files: LegacyFiles, Local: F.Local });
 		try
 		{
 			assert.equal(Restart.Instance.State.Settings.EditScope, "ai");
 			assert.equal(JSON.stringify(Restart.Instance.State.Sessions), History);
+			assert.equal(LegacyFiles.get(Path), LegacyRaw, "migration keeps the original legacy file unchanged");
+			assert.ok([...LegacyFiles].some(([Key, Value]) => Key.startsWith(Path + ".pre-v2-") && Value === LegacyRaw));
+			assert.equal(JSON.parse(LegacyFiles.get(Restart.Instance.RemoteStatePath + ".migration.json")!).Status, "committed");
+			await Restart.Instance.persist(false); assert.equal(JSON.parse(LegacyFiles.get(Restart.Instance.RemoteStatePath)!).Settings.EditScope, "ai");
 		}
 		finally { Restart.Instance.onunload(); }
 	}
@@ -648,10 +694,10 @@ test("mobile PDF turns upload only owned page images, preserve source on resend 
 		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
 		const Old = Instance.Session.Messages.find((Value: any) => Value.Role === "user");
 		Instance.Capture.Snapshot = { ...Source, Path: "different.pdf", CapturedAt: "later-time" };
-		await Instance.resend_message(Old.Id);
+		assert.equal(await Instance.resend_message(Old.Id), true);
 		assert.equal(Instance.Session.Messages.at(-1).Context.Path, "original.pdf");
 		assert.equal(Instance.Session.Messages.at(-1).Context.CapturedAt, "original-time");
-		Instance.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed" } } });
+		Instance.handle_message({ method: "turn/completed", params: { threadId: Instance.Session.ThreadId, turn: { id: Instance.TurnId, status: "completed" } } });
 		await Instance.reconnect();
 		const Replay = Requests.filter(Value => Value.method === "thread/inject_items").find(Value => Value.params.items.some((Item: any) => Item.content.some((Part: any) => Part.type === "input_image")));
 		assert.ok(Replay); assert.ok(JSON.stringify(Replay).includes("original-time"));
@@ -687,7 +733,9 @@ test("PDF sends fail before turn submission when bridge capability, original pag
 			assert.equal(await Instance.send_message("解释", Source), false);
 			assert.equal(Requests.some(Value => Value.method === "turn/start"), false);
 			assert.match(Instance.Status, Case === "bridge" ? /更新桥/ : Case === "cache" ? /原图缺失/ : /不支持图像/);
-			assert.equal(Instance.Session.Messages.some((Value: any) => Value.Role === "user"), false);
+			const User = Instance.Session.Messages.find((Value: any) => Value.Role === "user"); assert.ok(User, "a preparation failure preserves the original question before network work");
+			assert.equal(User.Context.Path, "original.pdf"); assert.equal(User.Context.CapturedAt, "original-time");
+			const Op = Instance.operation_state(User.OperationId); assert.equal(Op.Status, "local"); assert.notEqual(Op.Attempted, true);
 		}
 		finally { Instance.onunload(); }
 	}
@@ -703,7 +751,7 @@ test("mobile bootstrap displays received models while the following state save i
 	const Write = Instance.app.vault.adapter.write;
 	Instance.app.vault.adapter.write = async (Path: string, Text: string) =>
 	{
-		if(JSON.parse(Text).Settings.Model === "test-model")
+		if(Path === Instance.RemoteStatePath && JSON.parse(Text).Settings?.Model === "test-model")
 		{
 			Reached(); await Pending;
 		}
@@ -742,18 +790,19 @@ test("changing remote connection does not wait for an unresponsive old state syn
 	Instance.Remote.Url = "https://old.test"; Instance.Remote.Token = "fixture";
 	await Instance.ensure_connection();
 	Instance.ensure_thread = async () => {};
-	const OldPath = [...Files.keys()][0];
+	const OldPath = Instance.RemoteStatePath, OldData = Files.get(OldPath);
 	Block = true;
 	const Syncing = Instance.persist(); await Saving;
 	let Reconfigured = false;
 	const Configuring = Instance.configure_remote("https://new.test", "fixture").then(() => { Reconfigured = true; });
 	try
 	{
-		await new Promise<void>(Resolve => setImmediate(Resolve));
+		await Promise.race([Configuring, new Promise<never>((_, Reject) => setTimeout(() => Reject(Error("new connection waited for old blocked network sync")), 250))]);
 		assert.equal(Reconfigured, true);
 		assert.equal(Instance.Remote.Url, "https://new.test");
 		assert.ok(Files.has(OldPath));
-		assert.equal(Files.size, 2);
+		assert.notEqual(Instance.RemoteStatePath, OldPath); assert.ok(Files.has(Instance.RemoteStatePath));
+		assert.equal(Files.get(OldPath), OldData, "late old synchronization does not overwrite either scope");
 	}
 	finally
 	{
@@ -826,7 +875,7 @@ test("failed storage, a stale dialog, busy work and unsent drafts cannot delete 
 	P.Session.Messages.push({ Id: "original-user", Role: "user", Text: "Original deletion fixture" });
 	const Stamp = session_stamp(P.Session); P.Session.Messages[0].Text += " changed";
 	await assert.rejects(P.delete_session(Id, Stamp), /已变化/);
-	P.Busy = true; await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /正在回复/); P.Busy = false;
+	P.Busy = true; await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /正在(?:回复|准备、回复或核对提交)/); P.Busy = false;
 	P.NoteSessions.Switching = true; await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /切换笔记/); P.NoteSessions.Switching = false;
 	P.Connecting = Promise.resolve(); await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /正在连接/); P.Connecting = null;
 	const View = F.Views.get("codex-sidebar-view")!({}); View.Input = { value: "Original unsent draft" }; P.app.workspace.getLeavesOfType = () => [{ view: View }];
@@ -918,4 +967,222 @@ test("actual plugin cache context counts completed dialogue once and excludes in
 	P.Session.ThreadId = "fixture-thread";
 	P.handle_message({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "t2", status: "failed" } } });
 	assert.deepEqual([...P.edit_cache_context().Turns], ["t1"]); P.onunload();
+});
+
+test("a locally saved new question survives upload failure, read-only recovery and a fresh plugin instance without automatic inference", async () =>
+{
+	let FailUpload = true; const Requests: any[] = [], Ordinary = bootstrap_http();
+	const Http = async (Params: any) =>
+	{
+		if(Params.body) { Requests.push(JSON.parse(Params.body)); }
+		if(FailUpload && new URL(Params.url).pathname === "/state" && Params.method === "POST") { throw Error("fixture upload offline"); }
+		return Ordinary(Params);
+	};
+	const F = await mobile_fixture(Http), P = F.Instance;
+	P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture";
+	const Context = { Path: "Original.md", Mode: "阅读", Kind: "选区", Text: "固定 $X$, 定义 $[X,Y]=XY-YX$.", SelectedText: "$[X,Y]$", Mapping: "源块", Heading: "交换子", LineStart: 0, LineEnd: 0, Truncated: false, CapturedAt: "original-capture" };
+	let Message: any;
+	try
+	{
+		assert.equal(await P.send_chat("解释线性这一步", Context, null), false);
+		Message = structuredClone(P.Session.Messages.find((M: any) => M.Role === "user")); assert.ok(Message.OperationId);
+		assert.equal(Message.Context.Text, Context.Text); assert.equal(P.operation_state(Message.OperationId).Status, "local");
+		assert.equal(Requests.filter(R => R.method === "turn/start").length, 0);
+		const Saved = JSON.parse(F.Files.get(P.RemoteStatePath)!); assert.equal(Saved.Sessions.find((S: any) => S.Id === P.Session.Id).Messages[0].Prompt, Message.Prompt);
+		FailUpload = false; await P.reconnect();
+		assert.equal(P.Session.Messages.find((M: any) => M.Id === Message.Id).Prompt, Message.Prompt); assert.equal(P.operation_state(Message.OperationId).Status, "local");
+		assert.equal(Requests.filter(R => R.method === "turn/start").length, 0); await P.persist(false);
+	}
+	finally { P.onunload(); }
+	const R = await mobile_fixture(Http, { Files: F.Files, Local: F.Local });
+	try
+	{
+		const Restored = R.Instance.Session.Messages.find((M: any) => M.Id === Message.Id);
+		assert.equal(Restored.OperationId, Message.OperationId); assert.equal(Restored.Prompt, Message.Prompt); assert.equal(JSON.stringify(Restored.Context), JSON.stringify(Context));
+		assert.equal(R.Instance.operation_state(Message.OperationId).Status, "local"); await R.Instance.ensure_connection();
+		assert.equal(Requests.filter(Q => Q.method === "turn/start").length, 0); assert.equal(R.Instance.Session.Messages.filter((M: any) => M.Id === Message.Id).length, 1);
+	}
+	finally { R.Instance.onunload(); }
+});
+
+test("cancelling connection preparation preserves the actual composer draft, quote and saved intent while late metadata cannot submit", async () =>
+{
+	const Gate = deferred(), Reached = deferred(), Requests: any[] = [], Ordinary = bootstrap_http();
+	const F = await mobile_fixture(async Params =>
+	{
+		if(Params.body) { Requests.push(JSON.parse(Params.body)); }
+		if(new URL(Params.url).pathname === "/info") { Reached.resolve(); await Gate.Promise; }
+		return Ordinary(Params);
+	}), P = F.Instance, View = F.Views.get("codex-sidebar-view")!({});
+	P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture";
+	const Quote = { SessionId: P.Session.Id, MessageId: "original-answer", SelectedText: "核对分配律", SourceText: "固定 X, 展开交换子并核对加法及数乘.", SelectedTruncated: false, SourceTruncated: false };
+	P.AnswerQuote = Quote; View.Input = { value: "展开这一步" }; View.refresh_quote = () => {};
+	const Sending = View.send_input("question");
+	try
+	{
+		await Reached.Promise; assert.equal(P.CanStop, true); await P.stop_turn(); await Sending;
+		assert.equal(View.Input.value, "展开这一步"); assert.equal(P.AnswerQuote, Quote);
+		const User = P.Session.Messages.find((M: any) => M.Role === "user"); assert.ok(User); assert.equal(P.operation_state(User.OperationId).Status, "cancelled");
+		Gate.resolve(); await wait_until(() => !P.Connecting, "late metadata completes only its read-only connection work");
+		assert.equal(Requests.filter(R => R.method === "turn/start").length, 0); assert.equal(View.Input.value, "展开这一步"); assert.equal(P.AnswerQuote, Quote);
+		const Draft = JSON.parse(F.Local.get(View.DraftStore.Key)!); assert.equal(Draft.Text, "展开这一步"); assert.equal(Draft.Quote.SourceText, Quote.SourceText);
+	}
+	finally { Gate.resolve(); await Sending; P.onunload(); }
+});
+
+test("a lost turn receipt remains unknown across reconnect and restart and cannot be explicitly resumed as an unattempted send", async () =>
+{
+	let Submissions = 0, SavedAtPost: any, Fixture: Awaited<ReturnType<typeof mobile_fixture>>; const Ordinary = bootstrap_http();
+	const Http = async (Params: any) =>
+	{
+		const Request = Params.body ? JSON.parse(Params.body) : null;
+		if(Request?.method === "turn/start") { Submissions++; SavedAtPost = JSON.parse(Fixture.Files.get(Fixture.Instance.RemoteStatePath)!).Sync.Operations.find((O: any) => O.Id === Request.id); throw Error("fixture response lost after submission"); }
+		return Ordinary(Params);
+	};
+	const F = await mobile_fixture(Http), P = F.Instance; P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture";
+	Fixture = F;
+	let Id = "", Prompt = "";
+	try
+	{
+		assert.equal(await P.send_chat("核对 $[X,X]=0$", null, null), true, "unknown submission is accepted locally, never reported as not sent");
+		const Message = P.Session.Messages.find((M: any) => M.Role === "user"); Id = Message.OperationId; Prompt = Message.Prompt;
+		assert.equal(P.operation_state(Id).Status, "submission-unknown"); assert.equal(P.operation_state(Id).Attempted, true); assert.equal(Submissions, 1);
+		assert.equal(SavedAtPost.Attempted, true, "attempt marker must be durable before the transport receives turn/start"); assert.equal(SavedAtPost.Status, "submission-unknown"); assert.equal(SavedAtPost.Request.input[0].text, Prompt);
+		P.handle_message({ method: "bridge/recovering", params: { message: "核对已提交操作" } }); assert.equal(P.RuntimeState.Stage, "recovering");
+		await assert.rejects(P.stop_turn(), /旧桥不支持操作状态查询/); assert.equal(P.operation_state(Id).Status, "submission-unknown"); assert.equal(P.operation_state(Id).Attempted, true); assert.equal(Submissions, 1);
+		assert.ok(!F.Notices.some(N => /准备已取消/.test(N))); P.handle_message({ method: "bridge/recovered", params: {} }); assert.equal(P.RuntimeState.Stage, "submission-unknown");
+		await P.reconnect(); assert.equal(Submissions, 1); await assert.rejects(P.resume_operation(Id), /未知|盲目/); await P.persist(false);
+	}
+	finally { P.onunload(); }
+	const R = await mobile_fixture(Http, { Files: F.Files, Local: F.Local });
+	try
+	{
+		assert.equal(R.Instance.operation_state(Id).Status, "submission-unknown"); assert.equal(R.Instance.Session.Messages.find((M: any) => M.OperationId === Id).Prompt, Prompt);
+		await R.Instance.ensure_connection(); await assert.rejects(R.Instance.resume_operation(Id), /未知|盲目/); assert.equal(Submissions, 1);
+	}
+	finally { R.Instance.onunload(); }
+});
+
+test("an unloaded old scope stores its late turn receipt separately and never changes a newly opened connection scope", async () =>
+{
+	const Gate = deferred(), Reached = deferred(), Ordinary = bootstrap_http(); let Submissions = 0;
+	const Http = async (Params: any) =>
+	{
+		if(Params.body && JSON.parse(Params.body).method === "turn/start") { Submissions++; Reached.resolve(); await Gate.Promise; }
+		return Ordinary(Params);
+	};
+	const F = await mobile_fixture(Http), P = F.Instance; P.Remote.Url = "https://old.test"; P.Remote.Token = "fixture";
+	const Sending = P.send_chat("原连接问题", null, null); await Reached.Promise;
+	const OldPath = P.RemoteStatePath, OldConfig = F.Local.get("codex-sidebar-remote:test")!, User = structuredClone(P.Session.Messages.find((M: any) => M.Role === "user"));
+	P.onunload(); await Sending;
+	const OldRaw = F.Files.get(OldPath), Config = JSON.parse(OldConfig); Config.CacheId = randomUUID(); Config.Url = "https://new.test"; Config.Server = ""; Config.Cursor = 0; F.Local.set("codex-sidebar-remote:test", JSON.stringify(Config));
+	const Current = await mobile_fixture(Http, { Files: F.Files, Local: F.Local }), B = Current.Instance;
+	try
+	{
+		B.Session.Messages.push({ Id: "new-scope-question", Role: "user", Text: "新连接本机记录" }); await B.persist(false);
+		const NewRaw = F.Files.get(B.RemoteStatePath), NewState = JSON.stringify(B.State); Gate.resolve();
+		await wait_until(() => [...F.Files].some(([K, V]) => K.startsWith(OldPath + ".receipt-") && JSON.parse(V).Record?.TurnId === "fixture-turn"), "old receipt is retained under its original canonical path");
+		assert.equal(F.Files.get(B.RemoteStatePath), NewRaw); assert.equal(JSON.stringify(B.State), NewState); assert.equal(F.Files.get(OldPath), OldRaw); assert.equal(Submissions, 1);
+	}
+	finally { Gate.resolve(); B.onunload(); }
+	F.Local.set("codex-sidebar-remote:test", OldConfig);
+	const Restored = await mobile_fixture(Http, { Files: F.Files, Local: F.Local });
+	try
+	{
+		const Original = Restored.Instance.Session.Messages.find((M: any) => M.Id === User.Id); assert.equal(Original.Prompt, User.Prompt); assert.equal(Original.TurnId, "fixture-turn");
+		assert.equal(Restored.Instance.operation_state(User.OperationId).TurnId, "fixture-turn"); assert.equal(Submissions, 1);
+	}
+	finally { Restored.Instance.onunload(); }
+});
+
+test("background events and duplicate versioned checkpoints stay in their original session and old completion cannot stop a newer turn", async () =>
+{
+	const Requests: any[] = [], F = await mobile_fixture(bootstrap_http(async Params => { if(Params.body) { Requests.push(JSON.parse(Params.body)); } })), P = F.Instance;
+	P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture";
+	try
+	{
+		assert.equal(await P.send_chat("解释交换子的线性", null, null), true);
+		const A = P.Session, ThreadId = A.ThreadId, TurnId = P.TurnId, OperationId = A.Messages[0].OperationId;
+		const B = { Id: "other-session", Title: "另一个会话", ThreadId: null, Messages: [{ Id: "b-original", Role: "user", Text: "保持本会话" }] }; P.State.Sessions.push(B); P.State.ActiveId = B.Id; P.restore_runtime();
+		const BBefore = JSON.stringify(B), VisibleStatus = P.Status;
+		P.handle_message({ method: "item/agentMessage/delta", params: { threadId: ThreadId, turnId: TurnId, itemId: "a-answer", delta: "固定 X" } });
+		const Checkpoint = { Id: "a-answer", Role: "assistant", TurnId, Text: "固定 X 后, 展开 $[X,Y+Z]$ 核对线性.", CompletionStatus: "completed", SyncVersion: { Revision: 2, Digest: createHash("sha256").update("original complete checkpoint").digest("hex"), Origin: "original-bridge" } };
+		for(let I = 0; I < 2; I++) { P.handle_message({ method: "bridge/message-updated", params: { threadId: ThreadId, sessionId: A.Id, message: Checkpoint } }); }
+		P.handle_message({ method: "bridge/message-updated", params: { threadId: ThreadId, sessionId: A.Id, message: { ...Checkpoint, Text: "旧部分稿", CompletionStatus: undefined, SyncVersion: { ...Checkpoint.SyncVersion, Revision: 1 } } } });
+		assert.equal(A.Messages.filter((M: any) => M.Id === Checkpoint.Id).length, 1); assert.equal(A.Messages.find((M: any) => M.Id === Checkpoint.Id).Text, Checkpoint.Text);
+		const Completed = { method: "turn/completed", params: { threadId: ThreadId, turn: { id: TurnId, status: "completed" } } };
+		P.handle_message(Completed); P.handle_message(Completed);
+		assert.equal(JSON.stringify(B), BBefore); assert.equal(P.Status, VisibleStatus); assert.equal(P.Busy, false); assert.equal(P.operation_state(OperationId).Status, "completed");
+		assert.deepEqual([...P.edit_cache_context(JSON.stringify([P.Remote.CacheId, A.Id])).Turns], [TurnId]);
+		P.State.ActiveId = A.Id; P.restore_runtime(); assert.equal(await P.send_chat("继续说明齐次性", null, null), true, JSON.stringify({ Status: P.Status, Runtime: P.RuntimeState, Busy: P.Busy, Switching: P.NoteSessions?.Switching, Operations: P.State.Sync?.Operations.map((O: any) => ({Id:O.Id,Status:O.Status,Conflicts:O.Conflicts?.map((C: any) => C.Reason)})) }));
+		const NewTurn = P.TurnId; assert.notEqual(NewTurn, TurnId); assert.equal(P.Busy, true);
+		P.handle_message(Completed); assert.equal(P.TurnId, NewTurn, "a duplicate old completion must not clear the active newer turn"); assert.equal(P.Busy, true); assert.equal(P.RuntimeState.Stage, "generating");
+		assert.equal(Requests.filter(R => R.method === "turn/start").length, 2); await P.SaveQueue;
+	}
+	finally { P.onunload(); }
+});
+
+test("cancelling during real protocol2 input-blob chunks stops remaining chunks and never reaches inference submission", async () =>
+{
+	const Directory = mkdtempSync(join(tmpdir(), "codex-mobile-chunk-original-")), Skill = join(Directory, "SKILL.md"), Token = "original-mobile-test-".repeat(3); writeFileSync(Skill, "Original integration acceptance skill");
+	let Submits = 0; const Gate = deferred(), Reached = deferred(), Posts: any[] = [];
+	const Bridge = new RemoteBridge({ Port: 0, Cli: "mock", Cwd: Directory, Vault: "test", ObsidianCli: "mock", StateDir: join(Directory, "state"), Clients: [{ Id: "original-mobile", Hash: token_hash(Token) }] }, () => ({
+		async request(Method: string)
+		{
+			if(Method === "account/read") { return { account: { type: "chatgpt" } }; }
+			if(Method === "model/list") { return { data: [{ model: "original-model", displayName: "Original", defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], nextCursor: null }; }
+			if(Method === "skills/list") { return { data: [{ cwd: Directory, skills: [{ name: "math-writing", path: Skill, enabled: true }] }] }; }
+			if(Method === "thread/start") { return { model: "original-model", thread: { id: "original-chunk-thread", ephemeral: true, path: null, turns: [] } }; }
+			if(Method === "turn/start") { Submits++; return { turn: { id: "original-chunk-turn", status: "inProgress" } }; }
+			return {};
+		}, send() {}, close() {}
+	}));
+	const Port = await Bridge.listen(); let F: Awaited<ReturnType<typeof mobile_fixture>> | undefined, InputId = "";
+	try
+	{
+		F = await mobile_fixture(async Params =>
+		{
+			const Path = new URL(Params.url).pathname, Body = Params.body ? JSON.parse(Params.body) : null;
+			if(Body) { Posts.push({ Path, Body }); }
+			if(Path === "/sync/blob" && Body?.index === 0 && F?.Instance.State.Sync?.Operations[0])
+			{
+				InputId = await content_digest(F.Instance.State.Sync.Operations[0].Input);
+				if(Body.id === InputId) { assert.ok(Body.count > 1); Reached.resolve(); await Gate.Promise; }
+			}
+			const Response = await fetch(`http://127.0.0.1:${Port}${new URL(Params.url).pathname}${new URL(Params.url).search}`, { method: Params.method, headers: { Authorization: "Bearer " + Token }, ...(Params.body ? { body: Params.body } : {}) });
+			return { status: Response.status, json: await Response.json() };
+		});
+		const P = F.Instance; P.Remote.Url = "https://fixture.test"; P.Remote.Token = Token; P.Remote.Transport = "native";
+		P.Session.EffectiveModel = "original-model"; P.Session.Usage = { modelContextWindow: 800000 };
+		const Sending = P.send_chat("原创交换子算例. ".repeat(3200), null, null);
+		try
+		{
+			await Promise.race([Reached.Promise, Sending.then(() => { throw Error("input upload did not reach a multi-chunk operation: " + P.Status); })]);
+			assert.equal(P.RuntimeState.Stage, "preparing"); await P.stop_turn(); await Sending;
+			const User = P.Session.Messages.find((M: any) => M.Role === "user"); assert.equal(P.operation_state(User.OperationId).Status, "cancelled"); assert.equal(P.operation_state(User.OperationId).Attempted, false);
+			Gate.resolve(); await new Promise(R => setTimeout(R, 30));
+			assert.equal(Posts.filter(Q => Q.Path === "/sync/blob" && Q.Body.id === InputId).length, 1); assert.equal(Posts.filter(Q => Q.Path === "/operations").length, 0); assert.equal(Submits, 0);
+			const Saved = JSON.parse(F.Files.get(P.RemoteStatePath)!); assert.equal(Saved.Sessions.find((S: any) => S.Id === P.Session.Id).Messages.find((M: any) => M.Id === User.Id).Prompt, User.Prompt);
+		}
+		finally { Gate.resolve(); await Sending; P.onunload(); }
+	}
+	finally { Gate.resolve(); F?.Instance.Connection?.close(); await Bridge.close(); assert.ok(resolve(Directory).startsWith(resolve(tmpdir()) + sep)); rmSync(Directory, { recursive: true }); }
+});
+
+test("returning to a conversation with an unknown submission restores its pending runtime instead of permitting another turn", async () =>
+{
+	let Submissions = 0; const Ordinary = bootstrap_http(), F = await mobile_fixture(async Params =>
+	{
+		if(Params.body && JSON.parse(Params.body).method === "turn/start") { Submissions++; throw Error("original unknown receipt"); }
+		return Ordinary(Params);
+	}), P = F.Instance; P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture";
+	try
+	{
+		assert.equal(await P.send_chat("原未知问题", null, null), true); const Id = P.Session.Id, OperationId = P.Session.Messages[0].OperationId;
+		await P.choose_session(); assert.notEqual(P.Session.Id, Id); assert.equal(P.RuntimeState.Stage, "idle");
+		await P.choose_session(Id); assert.equal(P.operation_state(OperationId).Status, "submission-unknown");
+		assert.equal(P.RuntimeState.Stage, "submission-unknown", "choosing the old session must restore its operation-derived state");
+		assert.equal(await P.send_chat("不能在未知旧回合上再提交", null, null), false); assert.equal(Submissions, 1); assert.equal(P.Session.Messages.filter((M: any) => M.Role === "user").length, 1);
+	}
+	finally { P.onunload(); }
 });
