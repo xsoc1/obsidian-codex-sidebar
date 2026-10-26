@@ -62,6 +62,10 @@
 
 最终打包使用 `scripts/package-candidate.ps1`, 固定成员白名单并回读每个成员摘要; 外部 `candidate-manifest.json` 记录产品/协议、源码 commit、每个包及成员 SHA-256. 包中没有配对、聊天、修改数据库或私有技能. 升级顺序及数据/代码回退分开说明见 [migration.md](migration.md), 后端兼容表见 [sync-protocol.md](sync-protocol.md).
 
+已实际生成并独立回读两个候选包: 插件 4 个成员、桥 16 个成员, ZIP CRC、各成员字节/摘要及产品版本一致. 对解包后的编译 `bridge.cjs` 在新 TEMP 配置/loopback 端口启动, 连接真实完整 CLI 查询 `/info` 与操作页, 验证桥版本 2.0.0-beta.1、协议 2、7 项能力及实际 math-writing 版本, 推理 0 次; 仅结束该测试拥有的进程树. 这是原生 Windows 编译产物预检, 不是日常安装或 iPad 验收.
+
+旧 AGENTS 的归档比对最初直接比较整个文件而失败; 差异仅为新增的历史说明前言. 正确去除前言后, 原正文与基线逐字一致. 没有丢失或改写原维护历史. 失败检查与复核结果均保留, 不误记成产品缺陷.
+
 本轮没有日常安装、现行桥重启、公开推送/发布或 GitHub CI 运行. 没有 iPad 真机, 物理中文 IME、实际锁屏/Wi-Fi/VPN 切换、部署后的完整 Windows 窗口流程仍待用户授权和设备复验. 原生组件与 SDK 结果不能代替这些验收.
 
 ## 本地提交与交付
