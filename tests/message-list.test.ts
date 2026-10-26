@@ -76,10 +76,10 @@ test("stale sessions and late completion after close cannot replace the current 
 	const Pending = deferred(), Late = F.List.update("session", [F.item("old", "late", Pending.Wait)], () => true);
 	await F.List.update("new-session", [F.item("new")], () => true);
 	const Current = F.Root.children[0]; Pending.release(); assert.equal(await Late, false);
-	assert.equal(F.Root.children[0], Current); assert.deepEqual(F.Disposed, ["old", "late"]);
+	assert.equal(F.Root.children[0], Current); assert.deepEqual(F.Disposed, ["late"]);
 	const Last = deferred(), Closing = F.List.update("new-session", [F.item("new", "closed-late", Last.Wait)], () => true);
 	F.List.dispose(); Last.release(); assert.equal(await Closing, false);
-	assert.deepEqual(F.Disposed, ["old", "late", "new", "closed-late"]);
+	assert.deepEqual(F.Disposed, ["late", "new", "old", "closed-late"]);
 });
 
 test("failed or cancelled preparation leaves the previous cards and releases only new resources", async () =>
@@ -99,4 +99,53 @@ test("reordering retains unchanged cards, removes obsolete entries, and rejects 
 	assert.deepEqual(F.Root.children, [B, A]); assert.deepEqual(F.Disposed, ["c"]);
 	await assert.rejects(F.List.update("session", [F.item("a"), F.item("a")], () => true), /重复/);
 	assert.deepEqual(F.Rendered, ["a", "b", "c"]); F.List.dispose();
+});
+
+test("returning to a recently viewed note reuses its rendered history immediately and preserves its reading position", async () =>
+{
+	const F = fixture(); await F.List.update("note-a", [F.item("a1"), F.item("a2"), F.item("a3")], () => true);
+	F.Root.scroll(60); const Cards = [...F.Root.children];
+	await F.List.update("note-b", [F.item("b")], () => true);
+	await F.List.update("note-a", [F.item("a1"), F.item("a2"), F.item("a3")], () => true);
+	assert.deepEqual(F.Root.children, Cards, "unchanged history must be reattached, not rendered again");
+	assert.deepEqual(F.Rendered, ["a1", "a2", "a3", "b"]);
+	assert.equal(F.Root.scrollTop, 60); assert.deepEqual(F.Disposed, []);
+	F.List.dispose(); assert.deepEqual(F.Disposed.sort(), ["a1", "a2", "a3", "b"]);
+});
+
+test("returning history refreshes changed or removed messages without discarding unchanged cached cards", async () =>
+{
+	const F = fixture(); await F.List.update("a", [F.item("a1"), F.item("a2"), F.item("a3")], () => true); const First = F.Root.children[0];
+	await F.List.update("b", [F.item("b")], () => true);
+	await F.List.update("a", [F.item("a1"), F.item("a2", "updated-proposal")], () => true);
+	assert.equal(F.Root.children[0], First); assert.equal(F.Root.children.length, 2);
+	assert.deepEqual(F.Rendered, ["a1", "a2", "a3", "b", "updated-proposal"]); assert.deepEqual(F.Disposed, ["a2", "a3"]);
+	F.List.dispose(); assert.equal(F.Disposed.length, F.Rendered.length);
+});
+
+test("least recently visited histories are evicted with all components released, while recent ones remain reusable", async () =>
+{
+	const F = fixture();
+	for(const Name of ["a", "b", "c", "d"]) { await F.List.update(Name, [F.item(Name)], () => true); }
+	assert.deepEqual(F.Disposed, ["a"]);
+	await F.List.update("b", [F.item("b")], () => true); assert.equal(F.Rendered.filter(Value => Value === "b").length, 1);
+	await F.List.update("a", [F.item("a")], () => true); assert.equal(F.Rendered.filter(Value => Value === "a").length, 2);
+	F.List.dispose(); assert.equal(F.Disposed.length, F.Rendered.length);
+});
+
+test("detached history is bounded by total card count, not only the number of notes", async () =>
+{
+	const F = fixture(), Items = Array.from({ length: 301 }, (_, Index) => F.item("large-" + Index));
+	await F.List.update("large", Items, () => true); await F.List.update("small", [F.item("small")], () => true);
+	assert.equal(F.Disposed.length, 301); F.List.dispose(); assert.equal(F.Disposed.length, F.Rendered.length);
+});
+
+test("a cancelled cached refresh leaves the original cached history intact for an immediate return", async () =>
+{
+	const F = fixture(); await F.List.update("a", [F.item("a")], () => true); const Original = F.Root.children[0];
+	await F.List.update("b", [F.item("b")], () => true);
+	const Pending = deferred(), Late = F.List.update("a", [F.item("a", "obsolete", Pending.Wait)], () => true);
+	await F.List.update("c", [F.item("c")], () => true); Pending.release(); assert.equal(await Late, false);
+	await F.List.update("a", [F.item("a")], () => true); assert.equal(F.Root.children[0], Original);
+	assert.deepEqual(F.Disposed, ["obsolete"]); F.List.dispose(); assert.equal(F.Disposed.length, F.Rendered.length);
 });

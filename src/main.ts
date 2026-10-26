@@ -2019,6 +2019,8 @@ class CodexView extends ItemView
 	{
 		if(this.Rendering || !this.Opened) { return; }
 		const Session = this.Owner.Session, Messages = Session.Messages.map(Message => ({ ...Message }));
+		const SourcePath = this.Owner.Capture.LastView?.file?.path ?? "";
+		const Context = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Session.Id]);
 		if(this.EditingSession !== Session.Id) { this.EditingId = ""; }
 		const Signature = this.message_signature();
 		if(Signature === this.LastRendered && this.MessageList) { return; }
@@ -2031,7 +2033,7 @@ class CodexView extends ItemView
 			{
 				const Task = structured_task(Messages, Message), Record = Task?.Action === "edit" ? this.Owner.Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id) : null;
 				const EditState = Task?.Action === "edit" ? [this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, Record?.Status, Record?.Error, this.Owner.Edits?.Store.Data.Writes.filter(Value => Value.TaskId === Task.Id).map(Value => [Value.Id, Value.State, Value.Error])] : null;
-				return { Id: Message.Id, Key: JSON.stringify([Message, Message.Role === "user" ? [this.Owner.Busy, this.EditingId === Message.Id] : null, EditState]), Render: () => this.render_card(Message, Messages) };
+				return { Id: Message.Id, Key: JSON.stringify([Message, SourcePath, Message.Role === "user" ? [this.Owner.Busy, this.EditingId === Message.Id] : null, EditState]), Render: () => this.render_card(Message, Messages) };
 			});
 			if(!Items.length)
 			{
@@ -2042,7 +2044,7 @@ class CodexView extends ItemView
 					return { Element, Dispose: () => {} };
 				} });
 			}
-			if(await this.MessageList.update(Session.Id, Items, () => this.Opened && Version === this.Version && this.Owner.Session.Id === Session.Id)) { this.LastRendered = Signature; }
+			if(await this.MessageList.update(Context, Items, () => this.Opened && Version === this.Version && this.Owner.Session.Id === Session.Id && SourcePath === (this.Owner.Capture.LastView?.file?.path ?? "") && Context === JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Session.Id]))) { this.LastRendered = Signature; }
 			else if(this.Opened) { this.refresh(); }
 		}
 		finally
@@ -2191,7 +2193,7 @@ class CodexView extends ItemView
 
 	private message_signature(): string
 	{
-		return JSON.stringify([this.Owner.Session.Id, this.Owner.Session.Messages, this.Owner.Busy, this.EditingId, this.Owner.Edits?.Error, this.Owner.Edits?.Store.Data.Records.map(Value => [Value.Spec.Id, Value.Status, Value.Error]), this.Owner.Edits?.Store.Data.Writes.map(Value => [Value.Id, Value.State, Value.Error])]);
+		return JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Capture.LastView?.file?.path ?? "", this.Owner.Session.Id, this.Owner.Session.Messages, this.Owner.Busy, this.EditingId, this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, this.Owner.Edits?.Store.Data.Records.map(Value => [Value.Spec.Id, Value.Status, Value.Error]), this.Owner.Edits?.Store.Data.Writes.map(Value => [Value.Id, Value.State, Value.Error])]);
 	}
 }
 

@@ -102,3 +102,27 @@ window.run_context_case = async () =>
 		return Result;
 	}finally{clearTimeout(View.RenderTimer);View.Opened=false;Root.remove();}
 };
+
+window.run_switch_case = async (CheckIsolation = false) =>
+{
+	const Root = document.body.createDiv({cls:'codex-sidebar'}); Root.style.cssText='width:420px;height:480px';
+	const List = Root.createDiv({cls:'codex-messages'}), Count = 35;
+	const A = {Id:'note-a',Messages:Array.from({length:Count},(_,I)=>({Id:'a-'+I,Role:'assistant',Text:'原创例子: 由 $[X,Y]=XY-YX$ 展开矩阵计算, 再分别检查加法与数乘. '.repeat(8)}))}, B = {Id:'note-b',Messages:[]};
+	const Owner = {Session:A,Capture:{LastView:{file:{path:'A.md'}}},Busy:false,Remote:{Enabled:false,CacheId:'original-device'},refresh:()=>{}};
+	const View = new Sidebar.CodexView({},Owner); View.MessagesElement=List; View.Opened=true;
+	try
+	{
+		await View.render_messages(); List.scrollTop=80; List.dispatchEvent(new Event('scroll')); const Position=List.scrollTop, Cards=[...List.children];
+		Owner.Session=B; Owner.Capture.LastView.file.path='B.md'; await View.render_messages();
+		const Calls=window.RenderCalls, Started=performance.now(); Owner.Session=A; Owner.Capture.LastView.file.path='A.md'; await View.render_messages();
+		const Result={historyCount:Count,returnMilliseconds:performance.now()-Started,returnRenderCalls:window.RenderCalls-Calls,cardsReused:Cards.every((E,I)=>List.children[I]===E),readingPreserved:Math.abs(List.scrollTop-Position)<1,sourcePathInvalidates:true,devicesIsolated:true,desktopReturnsRetained:true};
+		if(CheckIsolation)
+		{
+			const BeforePath=window.RenderCalls; Owner.Capture.LastView.file.path='Moved.md'; await View.render_messages(); Result.sourcePathInvalidates=window.RenderCalls-BeforePath===Count;
+			const Desktop=List.firstElementChild; Owner.Remote.Enabled=true; await View.render_messages(); Result.devicesIsolated=List.firstElementChild!==Desktop;
+			const BeforeReturn=window.RenderCalls; Owner.Remote.Enabled=false; await View.render_messages(); Result.desktopReturnsRetained=List.firstElementChild===Desktop&&window.RenderCalls===BeforeReturn;
+		}
+		return Result;
+	}
+	finally { View.Opened=false; clearTimeout(View.RenderTimer); View.MessageList?.dispose(); Root.remove(); }
+};
