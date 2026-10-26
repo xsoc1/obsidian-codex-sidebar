@@ -9,6 +9,7 @@ import { jpeg_info } from "../src/pdf/types";
 import { version_of } from "../src/edit/document";
 import { IDBFactory } from "fake-indexeddb";
 import { open_edit_store } from "../src/edit/database";
+import { session_stamp } from "../src/sessions";
 
 const Databases = new WeakMap<Map<string, string>, IDBFactory>();
 
@@ -802,4 +803,96 @@ test("a pending session state upload reports its preparation stage before any tu
 	{
 		Release(); await Sending; Instance.Connection?.close();
 	}
+});
+
+test("session deletion persists only the reviewed chat removal, keeps edit records, and survives reopening", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance, Id = P.Session.Id;
+	P.Session.Messages.push({ Id: "original-user", Role: "user", Text: "Original deletion fixture" });
+	const Edits = P.Edits.Store.export_records(), Settings = JSON.stringify(P.State.Settings), Stamp = session_stamp(P.Session);
+	await P.delete_session(Id, Stamp);
+	assert.ok(!P.State.Sessions.some((S: any) => S.Id === Id)); assert.ok(P.State.Sessions.length); assert.deepEqual([...P.State.DeletedSessionIds], [Id]);
+	assert.equal(P.Edits.Store.export_records(), Edits); assert.equal(JSON.stringify(P.State.Settings), Settings);
+	const Saved = JSON.parse(F.Files.get(P.RemoteStatePath)!); assert.ok(!Saved.Sessions.some((S: any) => S.Id === Id)); assert.deepEqual(Saved.DeletedSessionIds, [Id]);
+	P.onunload();
+	const Restored = await mobile_fixture(undefined, { Files: F.Files, Local: F.Local });
+	try { assert.ok(!Restored.Instance.State.Sessions.some((S: any) => S.Id === Id)); assert.deepEqual([...Restored.Instance.State.DeletedSessionIds], [Id]); }
+	finally { Restored.Instance.onunload(); }
+});
+
+test("failed storage, a stale dialog, busy work and unsent drafts cannot delete session history", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance, Id = P.Session.Id;
+	P.Session.Messages.push({ Id: "original-user", Role: "user", Text: "Original deletion fixture" });
+	const Stamp = session_stamp(P.Session); P.Session.Messages[0].Text += " changed";
+	await assert.rejects(P.delete_session(Id, Stamp), /已变化/);
+	P.Busy = true; await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /正在回复/); P.Busy = false;
+	P.NoteSessions.Switching = true; await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /切换笔记/); P.NoteSessions.Switching = false;
+	P.Connecting = Promise.resolve(); await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /正在连接/); P.Connecting = null;
+	const View = F.Views.get("codex-sidebar-view")!({}); View.Input = { value: "Original unsent draft" }; P.app.workspace.getLeavesOfType = () => [{ view: View }];
+	await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /草稿/); P.app.workspace.getLeavesOfType = () => [];
+	const Before = JSON.stringify(P.State), Links = JSON.stringify(P.NoteSessions.Data);
+	P.app.vault.adapter.write = async () => { throw new Error("original storage failure"); };
+	await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /original storage failure/);
+	assert.equal(JSON.stringify(P.State), Before); assert.equal(JSON.stringify(P.NoteSessions.Data), Links); assert.equal(P.SessionDeleting, false); P.onunload();
+});
+
+test("deletion serializes with other saves, rejects duplicate actions and never lets an old queued snapshot restore the chat", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance, Id = P.Session.Id, Write = P.app.vault.adapter.write;
+	let Release!: () => void; const Wait = new Promise<void>(R => Release = R);
+	P.app.vault.adapter.write = async (...Args: any[]) => { await Wait; return Write(...Args); };
+	const Removing = P.delete_session(Id, session_stamp(P.Session)); await new Promise(R => setTimeout(R, 0));
+	assert.equal(P.SessionDeleting, true); assert.ok(P.State.Sessions.some((S: any) => S.Id === Id));
+	await assert.rejects(P.delete_session(Id, session_stamp(P.Session)), /正在删除/);
+	assert.equal(await P.send_chat("Original question", null, null), false);
+	P.State.Settings.Model = "original-updated-model"; const Saving = P.persist(false); Release();
+	await Promise.all([Removing, Saving]);
+	const Saved = JSON.parse(F.Files.get(P.RemoteStatePath)!); assert.ok(!Saved.Sessions.some((S: any) => S.Id === Id)); assert.equal(Saved.Settings.Model, "original-updated-model"); assert.equal(P.SessionDeleting, false); P.onunload();
+});
+
+test("a stale remote snapshot cannot revive an offline-deleted chat on reconnect", async () =>
+{
+	let Stale: any; const Ordinary = bootstrap_http(), Methods: string[] = [];
+	const F = await mobile_fixture(async Params =>
+	{
+		if(Params.body) { const Body = JSON.parse(Params.body); if(Body.method) { Methods.push(Body.method); } }
+		if(new URL(Params.url).pathname === "/state" && Params.method === "GET") { return { status: 200, json: { state: structuredClone(Stale), cursor: 0 } }; }
+		return Ordinary(Params);
+	});
+	const P = F.Instance; P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture";
+	const Id = P.Session.Id; P.Session.Messages.push({ Id: "original-user", Role: "user", Text: "Original offline deletion fixture" });
+	Stale = JSON.parse(JSON.stringify(P.State)); await P.delete_session(Id, session_stamp(P.Session));
+	try
+	{
+		await P.ensure_connection(); assert.ok(!P.State.Sessions.some((S: any) => S.Id === Id)); assert.ok(P.State.DeletedSessionIds.includes(Id));
+		assert.ok(!JSON.parse(F.Files.get(P.RemoteStatePath)!).Sessions.some((S: any) => S.Id === Id)); assert.ok(!Methods.includes("turn/start"));
+	}
+	finally { P.onunload(); }
+});
+
+test("deleting a note-bound conversation installs a stable empty replacement without modifying other chats or records", async () =>
+{
+	const F = await mobile_fixture(), P = F.Instance, Id = P.Session.Id;
+	P.Session.Messages.push({ Id: "original-user", Role: "user", Text: "Original bound deletion" });
+	P.NoteSessions.set_enabled(false); P.NoteSessions.observe("Original.md"); P.NoteSessions.bind_current(); P.NoteSessions.set_enabled(true); await P.NoteSessions.flush();
+	const Edits = P.Edits.Store.export_records(); await P.delete_session(Id, session_stamp(P.Session));
+	const Replacement = P.State.ActiveId; assert.notEqual(Replacement, Id); assert.equal(P.Session.Title, "Original"); assert.equal(P.Session.Messages.length, 0);
+	assert.equal(P.NoteSessions.Data.Links.find((L: any) => L.Path === "Original.md").SessionId, Replacement); assert.equal(P.Edits.Store.export_records(), Edits);
+	P.NoteSessions.observe("Other.md"); await P.NoteSessions.flush(); P.NoteSessions.observe("Original.md"); await P.NoteSessions.flush();
+	assert.equal(P.State.ActiveId, Replacement); assert.ok(!P.State.Sessions.some((S: any) => S.Id === Id)); P.onunload();
+});
+
+test("remote state-sync failure preserves a locally committed deletion and reports the incomplete remote sync", async () =>
+{
+	let Fail = false; const Ordinary = bootstrap_http();
+	const F = await mobile_fixture(async Params => { if(Fail && new URL(Params.url).pathname === "/state" && Params.method === "POST") { throw new Error("Original offline fixture"); } return Ordinary(Params); });
+	const P = F.Instance; P.Remote.Url = "https://example.test"; P.Remote.Token = "fixture";
+	try
+	{
+		await P.ensure_connection(); const Id = P.Session.Id, Stamp = session_stamp(P.Session); Fail = true;
+		await P.delete_session(Id, Stamp); assert.ok(!P.State.Sessions.some((S: any) => S.Id === Id)); assert.ok(P.State.DeletedSessionIds.includes(Id));
+		assert.ok(!JSON.parse(F.Files.get(P.RemoteStatePath)!).Sessions.some((S: any) => S.Id === Id)); assert.ok(F.Notices.some(N => N.includes("远程同步尚未完成")));
+	}
+	finally { P.onunload(); }
 });

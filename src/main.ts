@@ -17,7 +17,7 @@ import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } f
 import { browser_http } from "./browser-http";
 import { native_http } from "./native-http";
 import { math_writing_skill, skill_input, type SkillInput } from "./skills";
-import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo, type TokenUsage } from "./controls";
+import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo } from "./controls";
 import { ObsidianWriteHost } from "./edit/obsidian-host";
 import { task_prompt, type TaskSpec } from "./edit/task";
 import { structured_task, question_label } from "./edit/presentation";
@@ -35,6 +35,8 @@ import { ComposerActions, type ComposeAction } from "./edit/composer";
 import { MessageList, type MessageNode } from "./message-list";
 import { SelectionPreview, selection_in_source } from "./selection-preview";
 import { NoteSessions, note_file_path } from "./note-sessions";
+import { new_session, prune_sessions, restore_sessions, delete_session_plan, type ChatSession, type SessionState } from "./sessions";
+import { DeleteSessionDialog } from "./session-dialog";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -56,32 +58,9 @@ interface SidebarSettings
 	EditScope: EditScope;
 }
 
-interface ChatSession
-{
-	Id: string;
-	Title: string;
-	ThreadId: string | null;
-	Messages: ChatMessage[];
-	Usage?: TokenUsage;
-	EffectiveModel?: string;
-	EffectiveEffort?: string;
-	EffectiveTier?: string;
-	InstructionsHash?: string;
-	Private?: boolean;
-	LegacyThreadId?: string;
-	ParentId?: string;
-}
-
-interface SavedState
+interface SavedState extends SessionState
 {
 	Settings: SidebarSettings;
-	Sessions: ChatSession[];
-	ActiveId: string;
-}
-
-function new_session(): ChatSession
-{
-	return { Id: crypto.randomUUID(), Title: "新会话", ThreadId: null, Messages: [] };
 }
 
 function error_text(ErrorValue: unknown): string
@@ -138,6 +117,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private CompletedTurns = new Set<string>();
 	private ApprovalItems = new Map<string, unknown>();
 	private SaveQueue: Promise<void> = Promise.resolve();
+	private SessionDeletion: Promise<void> | null = null;
 	private CaptureTimer: ReturnType<typeof setTimeout> | null = null;
 	private Modals = new Set<Modal>();
 	private BoundDocuments = new Set<Document>();
@@ -152,6 +132,7 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		return this.State.Sessions.find(Value => Value.Id === this.State.ActiveId)!;
 	}
+	get SessionDeleting(): boolean { return !!this.SessionDeletion; }
 
 	private close_connection(): void
 	{
@@ -211,12 +192,12 @@ export default class CodexSidebarPlugin extends Plugin
 			Session.ThreadId = null;
 			Session.InstructionsHash = "";
 		}
-		this.State =
-		{
+		this.State = prune_sessions({
 			Settings: { CliPath: "", Model: "", Effort: "", Fast: false, ShowUsage: true, Instructions: DefaultInstructions, AttachContext: true, AutoCapture: true, Completion: true, CompletionDelay: 1200, ObsidianCliPath: "", ...Saved?.Settings, EditScope: edit_scope(Saved?.Settings?.EditScope) },
 			Sessions,
-			ActiveId: Sessions.some(Value => Value.Id === Saved?.ActiveId) ? Saved!.ActiveId! : Sessions[0].Id
-		};
+			ActiveId: Sessions.some(Value => Value.Id === Saved?.ActiveId) ? Saved!.ActiveId! : Sessions[0].Id,
+			...(Saved?.DeletedSessionIds !== undefined ? { DeletedSessionIds: Saved.DeletedSessionIds } : {})
+		});
 		this.State.Settings.Instructions = migrate_instructions(this.State.Settings.Instructions);
 		if(!this.State.Settings.Model)
 		{
@@ -333,6 +314,7 @@ export default class CodexSidebarPlugin extends Plugin
 	}
 	private note_switch_blocked(): string
 	{
+		if(this.SessionDeleting) { return "正在删除会话"; }
 		if(this.Unloaded) { return "插件已关闭"; }
 		if(this.Busy || this.ChatPreparing) { return "正在回复, 完成后切换"; }
 		if(this.Edits?.Writer.is_busy()) { return "正在写回或撤销"; }
@@ -619,7 +601,12 @@ export default class CodexSidebarPlugin extends Plugin
 
 	persist(SyncRemote = true): Promise<void>
 	{
-		const Data = JSON.parse(JSON.stringify(this.State));
+		if(this.SessionDeletion) { return this.SessionDeletion.then(() => this.persist(SyncRemote)); }
+		return this.persist_snapshot(this.State, SyncRemote);
+	}
+	private persist_snapshot(State: SavedState, SyncRemote: boolean): Promise<void>
+	{
+		const Data = JSON.parse(JSON.stringify(State));
 		const RemoteMode = this.Remote.Enabled;
 		const StatePath = this.RemoteStatePath;
 		const RemoteConnectionValue = this.Connection instanceof RemoteConnection ? this.Connection : null;
@@ -650,7 +637,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async set_remote_mode(Enabled: boolean): Promise<void>
 	{
-		if(this.Busy || this.NoteSessions?.Switching)
+		if(this.Busy || this.SessionDeleting || this.NoteSessions?.Switching)
 		{
 			throw new Error("请先停止当前回复再切换连接");
 		}
@@ -663,7 +650,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.RemoteStatePath = `${this.manifest.dir}/remote-${this.Remote.CacheId}-state.json`;
 		this.save_remote_config();
 		const Saved = this.Remote.Enabled ? await this.app.vault.adapter.exists(this.RemoteStatePath) ? JSON.parse(await this.app.vault.adapter.read(this.RemoteStatePath)) : null : await this.loadData();
-		this.State = Saved?.Sessions?.length ? Saved : { Settings: { ...this.State.Settings }, Sessions: [new_session()], ActiveId: "" };
+		this.State = prune_sessions(Saved?.Sessions?.length ? Saved : { Settings: { ...this.State.Settings }, Sessions: [new_session()], ActiveId: "" });
 		this.State.Settings.EditScope = edit_scope(this.State.Settings.EditScope);
 		if(!this.State.Sessions.some(Value => Value.Id === this.State.ActiveId))
 		{
@@ -687,7 +674,7 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		if(Transport !== "browser" && Transport !== "native") { throw new Error("未知网络传输方式"); }
 		remote_url(Url);
-		if(this.Busy)
+		if(this.Busy || this.SessionDeleting)
 		{
 			throw new Error("请先停止当前回复再更换远程连接");
 		}
@@ -711,7 +698,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async update_run_settings(Model: string, Effort: string, Fast: boolean): Promise<void>
 	{
-		if(this.Busy)
+		if(this.Busy || this.SessionDeleting)
 		{
 			return;
 		}
@@ -797,15 +784,8 @@ export default class CodexSidebarPlugin extends Plugin
 				const Restored = await this.remote_http("/state", "GET");
 				if(Restored.state?.Sessions?.length)
 				{
-					// Keep locally created note sessions that have not reached the bridge yet.
-					if(this.NoteSessions?.Data.Enabled)
-					{
-						const Ids = new Set(this.NoteSessions.Data.Links.map(Link => Link.SessionId));
-						for(const Local of this.State.Sessions) { if(Ids.has(Local.Id) && !Restored.state.Sessions.some((Value: ChatSession) => Value.Id === Local.Id)) { Restored.state.Sessions.push(Local); } }
-						if(!this.NoteSessions.Manual && Ids.has(this.State.ActiveId)) { Restored.state.ActiveId = this.State.ActiveId; }
-					}
 					const PreviousScope = this.State.Settings.EditScope;
-					this.State = Restored.state;
+					this.State = restore_sessions(this.State, Restored.state, this.NoteSessions?.Data.Enabled ? this.NoteSessions.Data.Links.map(Link => Link.SessionId) : [], !this.NoteSessions?.Manual);
 					this.State.Settings.EditScope = edit_scope(PreviousScope);
 				}
 				Connection.set_cursor(Restored.cursor);
@@ -1040,7 +1020,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async send_chat(Question: string, Context: ContextSnapshot | null, Quote: AnswerQuote | null, Options: { Mode?: ComposeAction; Scope?: EditScope; Role?: EditRole } = {}): Promise<boolean>
 	{
-		if(this.Busy || this.ChatPreparing || this.Capture.Suspended || this.NoteSessions?.Switching) { return false; }
+		if(this.Busy || this.ChatPreparing || this.SessionDeleting || this.Capture.Suspended || this.NoteSessions?.Switching) { return false; }
 		const Edit = Options.Mode === "edit";
 		if(!Edit) { return this.send_message(Question, Context, Quote); }
 		this.ChatPreparing = true; this.StartedAt = Date.now(); this.Activity = "准备修改目标"; this.refresh();
@@ -1068,7 +1048,7 @@ export default class CodexSidebarPlugin extends Plugin
 			new Notice("旧版学习任务仅保留历史记录. 请通过提问或生成修改预览发起新请求.");
 			return false;
 		}
-		if(this.Unloaded || this.Busy || this.NoteSessions?.Switching || (this.ChatPreparing && Task?.Action !== "edit") || this.Capture.Suspended || !Question.trim())
+		if(this.Unloaded || this.Busy || this.SessionDeleting || this.NoteSessions?.Switching || (this.ChatPreparing && Task?.Action !== "edit") || this.Capture.Suspended || !Question.trim())
 		{
 			return false;
 		}
@@ -1187,7 +1167,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async reconnect(): Promise<void>
 	{
-		if(this.Busy || this.ChatPreparing)
+		if(this.Busy || this.ChatPreparing || this.SessionDeleting)
 		{
 			new Notice("请先停止当前回复");
 			return;
@@ -1213,9 +1193,45 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 	}
 
+	open_delete_session(): void
+	{
+		const Reason = this.note_switch_blocked() || (this.NoteSessions?.Switching ? "正在切换笔记会话" : this.Connecting ? "正在连接, 完成后删除" : "");
+		if(Reason) { new Notice(Reason); return; }
+		const Dialog = new DeleteSessionDialog(this.app, this.Session, (Id, Stamp) => this.delete_session(Id, Stamp), () => this.Modals.delete(Dialog));
+		this.Modals.add(Dialog); Dialog.open();
+	}
+	async delete_session(Id: string, Stamp: string): Promise<void>
+	{
+		const Reason = this.note_switch_blocked() || (this.NoteSessions?.Switching ? "正在切换笔记会话" : this.Connecting ? "正在连接, 完成后删除" : "");
+		if(Reason) { throw new Error(Reason); }
+		const Work = Promise.resolve().then(async () =>
+		{
+			const Notes = this.NoteSessions, Link = Notes?.Data.Links.find(Value => Value.Path === Notes.Path);
+			const Fresh = this.State.ActiveId === Id && Notes?.Data.Enabled && Link?.SessionId === Id;
+			const Plan = delete_session_plan(this.State, Id, Stamp, Fresh ? Notes!.Path!.split("/").at(-1)!.replace(/\.(md|pdf)$/i, "") : undefined, Link?.SessionId);
+			await this.persist_snapshot(Plan.State, false);
+			this.State = Plan.State;
+			if(this.Unloaded) { return; }
+			this.LiveThreads.delete(Id); this.LoadedThread = null; this.TurnId = null; this.Model = ""; this.Activity = "";
+			let Warning = "";
+			try { Notes?.forget_session(Id, Fresh ? Plan.ReplacementId : undefined, Fresh ? Link?.Path : undefined); }
+			catch(ErrorValue) { Warning = "会话已删除, 笔记关联清理未完成: " + error_text(ErrorValue); }
+			for(const Leaf of this.app.workspace.getLeavesOfType(ViewType)) { if(Leaf.view instanceof CodexView) { Leaf.view.forget_session(Id); } }
+			if(this.Connection instanceof RemoteConnection)
+			{
+				try { await this.Connection.sync_state(JSON.parse(JSON.stringify(this.State))); }
+				catch { Warning = "本机已删除会话, 远程同步尚未完成; 重连会保留本机删除标记, 不恢复旧会话"; }
+			}
+			new Notice(Warning || (Fresh ? "会话已删除, 当前笔记已切换到新的空会话" : "会话已删除"));
+		});
+		this.SessionDeletion = Work.finally(() => { this.SessionDeletion = null; this.refresh(); });
+		this.refresh();
+		return this.SessionDeletion;
+	}
+
 	async choose_session(Id?: string, Automatic = false): Promise<void>
 	{
-		if(this.Busy || this.ChatPreparing || (!Automatic && this.NoteSessions?.Switching))
+		if(this.Busy || this.ChatPreparing || this.SessionDeleting || (!Automatic && this.NoteSessions?.Switching))
 		{
 			new Notice("请先停止当前回复");
 			return;
@@ -1248,7 +1264,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async resend_message(Id: string, Text?: string): Promise<boolean>
 	{
-		if(this.Busy || this.ChatPreparing)
+		if(this.Busy || this.ChatPreparing || this.SessionDeleting)
 		{
 			new Notice("请先停止当前回复");
 			return false;
@@ -1630,6 +1646,7 @@ class CodexView extends ItemView
 	private SelectedAnswer: AnswerQuote | null = null;
 	private ComposeActions!: ComposerActions;
 	private SessionsElement!: HTMLSelectElement;
+	private DeleteSessionButton!: HTMLButtonElement;
 	private ModelElement!: HTMLSelectElement;
 	private EffortElement!: HTMLSelectElement;
 	private FastElement!: HTMLInputElement;
@@ -1688,9 +1705,12 @@ class CodexView extends ItemView
 		Header.createEl("strong", { text: "Codex" });
 		this.button(Header, "新会话", () => void this.Owner.choose_session());
 		this.button(Header, "重连", () => void this.Owner.reconnect());
-		this.SessionsElement = Navigation.Body.createEl("select", { cls: "codex-sessions" });
+		const SessionRow = Navigation.Body.createDiv({ cls: "codex-session-row" });
+		this.SessionsElement = SessionRow.createEl("select", { cls: "codex-sessions" });
 		accessible_name(this.SessionsElement, "Codex 会话");
 		this.SessionsElement.addEventListener("change", () => void this.Owner.choose_session(this.SessionsElement.value));
+		this.DeleteSessionButton = this.button(SessionRow, "删除会话", () => this.Owner.open_delete_session());
+		this.DeleteSessionButton.addClass("codex-session-delete");
 		this.NoteSessionBind = this.button(Navigation.Body, "将当前会话绑定此笔记", () =>
 		{
 			try { this.Owner.bind_note_session(); } catch(ErrorValue) { this.Owner.NoteSessionError = error_text(ErrorValue); this.Owner.refresh(); new Notice(error_text(ErrorValue)); }
@@ -1788,7 +1808,7 @@ class CodexView extends ItemView
 			this.SelectedAnswer = null;
 		}
 		const Quote = this.Owner.AnswerQuote ?? this.SelectedAnswer;
-		this.ComposeActions?.refresh(this.Owner.Busy || this.Owner.ChatPreparing || !!this.Owner.NoteSessions?.Switching, this.Owner.Busy && !!this.Owner.TurnId, !!this.Owner.AnswerQuote);
+		this.ComposeActions?.refresh(this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !!this.Owner.NoteSessions?.Switching, this.Owner.Busy && !!this.Owner.TurnId, !!this.Owner.AnswerQuote);
 		this.refresh_compose_summary();
 		this.QuoteElement.hidden = !Quote;
 		this.Input.placeholder = this.Owner.AnswerQuote ? "针对选中的回答继续提问... Enter 提问, Shift+Enter 换行" : "随时提问... Enter 提问, Shift+Enter 换行";
@@ -1878,9 +1898,9 @@ class CodexView extends ItemView
 			EffortOptions.push({ Value: "", Label: "加载思考档次..." });
 		}
 		this.set_options(this.EffortElement, EffortOptions, Settings.Effort);
-		this.ModelElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || !this.Owner.Models.length;
-		this.EffortElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || !Selected;
-		this.FastElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || (!fast_tier(Selected) && !Settings.Fast);
+		this.ModelElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !this.Owner.Models.length;
+		this.EffortElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !Selected;
+		this.FastElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || (!fast_tier(Selected) && !Settings.Fast);
 		this.FastElement.checked = Settings.Fast;
 		this.UsageToggle.checked = Settings.ShowUsage;
 		this.CompletionToggle.checked = Settings.Completion;
@@ -1945,7 +1965,8 @@ class CodexView extends ItemView
 		const Effective = [Session.EffectiveModel, Session.EffectiveEffort, Session.EffectiveTier === "priority" || Session.EffectiveTier === "fast" ? "Fast" : ""].filter(Boolean).join(" / ");
 		this.StatusElement.setText(`${this.Owner.Status}${Effective ? ` | 最近请求: ${Effective}` : ""} | ${this.Owner.SkillStatus}`);
 		const Notes = this.Owner.NoteSessions;
-		this.NoteSessionBind.disabled = !Notes?.Path || this.Owner.Busy || this.Owner.ChatPreparing || !!Notes?.Switching;
+		this.NoteSessionBind.disabled = !Notes?.Path || this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !!Notes?.Switching;
+		if(this.DeleteSessionButton) { this.DeleteSessionButton.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !!Notes?.Switching; }
 		this.refresh_activity();
 		this.refresh_controls();
 		this.refresh_completion();
@@ -1961,7 +1982,7 @@ class CodexView extends ItemView
 			this.SessionsElement.dataset.options = Options;
 		}
 		this.SessionsElement.value = Session.Id;
-		this.SessionsElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || !!Notes?.Switching;
+		this.SessionsElement.disabled = this.Owner.Busy || this.Owner.ChatPreparing || this.Owner.SessionDeleting || !!Notes?.Switching;
 		const Snapshot = this.Owner.Capture.Snapshot;
 		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
 		this.refresh_compose_summary();
@@ -2015,6 +2036,13 @@ class CodexView extends ItemView
 		void this.Owner.NoteSessions?.flush();
 	}
 
+	forget_session(Id: string): void
+	{
+		this.Version++; this.LastRendered = "";
+		if(this.SelectedAnswer?.SessionId === Id) { this.SelectedAnswer = null; }
+		if(this.EditingSession === Id) { this.EditingSession = ""; this.EditingId = ""; this.EditText = ""; }
+		this.MessageList?.forget(JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Id]));
+	}
 	private async render_messages(): Promise<void>
 	{
 		if(this.Rendering || !this.Opened) { return; }

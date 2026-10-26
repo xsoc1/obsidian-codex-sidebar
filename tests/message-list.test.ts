@@ -149,3 +149,12 @@ test("a cancelled cached refresh leaves the original cached history intact for a
 	await F.List.update("a", [F.item("a")], () => true); assert.equal(F.Root.children[0], Original);
 	assert.deepEqual(F.Disposed, ["obsolete"]); F.List.dispose(); assert.equal(F.Disposed.length, F.Rendered.length);
 });
+
+test("forgetting a conversation disposes its active or cached nodes and prevents late renders from reviving it", async () =>
+{
+	const F = fixture(); await F.List.update("a", [F.item("a")], () => true); await F.List.update("b", [F.item("b")], () => true);
+	F.List.forget("a"); assert.deepEqual(F.Disposed, ["a"]); assert.equal(F.Root.children.length, 1);
+	const Pending = deferred(), Late = F.List.update("a", [F.item("a", "late", Pending.Wait)], () => true);
+	F.List.forget("a"); Pending.release(); assert.equal(await Late, false); assert.deepEqual(F.Disposed, ["a", "late"]);
+	F.List.forget("b"); assert.equal(F.Root.children.length, 0); F.List.dispose(); assert.deepEqual(F.Disposed, ["a", "late", "b"]);
+});

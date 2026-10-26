@@ -28,10 +28,20 @@ window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
 	const Root = document.body.createDiv(); Root.style.cssText = `width:${Width}px;height:720px`; Root.id = 'simplified-sidebar-fixture';
 	const Calls = [], Owner = { State: { Settings: { EditScope: "captured", AttachContext: true, Model: "fixture-model", Effort: "high", Fast: false, Completion: true, ShowUsage: false } }, Session: { Id: "fixture", Title: "原创微型讲义", Messages: [{ Id: "answer", Role: "assistant", Text: "固定矩阵 X 后，交换子为 [X,Y] = XY − YX。把加法与数乘分别代入，可验证其关于 Y 的线性。" }] }, Capture: { Snapshot: null }, Models: [{ model: "fixture-model", displayName: "模型示例", supportedReasoningEfforts: [{ reasoningEffort: "high" }] }], Inline: { get_suggestion: () => null }, Status: "就绪", SkillStatus: "math-writing", CatalogError: "", Busy: false, refresh() {}, async send_chat(...Args) { Calls.push(Args); return true; } };
 	Owner.State.Sessions = [Owner.Session];
+	let Deletions = 0; Owner.open_delete_session = () => { Deletions++; };
 	const View = new Sidebar.CodexView({}, Owner); View.contentEl = Root; View.app = { vault: { getName: () => "disposable-sidebar-fixture" } };
 	try
 	{
 		await View.onOpen();
+		const DeleteButton = Root.querySelector('.codex-session-delete');
+		DeleteButton.click(); const DeleteDelegated = Deletions === 1 && DeleteButton.textContent === '删除会话';
+		Owner.SessionDeleting = true; View.refresh(); DeleteButton.click();
+		const DeleteGuarded = DeleteButton.disabled && Deletions === 1 && View.SessionsElement.disabled;
+		Owner.SessionDeleting = false; View.refresh();
+		Root.querySelector('.codex-navigation').open = true;
+		const Row = Root.querySelector('.codex-session-row').getBoundingClientRect();
+		const SessionControlsFit = [...Root.querySelector('.codex-session-row').children].every(Element => { const Bounds = Element.getBoundingClientRect(); return Bounds.left >= Row.left - 1 && Bounds.right <= Row.right + 1; });
+		Root.querySelector('.codex-navigation').open = false;
 		const Text = Root.textContent;
 		const RetiredAbsent = !Root.querySelector('.codex-note-session-status,.codex-note-session-toggle,.codex-edit-options,.codex-study-container') && !/随笔记切换会话|修改范围|数学学习工作台|笔记对应会话/.test(Text);
 		View.Input.value = "修改选中的一段"; await View.send_input("edit");
@@ -51,7 +61,10 @@ window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
 		const Actions = [...Root.querySelectorAll('.codex-compose-actions button')].map(Value => Value.textContent);
 		const Toolbar = Root.querySelector('.codex-toolbar'), Composer = Root.querySelector('.codex-composer');
 		const GlassScoped = !!Toolbar && Root.querySelector('.codex-options').parentElement === Toolbar && getComputedStyle(Toolbar).backdropFilter.includes('blur') && getComputedStyle(Composer).backdropFilter.includes('blur') && getComputedStyle(Root.querySelector('.codex-messages')).backdropFilter === 'none';
-		return { retiredAbsent: RetiredAbsent, glassScoped: GlassScoped, actionsRetained: Actions.join('|') === '提问|生成修改预览|停止', questionAndPreviewKeepSavedScope: Calls.length === 2 && Calls[0][3].Scope === 'captured' && Calls[1][3].Scope === 'note' && Calls.every(Value => Value[3].Mode === 'edit' && Value[3].Role === 'auto'), ordinaryAnswerQuoted: OrdinaryAnswerQuoted, editUiExcluded: EditUiExcluded, noOwnHover: Root.querySelectorAll('[title],[aria-label]').length === 0 };
+		View.SelectedAnswer = { SessionId: 'deleted-context' }; View.EditingSession = 'deleted-context'; View.EditingId = 'old-edit'; View.EditText = 'cancelled-edit';
+		View.forget_session('deleted-context');
+		const DeletedReferencesCleared = !View.SelectedAnswer && !View.EditingSession && !View.EditingId && !View.EditText;
+		return { retiredAbsent: RetiredAbsent, glassScoped: GlassScoped, deleteDelegated: DeleteDelegated, deleteGuarded: DeleteGuarded, sessionControlsFit: SessionControlsFit, deletedReferencesCleared: DeletedReferencesCleared, actionsRetained: Actions.join('|') === '提问|生成修改预览|停止', questionAndPreviewKeepSavedScope: Calls.length === 2 && Calls[0][3].Scope === 'captured' && Calls[1][3].Scope === 'note' && Calls.every(Value => Value[3].Mode === 'edit' && Value[3].Role === 'auto'), ordinaryAnswerQuoted: OrdinaryAnswerQuoted, editUiExcluded: EditUiExcluded, noOwnHover: Root.querySelectorAll('[title],[aria-label]').length === 0 };
 	}
 	finally { await View.onClose(); if(!Keep) { Root.remove(); } }
 };

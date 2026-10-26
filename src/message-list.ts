@@ -129,6 +129,17 @@ export class MessageList
 		}
 		finally { if(!Committed) { for(const Entry of Built) { Entry.Dispose(); } } }
 	}
+	forget(Context: string): void
+	{
+		this.Generation++;
+		if(this.Context === Context)
+		{
+			for(const Entry of this.Entries.values()) { this.Observer?.unobserve(Entry.Element); Entry.Element.remove(); Entry.Dispose(); }
+			this.Entries.clear(); this.Context = ""; this.Follow = true; this.Anchor = null; this.LastWritten = null;
+		}
+		const Cached = this.Cache.get(Context);
+		if(Cached) { this.Cache.delete(Context); for(const Entry of Cached.Entries.values()) { Entry.Dispose(); } }
+	}
 	dispose(): void
 	{
 		this.Closed = true; this.Generation++;

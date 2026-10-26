@@ -121,5 +121,19 @@ export class NoteSessions
 		if(this.Path === Path) { this.Path = null; this.Pending = null; }
 		this.Host.changed();
 	}
+	forget_session(Id: string, ReplacementId?: string, Path = this.Path): void
+	{
+		if(this.Closed) { throw new Error("笔记关联已关闭"); }
+		const Current = this.Data.Links.find(Link => Link.Path === Path && Link.SessionId === Id);
+		const Links = this.Data.Links.filter(Link => Link.SessionId !== Id);
+		if(Current && ReplacementId && this.Data.Enabled)
+		{
+			if(!this.Host.exists(ReplacementId)) { throw new Error("替代会话不存在"); }
+			Links.push({ Path: Current.Path, SessionId: ReplacementId });
+		}
+		if(Links.length !== this.Data.Links.length || Current && ReplacementId) { this.save({ ...this.Data, Links }); }
+		if(Current && ReplacementId && this.Data.Enabled && Current.Path === this.Path) { this.Pending = null; this.Manual = false; }
+		this.Reason = ""; this.Error = ""; this.Host.changed();
+	}
 	dispose(): void { this.Closed = true; this.Pending = null; }
 }

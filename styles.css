@@ -77,6 +77,9 @@
 	outline-offset: 2px;
 }
 .codex-sessions { width: 100%; }
+.codex-session-row { display: flex; align-items: stretch; gap: 6px; min-width: 0; margin-top: 6px; }
+.codex-sidebar .codex-session-row .codex-sessions { flex: 1; min-width: 0; width: auto; margin-top: 0; }
+.codex-sidebar .codex-session-delete { flex: 0 0 auto; white-space: nowrap; }
 .codex-sr-only {
 	position: absolute;
 	width: 1px;

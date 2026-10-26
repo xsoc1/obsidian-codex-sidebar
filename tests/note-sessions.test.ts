@@ -78,3 +78,22 @@ test("renaming before queued activation follows the new path without creating an
 	const F = fixture(), R = F.Router; R.set_enabled(true); R.observe("A.md"); const First = R.flush(); R.rename("A.md", "Renamed.md"); await First; await R.flush();
 	assert.deepEqual(F.Activated, ["Renamed.md"]); assert.equal(F.Sessions.size, 2); assert.equal(R.Data.Links[0].Path, "Renamed.md");
 });
+
+test("deleting a bound conversation removes its links and binds only a valid fresh replacement to the current note", async () =>
+{
+	const F = fixture(), R = F.Router; R.observe("A.md"); await R.flush(); const Old = F.active();
+	F.Sessions.add("replacement"); R.forget_session(Old, "replacement");
+	assert.deepEqual(R.Data.Links, [{ Path: "A.md", SessionId: "replacement" }]);
+	R.observe("B.md"); await R.flush(); R.observe("A.md"); await R.flush(); assert.equal(F.active(), "replacement");
+	R.forget_session("replacement"); assert.ok(!R.Data.Links.some(Link => Link.SessionId === "replacement"));
+	R.observe("B.md"); await R.flush(); R.observe("A.md"); await R.flush(); assert.notEqual(F.active(), Old); assert.notEqual(F.active(), "replacement");
+});
+
+test("a note change during deletion cannot bind the replacement to the wrong note", async () =>
+{
+	const F = fixture(), R = F.Router; R.observe("A.md"); await R.flush(); const Old = F.active();
+	F.Sessions.add("replacement"); R.observe("B.md"); R.forget_session(Old, "replacement", "A.md");
+	assert.deepEqual(R.Data.Links, [{ Path: "A.md", SessionId: "replacement" }]); assert.equal(R.Pending, "B.md");
+	await R.flush(); assert.notEqual(F.active(), "replacement");
+	R.observe("A.md"); await R.flush(); assert.equal(F.active(), "replacement");
+});

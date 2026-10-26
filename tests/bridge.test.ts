@@ -144,6 +144,12 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 		await Rpc(0, "bridge/pdf-images", { action: "clear" });
 		assert.equal((await Rpc(0, "turn/start", PdfParams)).status, 400);
 		assert.equal((await Rpc(0, "bridge/pdf-images", { action: "put", id: ImageId, data: Image, epoch: Epoch })).status, 400);
+		const Deleted = { Settings: State.Settings, Sessions: [{ Id: "empty-replacement", Messages: [] }], ActiveId: "empty-replacement", DeletedSessionIds: ["session-a"] };
+		assert.equal((await Http(0, "/state", { state: Deleted, cursor: 0 })).status, 200);
+		Peers[0].emit({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "late-deleted-reply", delta: "original late output" } });
+		const AfterDeletion = (await Http(0, "/state")).body.state;
+		assert.deepEqual(AfterDeletion.DeletedSessionIds, ["session-a"]); assert.deepEqual(AfterDeletion.Sessions, Deleted.Sessions);
+		assert.equal((await Http(1, "/state")).body.state, null);
 	}
 	finally
 	{
