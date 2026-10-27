@@ -82,4 +82,16 @@
 - 独立桥: 原进程已不在运行, 启动新版本程序并沿用原配置/配对/StateDir. 实际 `/info` 为 2.0.0-beta.1、协议 2、7 项能力, 技能为 0.3.0-candidate.4. 原 8 个会话、31 条消息和设置保留, 校核期间推理 0 次. 尚无 iPad 真机连接本版的验收.
 - Windows 日常插件: 仅替换 4 个公开构建文件并核对摘要, 使用原生插件 API 重载. 22 个会话、187 条消息的身份/正文/Prompt/快照/任务保持一致; 设置、设备状态、10 份修改记录/9 份写入记录及 3 个打开编辑器缓冲区校核不变. 迁移创建独立规范文件, 原 legacy 字节保留.
 - 已安装 UI: 真实隐藏 CLI 连接与技能检查通过, 模型目录返回 8 项, 运行状态 idle; 原生侧栏 1 个, 首批 40 张消息卡与 332 个 MathJax 节点已挂载. 原阅读上下文恢复. 不是物理 IME、全部主题或 iPad 验收.
-- GitHub beta/跨平台 CI: 部署记录已提交后再执行推送/标签发布, 实际远端运行和资产摘要另记; 不以本地安装代替公开发布成功.
+- GitHub beta/跨平台 CI: 已完成, 见以下实际回执. 不以本地安装代替公开发布成功.
+
+### 公开发布回执
+
+- [2.0.0-beta.1](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.1): `draft=false`, `prerelease=true`, 7 个资产. 注解 tag 剥离后的源码 commit 为 `50999d6876fc85dfa9a70243f1c9d9d5566ba029`, 与公开 candidate-manifest 一致. 未移动标签或稳定默认分支, `/releases/latest` 仍为 1.1.0.
+- [分支 CI 40423534344](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40423534344): Windows/Ubuntu 的 Node 24 两个 job 均成功. [发布工作流 40423718351](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40423718351) 成功完成构建、测试、白名单打包及公开上传.
+- 全部 7 个资产下载后按 GitHub SHA-256 校验, 两个 ZIP 独立核对 CRC、成员数量/字节及 candidate-manifest 摘要. 插件包 4 个成员, 桥包 16 个成员. 无会话、配对信息、修改数据库或私有技能.
+- 插件 ZIP SHA-256: `840559b2bfed26afe4c3777d319de64d9b9a16882bc2f54c4fbc178e12c93caa`.
+- 独立桥 ZIP SHA-256: `6a074315517f22eaf550a3f1c0645efd68078016705cac51141afff6f38011f4`.
+- Windows 已安装的 main.js/manifest/styles 与公开资产逐字节相同; 将仅有行尾差别的调试 source map 换为公开构建后四文件均相同. 运行中桥代码也与公开 ZIP 一致. 没有因文档、ZIP 时间戳或调试映射差异重复启动模型或覆盖状态.
+- Windows 通过现有私有 HTTPS 入口实际读到新桥 2.0.0-beta.1, 原配对/配置未变. 这仍不是 iPad 设备验收. iPad 的 BRAT 需指定 `2.0.0-beta.1`; 不会把 beta 当作稳定 latest 自动推送给全部用户.
+
+私有备份及详细本机回读保留在仓库外; 启动位置由 LOCAL_DEV.md 指向. 公开提交只记录部署元数据、公开摘要与验收边界. 发布后维护收据提交不会改变已发布标签的源码或资产.
