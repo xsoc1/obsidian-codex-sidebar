@@ -37,12 +37,13 @@ export function merge_outbox(Local: SendIntent[] = [], Remote: SendIntent[] = []
 	}
 	return Result;
 }
-export function normalize_outbox(State: { Outbox?: SendIntent[]; Sync?: { Operations: { Id: string; SessionId: string; MessageId: string; Input: unknown }[] } }): void
+export function normalize_outbox(State: { Outbox?: SendIntent[]; Sync?: { Operations: { Id: string; SessionId: string; MessageId: string; Input: unknown; Evidence?: unknown }[] } }): void
 {
 	if(!State.Outbox) { return; }
 	State.Outbox = State.Outbox.filter(Intent =>
 	{
 		const Bound = State.Sync?.Operations.find(O => O.Id === Intent.Id); if(!Bound) { return true; }
+		if(Bound.Evidence) { return true; }
 		if(Bound.SessionId !== Intent.SessionId || Bound.MessageId !== Intent.MessageId || canonical_json(Bound.Input) !== canonical_json(Intent.Input)) { throw new Error("待发送意图与已绑定操作冲突, 不丢弃任一输入"); } return false;
 	});
 }

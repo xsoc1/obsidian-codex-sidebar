@@ -33,7 +33,7 @@ test("long answer and selection are bounded independently and truncation remains
 {
 	const Quote = answer_quote("s", "m", "选".repeat(4001), "源".repeat(24001));
 	assert.equal(Quote.SelectedText.length, 4000);
-	assert.equal(Quote.SourceText.length, 24000);
+	assert.equal(Quote.SourceText.length, 0); // Unknown tail must not be replaced by a misleading prefix.
 	assert.equal(Quote.SelectedTruncated, true);
 	assert.equal(Quote.SourceTruncated, true);
 	const Reference = JSON.parse(build_prompt("问", null, Quote).split("\n").at(-1)!);

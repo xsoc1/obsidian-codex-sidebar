@@ -1,97 +1,117 @@
-# 2.0 可靠性改进工作记录
+# 2.0 第二轮修复与性能验证
 
-此文是本轮唯一现状/验收入口. 历史版本收据另列, 不能当作本轮完成证据.
+更新: 2026-10-28. 当前为 **2.0.0-beta.2 本地候选**, 不是安装或发布收据. beta.1 的实现、部署、CI、公开资产读回记录原样保存在 [2026-10-27 归档](history/reliability-beta1-20261027.md). 旧 current/pending 标签只表示当时状态.
 
-## 范围与基线
+## 实际基线与授权
 
-- 用户任务: 可靠会话与操作、完整有界数学上下文、可追溯来源、长历史/PDF/预览体验、迁移/CI/文档/候选包.
-- 最新有效基线: `adc9591611d9f150634136ee219d37499115b852`, 默认 `codex/initial`, 产品 `1.1.0`. fetch 与远端 HEAD 已核对, 无回退.
-- 工作分支: `codex/reliability-suite`; 候选版本 `2.0.0-beta.1`, 新同步协议 2 与产品版本分开.
-- 初始工作区干净. `npm ci`, `npm run build`, `npm test`: 基线 168 项通过.
-- 本轮不沿用旧部署授权. 日常插件、真实桥、公开推送/发布均未授权, 先完成可审阅候选与验证.
-- 只用原创材料测试, 不读取认证文件, 不改全局配置或私有技能, 不以旧整份备份覆盖后续数据.
+- 分支 `codex/reliability-suite`, 干净起点 `4cc440be3e77dcd16d893ff6d9d7bcf1eee90b6a`; 已 fetch 核对, 未 reset. 默认稳定分支仍为 1.1.0.
+- beta.1 标签实际对应 `50999d6876fc85dfa9a70243f1c9d9d5566ba029`. 用户任务中的完整哈希有拼接错误, 以 Git 实读为准, 未回退到旧提交.
+- Node 24.17.0 / Windows. 起始 `npm ci`, `npm run build`, `npm test`: **245 通过, 0 失败/跳过**.
+- 本轮授权代码、复验、文档、本地提交和候选包. 用户明确说 beta.1 的一次性部署授权不延伸; beta.2 日常安装、在线桥升级/重启、push/tag/release 均未执行. 本轮没有远端 CI.
+- 新增样本均为原创数学或合成状态. 不读取认证文件, 不改全局配置/私有技能, 不上传真实课程、聊天或配对信息.
 
-## 逐项状态
+## 七阶段结果
 
-| 条目 | 当前状态 | 实现/验证入口 |
+| 阶段 | 已实现的行为 | 实现/验证入口 |
 | --- | --- | --- |
-| A1 旧快照覆盖本地消息 | 修复; 实际恢复/持久化/重启链路通过 | `sessions.ts`, `remote.ts`, `sync/*`, `tests/mobile-load.test.ts` |
-| A2/A3 待同步操作/幂等/删除隔离 | 已实现; 丢回执、CLI 后异常、不同终态、迟到凭证与设备隔离通过 | `sync/operations.ts`, `runtime/outbox.ts`, `runtime/receipts.ts` |
-| B1 准备取消/统一生命周期 | 已实现; 主入口草稿/引用、分片准备取消和未知状态核对通过 | `runtime/lifecycle.ts`, `main.ts`, `composer-draft.ts` |
-| B2/B3 能力协商/一致恢复 | 已实现; 有界只读恢复、单监听器、桥/CLI 进程变化及并发快照通过 | `remote.ts`, `bridge.ts`, `sync/*` |
-| B4 环境诊断 | 已接设置; 异常隔离通过, 实际完整 CLI/模型/技能在独立探针中核验; 未在日常设置窗口操作 | `diagnostics.ts`, `settings.ts`, `desktop.ts`, `main.ts` |
-| C 增量与迁移 | 已实现; 大于 4 MiB 历史、70 操作固定分页、设置 CAS、WAL 与迁移中断通过 | `sync/*`, `runtime/state-store.ts` |
-| D 来源/回跳 | 已实现; 主工具成功读取接线、旧路径固定、重命名/同名/未落盘定位通过 | `sources.ts`, `view.ts`, `main.ts` |
-| E 数学背景与精准追问 | 已实现, 定向和原生原创尾部公式 probe 通过 | `markdown-blocks.ts`, `context.ts`, `quote.ts`, `followup.ts` |
-| F 历史预算/冷开显示 | 已实现; 原 Prompt/来源不改, 必需引用/未决问题保留, 真实模型补读被省略证明通过; SDK 冷开比较通过 | `history-budget.ts`, `history-window.ts`, `view.ts` |
-| G1 修改卡片 | 已实现, 真实计数和中文状态定向回归通过 | `edit/card-state.ts`, `edit/panel.ts` |
-| G2 PDF 当前页/区域 | 已实现; 当前页/两图/版本/缺图/传输/重放定向通过, 原生 PDF.js/canvas 通过; iPad 未验 | `pdf/*`, `scripts/pdf-region-native-probe.ts` |
-| H 工程结构/CI/文档 | 视图/设置、操作生命周期、同步/存储/来源模块已提取; CI 已配置, 远端未运行 | `view.ts`, `settings.ts`, `runtime/*`, `sync/*`, `.github/workflows`, `AGENTS.md` |
+| 1 正文版本 | scope/session/message/field/content 绑定正文 SHA; 目录独立快照. 无关消息不影响续读, 原文变化/删除/错作用域拒绝 | history-reader.ts, main.ts, bridge.ts, math-round2.test.ts |
+| 2 长回答引用 | 保守局部 Markdown/DOM 映射; HR/未知节点不撤销可靠匹配, 重复和歧义保持 unknown, 不冒充前缀包含尾部 | quote.ts, markdown-blocks.ts, quote-native-probe.ts |
+| 3 输入预算 | 当前 Prompt 与恢复历史先去重再预算, 保存原文不改; 必需证明只在确切版本补读能力存在时使用定位 | prompt.ts, history-budget.ts, 真实模型探针 |
+| 4 冲突/导航 | 决议独立持久化, 保存成功才移除 pending, 重连不复活; 相反选择保留. 仅成功最终回答推进最新整合说明 | sync/conflicts.ts, metadata.ts, history-view-state.ts, 实际插件确认测试 |
+| 5 增量视图 | operation 显式投影, 消息/来源/修改状态缓存; 流事件只更新可见相关内容. 首屏 40, 最大挂载 120, 缓存最近 3 会话排版 | history-render-state.ts, edit-view-state.ts, history-window.ts, view.ts |
+| 6 检查点/容量 | 1 秒/32 KiB 双触发; 事务屏障间合并可替代正文; 落盘后发布终态, 失败保留重试. 8 MiB 可重读 blob 缓存, GC 仅 dry-run | runtime/checkpoints.ts, state-store.ts, sync/blob-cache.ts, server-store.ts |
+| 7 按需恢复 | 当前会话全文优先, 其他明确 unloaded; 已完成操作先索引, unknown 完整证据. 打开/导航/重发按需读取, 导出补齐全部 | sync/client.ts, remote.ts, main.ts, settings.ts |
 
-## 已取得的证据
+保留四折叠区、提问/生成修改预览、完整说明、默认整合追问、原生按键与 IME 事件约束. 学习工作台仍退休. 后台和工具只读, 笔记写入继续使用原客户端确认/陈旧检查/幂等/读回/安全撤销.
 
-1. 基线 A1: 同一会话本地 m1/m2、远端 m1 经原 `restore_sessions` 后仅剩 1 条, m2 丢失. 这是原创数据的实际原函数结果, 不是对用户数据丢失的猜测.
-2. 后端受控 HTTP: 超过 4 MiB 整体历史经 blob 分片和一致分页恢复; 丢回包后桥重启不重复 CLI; CLI 后异常未知状态与输入摘要拒改; 迁移保留旧字节、删除不复活. 不代表真实 iPad 或真实推理验收.
-3. 来源/数学/PDF: 27 项定向回归通过. 原生 PDF 整页 1236×1600, 局部 1600×1179, 同页/同版本/总两图, 局部像素倍率约 3.01; 已检查六行原创公式, 不是 OCR 或数学正确性认证.
-4. 原生长回答: 原创 43350 字符、93 个真实 Markdown 块, 选中尾部偏移 42821 的公式, 提供 529 字符源窗口并保留 `\\int`, 明确原回答截断. 临时 SDK 插件移除, 日常数据/enabled 集合未变.
-5. 冷开 SDK 最新比较: 原创 240 消息, 1.1.0 基线约 2257–2312 ms/240 次 card 渲染/1440 DOM; 候选约 386–402 ms/40 次/342 DOM. 两方使用同一 18 ms 异步 renderer. 明暗与桌面/移动外形四场景, 非原生 MathJax 或 iPad. 继续加载 40 条保留旧节点, 焦点从 A 到 B 不改变历史回答基准或引起重绘.
-6. 草稿 SDK: 重开、不同会话/连接、当前新捕获不被旧草稿来源静默覆盖、迟到回执不清新 scope 同文本输入的回归通过. 不是物理中文输入法验收.
+## 原函数复现与修复
 
-## 数据与操作设计
+1. 24,000 字符旧证明: 先读 12,000, 只改其他 reasoning 就使原第二页失效. 新版可继续, 目标变化仍拒绝. 同文换 session/field/scope 不可复用版本, 目录分页固定, 过期重新开始.
+2. 原创长回答 49,070 字符时尾部定位成功; 加 HR 后 49,075 字符原整篇绑定失败. 新局部匹配在 HR 前后保留末尾原始公式; 重复公式不猜位. 原生差分另述.
+3. 中文 22,400 字符/67,200 UTF-8 bytes: Prompt **136,510 → 69,300 bytes**. 已知 400,000 窗口和未知窗口均通过保守预算, 原 JSON 不变. 原算法因重复必需材料触发 192,000 字节保守上限, 没靠扩大上限修复. 未识别的自定义 Prompt 不做推测性去重.
+4. 原冲突采用后 1 → 0, 再同步变 1; 新版持久化/同步/重启仍为 0. 新版本继续显示新冲突. 保存失败、确认期间变化和并发确认不会先宣称解决.
+5. 成功最终 a1 后接失败 commentary a2, 原导航指向 a2; 新版保持 a1. 旧缺元数据记录保留“完成状态未知”入口.
+6. 收尾审查补上: 迟到加载倒切、等待重发时来源漂移、await 后作用域复核、交错正文队列、写盘失败广告未提交 revision、终态事件过早发布. 排队旧正文只能合并磁盘已提交的 Sync, 不引入未来内存终态; 对最终 stage 写入失败的实际插件回归先红后绿. 确认决议与所选正文也不能被后排的旧快照拆开; 只在旧正文精确匹配原候选且已落盘正文匹配唯一选择时修复, 后续新稿保留并提示冲突. 故障恢复只保存, 不再提交推理.
 
-用户实际 Selection、Explanation 背景和 WriteTarget 分离. 旧消息/Prompt/快照不改写. 新操作先保存本地不可变意图及消息 ID, 获得稳定连接作用域后绑定同 operation ID; 提交前持久化 Attempted 与解析后的请求摘要. unknown 只核对, 不自动再提交. 卸载或切 scope 后的迟到凭证单独按原操作保存, 不以旧整份内存状态覆盖新文件.
+## 同机前后对照
 
-本机新规范文件与 legacy 文件分开, 留存原字节; 迁移、正常保存使用 stage/journal/readback/CAS, 未决日志与已提交备份有不同恢复规则. 普通缓存到期只针对原有修改预览/还原策略, 不删除未核对发送、幂等或聊天来源数据.
+固定基线通过 git show 加载, 不改工作树. 字节为实计 UTF-8, MB 用十进制. 时间只是本机观察, 回归以工作量/容量为准.
 
-## 原创真实模型验收
+### 视图
 
-独立 TEMP 工作区和 loopback 桥, 使用完整 CLI `0.164.0-alpha.11.1` 与实际启用的 `math-writing 0.3.0-candidate.4`. 仅一次 `gpt-6.1-sol / low` 推理, 每轮真实传入 text + 服务端发现的 skill 两项; 临时线程 `ephemeral=true/path=null`, 桥固定 read-only/approval never.
+实际 CodexView + Chromium, 同一 40 条可见窗口, renderer 固定 18 ms 延迟; 含字节计量开销, 不是原生 MathJax/iPad 性能.
 
-模型真实调用 `obsidian_history_read` 读取被派生历史省略的原创积分证明, 返回仅原证明中存在的核验词, 并正确补充实值/闭区间条件、核验 $f(t)=t$ 时 $1/2\leq1$. 这是小样功能验收, 不证明任意数学输出正确.
+| 总消息 | 签名序列化字节, 前 → 后 | 签名中位时间 | 完整流刷新时间 |
+| --- | --- | --- | --- |
+| 240 | 4.64 MB → 7.80 KB | 16.3 → 约 0.1 ms | 76.5 → 19.7 ms |
+| 1,000 | 19.34 MB → 7.80 KB | 71.3 → 约 0.1 ms | 295.9 → 21.8 ms |
+| 4,000 | 77.38 MB → 7.96 KB | 315.7 → 约 0.1 ms | 998.9 → 20.0 ms |
 
-原探针只监听旧 `item/completed`, 漏了协议 2 的 `bridge/message-updated`, 导致 `assert(Output)` 误失败. 产品已保存最终答案; 失败 ledger/report 原样保留. 修正探针并通过 mock 回归后, 只读重建同一 TEMP 桥核对: 原数据身份、completed 操作、原 Prompt/快照/旧证明/答案均保留, 新增推理 0 次. 未重发原请求. 公共探针提供排他 ledger 和只读恢复模式.
+单流事件全历史消息访问 960/4,000/16,000 → 0, 来源重建 962/4,002/16,002 → 1. 两版 card render 均为 1, 不把原签名扫描说成重绘所有卡片. 新版两遍可见检查共 80 条. 操作 Input/Request 变化不重绘, 状态变化正常更新; 卡片/选区、跨窗口引用、回跳、返回最新和 120 条上限通过.
 
-## 回归入口与边界
+### 保存与 blob
 
-- `npm ci`, `npm run build`, `npm test`: Node 24.17.0/Windows; 基线 168 项, 最终 **245 项全部通过, 0 失败/跳过**. 全量覆盖原问答、选区/检查证明提示、修改预览/确认前零写入/陈旧拒绝/去重/安全撤销、缓存 1/N/永不与重启、Tab/IME 事件、移动安全加载、旧数据及本轮故障链. CLI 真实推理单独记账, 不计入普通测试数量.
-- `tests/mobile-load.test.ts`: 实际插件入口 + SDK/IndexedDB, 部分连接为真实 loopback HTTP + 可控 app-server; 不等同真实设备. 同一 scope 的后台回答、重复检查点、旧完成事件不会清掉另一个当前回合.
-- `tests/sync*.test.ts`, `remote.test.ts`, `state-store.test.ts`, `receipts.test.ts`: 真实临时磁盘/HTTP、摘要、CAS、分页与中断恢复. 比较版本不依赖设备时间或文本长短, 终态冲突保留双方.
-- `scripts/check-cold-history.mjs`, `check-stream-layout.mjs`: 原创长历史、实际 CodexView + 异步 SDK, 覆盖明暗/窄栏、三次追问回跳、草稿、滚动锚点; 不是原生公式或物理输入法.
-- `scripts/pdf-region-native-probe.ts`, `quote-native-probe.ts`: 原生 Obsidian Markdown/PDF.js/canvas 组件, 原创内存材料; 日常插件/会话/笔记未替换, 测试资源已清理.
-- `scripts/reliability-live.ts`: 默认不执行. `CODEX_RELIABILITY_LIVE=1` 且显式提供 TEMP 证据目录才允许单次真实请求; 已有 ledger 拒绝新提交, `CODEX_RELIABILITY_RECOVER=1` 只读恢复. 不上传私有课程或技能正文.
+| 原创场景 | 基线 | 候选 |
+| --- | --- | --- |
+| 6 MB 状态追加 16 字符, 单事务写量 | 24,003,048 bytes / 6 writes | 18,002,453 bytes / 5 writes |
+| 同上读量, 含最终恢复回读 | 60,007,288 bytes | 54,006,677 bytes |
+| 100 个增长快照 + 中途关键屏障 + 终态, write 延迟 2 ms | 102 saves, 队列峰值 102 | 5 saves, 峰值 5 |
+| 同上累计读/写量 | 66,337,979 / 33,103,093 bytes | 2,674,741 / 1,214,513 bytes |
+| 合成 100 次完整增长正文通过真实 Store | 8,085,500 blob bytes / 100 saves | 496,275 bytes / 5 saves |
+| 实际临时 bridge: 100 个 1,600 字节 delta + item/turn 完成 | 858,523 bytes / 9 blobs | 656,759 bytes / 7 blobs |
 
-最终打包使用 `scripts/package-candidate.ps1`, 固定成员白名单并回读每个成员摘要; 外部 `candidate-manifest.json` 记录产品/协议、源码 commit、每个包及成员 SHA-256. 包中没有配对、聊天、修改数据库或私有技能. 升级顺序及数据/代码回退分开说明见 [migration.md](migration.md), 后端兼容表见 [sync-protocol.md](sync-protocol.md).
+**beta.1 实际桥已每 16 事件节流**, 8.08 MB 是每次完整保存的合成场景. 初次脚本错误要求实际桥降低四倍而失败; 核对原实现后分开报告, 失败证据保留. 最新实际桥处理观察 118.66 → 70.25 ms, 不是磁盘吞吐结论.
 
-已实际生成并独立回读两个候选包: 插件 4 个成员、桥 16 个成员, ZIP CRC、各成员字节/摘要及产品版本一致. 对解包后的编译 `bridge.cjs` 在新 TEMP 配置/loopback 端口启动, 连接真实完整 CLI 查询 `/info` 与操作页, 验证桥版本 2.0.0-beta.1、协议 2、7 项能力及实际 math-writing 版本, 推理 0 次; 仅结束该测试拥有的进程树. 这是原生 Windows 编译产物预检, 不是日常安装或 iPad 验收.
+最终正文、原 Prompt/来源、unknown 凭证逐字保持. 各一次 mock turn/start, 重启新增提交 0, 真实推理 0. 单次本机事务仍写多份完整状态, 未改为增量数据库, 历史增长带来的保存成本没有消失. 上表单事务为 state-store 层; 主入口为保证屏障顺序还会读取一次已提交规范文件的 Sync, 该额外读取未包含在表中, 不将表值说成完整插件 I/O 总量.
 
-旧 AGENTS 的归档比对最初直接比较整个文件而失败; 差异仅为新增的历史说明前言. 正确去除前言后, 原正文与基线逐字一致. 没有丢失或改写原维护历史. 失败检查与复核结果均保留, 不误记成产品缺陷.
+### 冷/热恢复
 
-候选交付时尚未部署或公开发布; 后续用户追加授权及结果见下节. 没有 iPad 真机, 物理中文 IME、实际锁屏/Wi-Fi/VPN 切换仍待设备复验. 原生组件与 SDK 结果不能代替这些验收.
+原创临时磁盘 + 进程内 HTTP 适配器. 每会话约 120 KB 正文与 32 KB 已完成操作材料, 当前会话 1 个. 不包含真实无线 RTT.
 
-## 本地提交与交付
+| 会话数 | 冷请求, 前 → 后 | 冷响应字节, 前 → 后 | 同连接热请求, 前 → 后 |
+| --- | --- | --- | --- |
+| 16 | 84 → 7 | 3,271,493 → 172,280 | 18 → 3 |
+| 64 | 325 → 8 | 13,083,634 → 204,246 | 67 → 4 |
+| 128 | 647 → 10 | 26,167,098 → 247,118 | 133 → 6 |
 
-- 基线 `adc9591611d9f150634136ee219d37499115b852`.
-- 功能/故障回归阶段 `d3117a5`: 主入口、同步与存储、来源/数学/PDF、视图和对应回归; 已独立审查修复恢复竞态.
-- 工程交付阶段: 公共探针/SDK 性能入口、CI、指南/兼容/回退、历史归档与白名单候选打包. 最终源码 commit 和压缩包/成员摘要由交付目录 `candidate-manifest.json` 绑定, 不在文档中自循环地嵌入包摘要.
-- 2.0.0-beta.1 在候选交付时未替换日常插件或现行桥. 用户随后明确授权本版安装、桥升级和 beta 发布, 不复用 1.1.0 的批准.
+基线热恢复已有缓存, 并非每次重下全部 blob. 基线缓存 UTF-8 2.43/9.74/19.47 MB, 本例候选峰值 120,078 bytes, 默认上限 8 MiB. 这不是 JS 总堆上限. 旧桥缺少 catalogInline 时仍逐 blob 取目录元数据. **按需粒度为会话, 当前会话全文仍需加载**; 40 条可见窗口不等于只下载 40 条.
 
-## 2026-10-27 授权部署
+## 本轮实际验证及证据等级
 
-用户明确要求“安装到 Windows‘数学’库，升级独立远程桥，并发布 GitHub beta”. 已建立仓库外私有备份, 回读文件摘要, 包含旧插件、会话、远程配置/状态、浏览器设备状态及逻辑修改数据库; 不提交这些数据或本机路径.
+- 最终 npm run build / npm test: Node 24.17.0 / Windows, **295 通过, 0 失败/跳过**. 包含构建插件入口、IndexedDB、实际临时磁盘/HTTP、受控 RPC. 基线 245 是本轮重新执行, 非直接引用旧记录.
+- 定向数学 28、同步相关 40、视图/来源 17 项, 已纳入整合验证, 不相加冒充额外覆盖. 全量含旧功能、技能缺失、快照重发、当前两图/历史图预算、旧数据迁移、取消/unknown/隔离、缓存计数、确认前零写入/陈旧拒绝/安全撤销、部分加载导出与迟到事件等.
+- 4 项实际桥故障注入: 全部 save 失败不发布 raw item/turn 完成或消息版本; 正文已保存但 operation 未保存仍不发布 turn 完成; 恢复后只写存储, 重复操作/重启无新 turn/start. 关闭取消失败重试定时器; 迟到终态保存不替换较新运行回合.
+- 浏览器 SDK: 明暗 × 桌面/窄移动外形 4 组, 24 个流式场景, 草稿/选区/滚动/节点身份/导航通过. 不是物理输入法或触屏.
+- Windows 原生组件: 唯一临时插件加载 Obsidian Markdown/MathJax, 原创 49,190 字符无 HR、49,195 有 HR、49,345 混合标题/列表/表格/脚注和附加 DIV, 包含尾公式的源码窗口起点 48,596/49,142/49,244; 206 字符短分析样本亦通过. 保留原公式源码, 旧版本拒绝. 临时插件已清理, 原启用集合、会话状态文件、三份编辑缓冲哈希未变. 修改数据库摘要未有效取得, 不据 null 占位宣称该项保全验收. 初次 helper 对 undefined 数据哈希失败后已修探针, 非产品缺陷.
+- 真实模型仅一次: CLI 0.165.0-alpha.1.2, math-writing 0.3.0-candidate.4, gpt-6.1-sol/low, TEMP/loopback/ephemeral/只读. 原创积分证明 59,306 bytes, 36 KB 测试预算通过稳定定位补读. 实际 offset 0/12,000 两页 body/source 版本一致, 最终含核验词及正确实值/闭区间条件. 工作说明 7,046、当前派生输入 4,116、历史 1,384 bytes. 只读重建后原身份/completed 操作/答案/Prompt/Quote/Context 保留, 无第二次推理. 运行时版本号仍是修改前工作树 beta.1, 不是已发布 beta.2 验收. 两次读取间没有 reasoning 增量, 该条件只由受控回归覆盖.
+- 本轮未重跑 PDF 原生和整套确认写回 UI; 自动回归通过, beta.1 原生事实留在归档. 没有 iPad 真机、物理中文 IME、锁屏/真实切网/VPN、软键盘/触屏、最终包日常安装验收.
 
-- 独立桥: 原进程已不在运行, 启动新版本程序并沿用原配置/配对/StateDir. 实际 `/info` 为 2.0.0-beta.1、协议 2、7 项能力, 技能为 0.3.0-candidate.4. 原 8 个会话、31 条消息和设置保留, 校核期间推理 0 次. 尚无 iPad 真机连接本版的验收.
-- Windows 日常插件: 仅替换 4 个公开构建文件并核对摘要, 使用原生插件 API 重载. 22 个会话、187 条消息的身份/正文/Prompt/快照/任务保持一致; 设置、设备状态、10 份修改记录/9 份写入记录及 3 个打开编辑器缓冲区校核不变. 迁移创建独立规范文件, 原 legacy 字节保留.
-- 已安装 UI: 真实隐藏 CLI 连接与技能检查通过, 模型目录返回 8 项, 运行状态 idle; 原生侧栏 1 个, 首批 40 张消息卡与 332 个 MathJax 节点已挂载. 原阅读上下文恢复. 不是物理 IME、全部主题或 iPad 验收.
-- GitHub beta/跨平台 CI: 已完成, 见以下实际回执. 不以本地安装代替公开发布成功.
+## 数据、兼容与保留限制
 
-### 公开发布回执
+原问题、Prompt、快照、来源/分支/模型设置不压缩改写. schema 2/协议 2 不变, historyReadBodyVersions 和 catalogInline 单独协商. 目录快照 8 份/总 2 MiB/10 分钟, 过期重新开始. 只对实际派生 Prompt 中准确同一来源/版本去重, 不同语义即使同文也独立. 字节预算是保守估计, 不代表模型实际 token 上限.
 
-- [2.0.0-beta.1](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.1): `draft=false`, `prerelease=true`, 7 个资产. 注解 tag 剥离后的源码 commit 为 `50999d6876fc85dfa9a70243f1c9d9d5566ba029`, 与公开 candidate-manifest 一致. 未移动标签或稳定默认分支, `/releases/latest` 仍为 1.1.0.
-- [分支 CI 40423534344](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40423534344): Windows/Ubuntu 的 Node 24 两个 job 均成功. [发布工作流 40423718351](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40423718351) 成功完成构建、测试、白名单打包及公开上传.
-- 全部 7 个资产下载后按 GitHub SHA-256 校验, 两个 ZIP 独立核对 CRC、成员数量/字节及 candidate-manifest 摘要. 插件包 4 个成员, 桥包 16 个成员. 无会话、配对信息、修改数据库或私有技能.
-- 插件 ZIP SHA-256: `840559b2bfed26afe4c3777d319de64d9b9a16882bc2f54c4fbc178e12c93caa`.
-- 独立桥 ZIP SHA-256: `6a074315517f22eaf550a3f1c0645efd68078016705cac51141afff6f38011f4`.
-- Windows 已安装的 main.js/manifest/styles 与公开资产逐字节相同; 将仅有行尾差别的调试 source map 换为公开构建后四文件均相同. 运行中桥代码也与公开 ZIP 一致. 没有因文档、ZIP 时间戳或调试映射差异重复启动模型或覆盖状态.
-- Windows 通过现有私有 HTTPS 入口实际读到新桥 2.0.0-beta.1, 原配对/配置未变. 这仍不是 iPad 设备验收. iPad 的 BRAT 需指定 `2.0.0-beta.1`; 不会把 beta 当作稳定 latest 自动推送给全部用户.
+冲突保存双方与选择, 不按设备时间覆盖不同决议. 采用本机不授权覆盖远端正在生成或不可变输入. 完整导出先补齐正文/操作证据, 不包含独立修改数据库、原 PDF 图片或配对密钥. 旧元数据未知仍未知.
 
-私有备份及详细本机回读保留在仓库外; 启动位置由 LOCAL_DEV.md 指向. 公开提交只记录部署元数据、公开摘要与验收边界. 发布后维护收据提交不会改变已发布标签的源码或资产.
+正常调度/写入成功时, 检查点按 1 秒或 32 KiB 新字节触发, 失败可见报错并保留重试. OS 暂停、慢存储和异常退出会扩大未落盘尾部. 关闭尝试 flush; 写盘持续失败不能保证保存末尾, 已有收据仍用于核对而不是重发. 关键操作不因降队列而丢弃, 合并不跨事务屏障.
+
+GET /sync/storage 只读统计与受保护 dry-run. 根模型覆盖当前实体、分页快照、操作输入/请求/结果、冲突/决议、事务日志/候选/备份及上传. 生产外部事件/迟到凭证根尚未证明完整, CompleteRoots=false, 不给删除候选, GarbageCollectionEnabled=false, 无删除端点. 未加载/已删除不等于无引用, 磁盘增长仍需监控.
+
+完整导出故意读取全部材料, 大历史仍耗时/占内存. beta.1 不理解 unloaded/Evidence, 回退先完整导出并保留新文件, 不能拿旧整份备份覆盖新历史. 具体见 [迁移说明](migration.md) 与 [协议说明](sync-protocol.md).
+
+## 复现、候选与回退
+
+```bash
+npm ci
+npm run build
+npm test
+node --import tsx scripts/check-sync-cost.ts
+node --import tsx scripts/check-checkpoint-cost.ts
+node scripts/check-history-refresh.mjs
+node scripts/check-stream-layout.mjs
+```
+
+浏览器参数、真实调用独占 ledger、只读恢复和原生探针见 [development.md](development.md). 原始输出/失败探针/模型 ledger/native 哈希保留在仓库外私有证据目录, 不把本机路径或正文日志放入公开包.
+
+源码审查并本地提交后, PowerShell 7 执行 scripts/package-candidate.ps1, 从干净 HEAD 重建. 插件固定 4 个成员, 桥固定 17 个公开成员. candidate-manifest.json 绑定完整源码 commit/版本/Node/包与每个成员 SHA-256, 不在源码内自引用包摘要. 包不含个人配置、技能、状态或令牌. 最终源码/工作树与独立读回结果见交付回执; 未 push 或建立 PR/tag/release.
+
+候选交付保留已安装程序的回退副本. 部署时仍需重新备份当时的会话/IndexedDB/草稿、完整桥 StateDir/日志/blob 和配对配置, 不用较早快照覆盖继续产生的历史. 获得新授权后使用同一配对/数据目录, 先桥后客户端, 核对版本与原操作, 再进行 iPad 真机闭环. 本地候选通过不等于已经部署.

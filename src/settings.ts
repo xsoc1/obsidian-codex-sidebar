@@ -1,4 +1,4 @@
-import { PluginSettingTab, Setting, Notice, Platform, type Plugin, type App } from "obsidian";
+import { PluginSettingTab, Setting, Notice, Platform, Modal, type Plugin, type App } from "obsidian";
 import type { SidebarOwner } from "./view-owner";
 import { DefaultInstructions } from "./prompt";
 import { EditScopeOptions, edit_scope } from "./edit/options";
@@ -21,6 +21,24 @@ export class CodexSettings extends PluginSettingTab
 			Button.setDisabled(true); try { await this.Owner.diagnose_environment(); } finally { Button.setDisabled(false); }
 		}));
 		const Notes = this.Owner.NoteSessions;
+		new Setting(this.containerEl).setName("完整会话备份").setDesc("读取当前连接的全部历史及操作凭证后导出 JSON, 包含原文与冲突决议. 读取失败时不生成不完整备份; 配对密钥不包含在导出中.").addButton(Button => Button.setButtonText("导出会话").onClick(async () =>
+		{
+			Button.setDisabled(true);
+			try
+			{
+				const Text = await this.Owner.export_conversations(), Dialog = new Modal(this.app);
+				Dialog.contentEl.createEl("h3", { text: "完整会话导出" });
+				Dialog.contentEl.createEl("p", { text: "包含聊天、来源与操作证据, 请保存在私人位置. 此导出不包含设备修改数据库与 PDF 图片字节." });
+				const Save = Dialog.contentEl.createEl("button", { text: "下载 JSON", attr: { type: "button" } });
+				Save.addEventListener("click", () =>
+				{
+					const Url = URL.createObjectURL(new Blob([Text], { type: "application/json;charset=utf-8" }));
+					const Link = Dialog.contentEl.createEl("a", { attr: { href: Url, download: "codex-conversations.json" } }); Link.click(); Link.remove(); setTimeout(() => URL.revokeObjectURL(Url), 1000);
+				}); Dialog.open();
+			}
+			catch(E) { new Notice(error_text(E)); }
+			finally { Button.setDisabled(false); }
+		}));
 		const NoteError = this.Owner.NoteSessionError || Notes?.Error;
 		new Setting(this.containerEl).setName("随笔记切换会话").setDesc(NoteError || "打开 Markdown 笔记或 PDF 时切换到对应会话. 已有会话和关联保留; 有草稿或正在回复时等待当前操作结束.")
 			.addToggle(Toggle => Toggle.setValue(!!Notes?.Data.Enabled).setDisabled(!Notes).onChange(async Value =>

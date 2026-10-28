@@ -116,11 +116,11 @@ export function write_state_file(Files: StateFiles, Canonical: string, Data: unk
 		if(Current === Target) { Expected.set(Canonical, Current); return; }
 		const Staged = Canonical + ".save.stage.json", Journal = Canonical + ".save.journal.json", Backup = Canonical + ".last-committed.json";
 		await checked_write(Files, Staged, Target);
-		if(Current !== null) { await checked_write(Files, Backup, Current); }
+		if(Current !== null && await raw_file(Files, Backup) !== Current) { await checked_write(Files, Backup, Current); }
 		const Receipt: SaveReceipt = { SchemaVersion: 1, Status: "pending", Canonical, Staged, Backup, PreviousDigest: await content_digest(Current), TargetDigest: await content_digest(Target) };
 		await checked_write(Files, Journal, JSON.stringify(Receipt));
 		if(await raw_file(Files, Canonical) !== Current) { throw new Error("保存期间当前文件发生并发变化, 保留候选与当前内容"); }
-		await checked_write(Files, Canonical, Target); parse_state(await Files.read(Canonical));
+		await checked_write(Files, Canonical, Target);
 		await checked_write(Files, Backup, Target); await checked_write(Files, Journal, JSON.stringify({ ...Receipt, Status: "committed" })); Expected.set(Canonical, Target);
 	});
 	Queue.set(Canonical, Work); return Work;

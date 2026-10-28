@@ -1,6 +1,16 @@
 # 2.0 候选升级、迁移与回退
 
-适用 `2.0.0-beta.1`, 从 1.1.0 升级. 用户已在候选交付后授权本版 Windows 安装、独立桥升级和 GitHub beta 发布. 协议与兼容矩阵见 [sync-protocol.md](sync-protocol.md), 实际部署和测试结果见 [reliability-suite.md](reliability-suite.md).
+当前适用 `2.0.0-beta.2` 候选, 包括从 beta.1 的增量升级和原 1.1.0 迁移. beta.1 已发布, beta.2 尚未授权安装或发布. 协议与兼容矩阵见 [sync-protocol.md](sync-protocol.md), 实际部署和测试结果见 [reliability-suite.md](reliability-suite.md).
+
+## beta.1 到 beta.2
+
+规范文件仍为 schema 2, 同步协议仍为 2. 本次增加可选 `Sync.History` 加载标记、`Sync.Resolutions` 冲突决议和已结束操作的 `Evidence` 内容引用. 原记录不批量改写, 不补造未知 Phase/完成状态. 本机历史与远程配对身份不变, PDF 图片与修改数据库不迁入会话状态.
+
+首次恢复只载当前会话正文及运行/未知操作证据. 其他会话显示目录并标记 unloaded, 打开、引用跳转、重发和完整导出按需读取. 本地较新消息和删除标记继续保留; 失败不会把未加载当成空历史写回. 快速切换时仅最后一次选择生效. “采用本机”保留当前显示及审计选择, 不授权改写已提交输入或远端正在生成的正文.
+
+新增 `historyReadBodyVersions` 与 `catalogInline` 能力单独协商. 旧桥没有内联能力时使用 blob 读取; 没有正文版本补读能力时, 依赖它的长引用明确拒绝并提示升级, 不省略必需原文. 升级先桥后客户端.
+
+回退到 beta.1 时, 旧程序不理解 unloaded 和轻量 Evidence, 不能直接将部分加载文件当作完整权威状态. 先在 beta.2 中完整导出, 保留当前规范文件、全部桥 blob/日志、浏览器草稿和修改数据库, 在独立副本核对兼容性. 本版没有自动降级工具. 换旧程序不等于批准用旧备份覆盖升级后新历史.
 
 ## 升级顺序
 

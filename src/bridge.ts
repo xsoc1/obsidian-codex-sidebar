@@ -7,7 +7,7 @@ import { CodexConnection, type RpcMessage } from "./rpc";
 import { CompletionService } from "./completion";
 import { math_writing_skill, skill_input } from "./skills";
 import { run_options, type ModelInfo } from "./controls";
-import { environment_instructions } from "./prompt";
+import { environment_instructions, derived_message_prompt } from "./prompt";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcConnection } from "./remote";
 import { skill_version } from "./desktop";
@@ -17,6 +17,7 @@ import { canonical_json, SyncBudgets, SyncCapabilities, SyncProtocol, type SendO
 import { restore_sessions } from "./sessions";
 import { HistoryReadTool, read_history_page } from "./history-budget";
 import { tool_read_reference, type SourceReference } from "./sources";
+import { StreamCheckpoints } from "./runtime/checkpoints";
 
 export interface BridgeConfig
 {
@@ -42,6 +43,16 @@ const bounded_string = (Value: unknown, Limit: number): string =>
 
 class DeviceAgent
 {
+	private Checkpoints = new StreamCheckpoints(undefined, undefined, () => this.event({ method: "bridge/storage-error", params: { message: "中间正文存储失败, 未发布对应版本; 将重试保存, 不重发推理" } }));
+	private checkpoint_key(Session: string, Message: string): string { return JSON.stringify([Session, Message]); }
+	private checkpoint_message(ThreadId: string, TurnId: string, Id: string): void
+	{
+		const Thread = this.Threads.get(ThreadId); if(!Thread || this.Store.is_deleted(Thread.Session) || this.Store.is_message_deleted(Thread.Session, Id)) { return; }
+		const Stored = this.Messages.get(this.checkpoint_key(Thread.Session, Id)); if(!Stored || Stored.Message.TurnId !== TurnId) { return; }
+		this.Store.observe_message(Thread.Session, Stored.Message);
+		const Version = this.Store.message_version(Thread.Session, Id);
+		if(Version) { this.event({ method: "bridge/message-checkpoint", params: { threadId: ThreadId, turnId: TurnId, syncMessage: { ...Version, sessionId: Thread.Session, messageId: Id } } }); }
+	}
 	private PdfImages: BridgePdfImages;
 	Connection: RpcConnection | null = null;
 	private Ready: Promise<void> | null = null;
@@ -166,7 +177,7 @@ class DeviceAgent
 				}
 				else if(Value.method === "item/tool/call" && Value.params?.tool === HistoryReadTool.name && this.Threads.has(Value.params.threadId))
 				{
-					try { const SessionId = this.Threads.get(Value.params.threadId)!.Session; const Messages = (this.State?.Sessions?.find((S: any) => S.Id === SessionId)?.Messages ?? []).filter((M: any) => !this.Store.is_message_deleted(SessionId, M.Id)); Connection?.send({ id: Value.id, result: await read_history_page(SessionId, Messages, Value.params.arguments) }); }
+					try { const SessionId = this.Threads.get(Value.params.threadId)!.Session; const Messages = (this.State?.Sessions?.find((S: any) => S.Id === SessionId)?.Messages ?? []).filter((M: any) => !this.Store.is_message_deleted(SessionId, M.Id)); Connection?.send({ id: Value.id, result: await read_history_page(SessionId, Messages, Value.params.arguments, this.Store.Scope) }); }
 					catch(ErrorValue) { Connection?.send({ id: Value.id, result: { success: false, contentItems: [{ type: "inputText", text: String(ErrorValue) }] } }); }
 				}
 				else
@@ -180,16 +191,14 @@ class DeviceAgent
 		const Thread = this.Threads.get(Params?.threadId);
 		const MessageId = Params?.itemId ?? (["agentMessage", "reasoning"].includes(Params?.item?.type) ? Params.item.id : undefined);
 		if(Thread && MessageId && this.Store.is_message_deleted(Thread.Session, MessageId)) { return; }
-		this.Events.push({ seq: ++this.Seq, message: Value });
-		if(this.Events.length > 4096)
-		{
-			this.Events.splice(0, this.Events.length - 4096);
-		}
+		if(Thread && MessageId && this.Messages.get(this.checkpoint_key(Thread.Session, MessageId))?.Message.CompletionStatus && ["item/agentMessage/delta", "item/reasoning/summaryTextDelta", "item/completed"].includes(Value.method ?? "")) { return; }
+		const Terminal = !!Thread && ["item/completed", "turn/completed"].includes(Value.method ?? "");
+		if(!Terminal) { this.publish_event(Value); }
 		if(Thread && Params)
 		{
 			if(Value.method === "turn/started" || Value.method === "turn/completed")
 			{
-				Thread.Turn = { id: Params.turn.id, status: Params.turn.status, items: [] };
+				if(Value.method === "turn/started") { Thread.Turn = { id: Params.turn.id, status: Params.turn.status, items: [] }; }
 				if(Value.method === "turn/completed")
 				{
 					for(const Stored of this.Messages.values())
@@ -197,13 +206,13 @@ class DeviceAgent
 						if(Stored.Session === Thread.Session && Stored.Message.TurnId === Params.turn.id)
 						{
 							Stored.Message.CompletionStatus = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "interrupted" : "failed";
+							this.Checkpoints.forget(JSON.stringify([this.Store.Scope, Thread.Session, Params.turn.id, Stored.Message.Id]));
 							Stored.Seq = this.Seq;
 							const Session = this.State?.Sessions?.find((Entry: any) => Entry.Id === Thread.Session);
 							const Message = Session?.Messages.find((Entry: any) => Entry.Id === Stored.Message.Id);
 							if(Message)
 							{
 								Message.CompletionStatus = Stored.Message.CompletionStatus;
-								this.Store.observe_message(Thread.Session, Message);
 							}
 						}
 					}
@@ -218,7 +227,7 @@ class DeviceAgent
 			if(Value.method === "item/agentMessage/delta" || Value.method === "item/reasoning/summaryTextDelta" || (Value.method === "item/completed" && ["agentMessage", "reasoning"].includes(Params.item?.type)))
 			{
 				const Id = Params.itemId ?? Params.item.id;
-				const Previous = this.Messages.get(Id)?.Message;
+				const Previous = this.Messages.get(this.checkpoint_key(Thread.Session, Id))?.Message;
 				const Reasoning = Value.method === "item/reasoning/summaryTextDelta" || Params.item?.type === "reasoning";
 				const Refs = this.ReadSources.get(Params.threadId + ":" + Params.turnId) ?? Previous?.Sources;
 				const Message = { Id, TurnId: Params.turnId, Role: Reasoning ? "reasoning" : "assistant", Text: Previous?.Text ?? "", SummaryParts: Previous?.SummaryParts as string[] | undefined, Phase: Previous?.Phase ?? null, ...(Refs?.length ? { Sources: Refs } : {}) };
@@ -237,12 +246,13 @@ class DeviceAgent
 				{
 					Message.Text += Params.delta;
 				}
-				this.Messages.set(Id, { Session: Thread.Session, Message, Seq: this.Seq });
-				if(Value.method === "item/completed" || this.Seq % 16 === 0)
+				this.Messages.set(this.checkpoint_key(Thread.Session, Id), { Session: Thread.Session, Message, Seq: this.Seq });
+				const CheckpointKey = JSON.stringify([this.Store.Scope, Thread.Session, Params.turnId, Id]);
+				if(Value.method === "item/completed")
 				{
-					this.Store.observe_message(Thread.Session, Message);
-					const Version = this.Store.message_version(Thread.Session, Message.Id); if(Version) { Params.syncMessage = { ...Version, sessionId: Thread.Session, messageId: Message.Id }; }
+					this.Checkpoints.forget(CheckpointKey);
 				}
+				else { this.Checkpoints.offer(CheckpointKey, Buffer.byteLength(Params.delta ?? ""), () => this.checkpoint_message(Params.threadId, Params.turnId, Id)); }
 				const Session = this.State?.Sessions?.find((Entry: any) => Entry.Id === Thread.Session);
 				if(Session)
 				{
@@ -266,13 +276,27 @@ class DeviceAgent
 			}
 			if(["item/completed", "turn/completed"].includes(Value.method ?? ""))
 			{
-				if(Value.method === "turn/completed")
+				const TurnId = Params.turn?.id ?? Params.turnId, Key = JSON.stringify([this.Store.Scope, Thread.Session, TurnId, Value.method, MessageId ?? "terminal"]);
+				this.Checkpoints.offer(Key, 0, () =>
 				{
-					for(const Operation of this.Store.Data.Operations.filter(O => O.TurnId === Params.turn.id)) { const Updated = structuredClone(Operation); Updated.Status = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "cancelled" : "failed"; this.Store.put_operation(Updated); }
-				}
-				this.save();
+					if(Value.method === "turn/completed")
+					{
+						for(const Stored of this.Messages.values()) { if(Stored.Session === Thread.Session && Stored.Message.TurnId === TurnId) { this.checkpoint_message(Params.threadId, TurnId, Stored.Message.Id); } }
+						for(const Operation of this.Store.Data.Operations.filter(O => O.TurnId === TurnId)) { const Updated = structuredClone(Operation); Updated.Status = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "cancelled" : "failed"; this.Store.put_operation(Updated); }
+					}
+					else if(MessageId) { this.checkpoint_message(Params.threadId, TurnId, MessageId); }
+					this.save();
+					if(Value.method === "turn/completed" && (!Thread.Turn || Thread.Turn.id === TurnId)) { Thread.Turn = { id: TurnId, status: Params.turn.status, items: [] }; }
+					this.publish_event(Value);
+				});
+				this.Checkpoints.flush(Key);
 			}
 		}
+	}
+	private publish_event(Value: RpcMessage): void
+	{
+		this.Events.push({ seq: ++this.Seq, message: Value });
+		if(this.Events.length > 4096) { this.Events.splice(0, this.Events.length - 4096); }
 	}
 
 	private owned(Id: unknown): string
@@ -331,13 +355,13 @@ class DeviceAgent
 	async info(): Promise<any>
 	{
 		await this.ready();
-		return { client: this.Id, dataIdentity: this.Store.Data.Identity, agentInstance: this.AgentInstance, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, bridgeVersion: ProductVersion, protocolVersion: SyncProtocol, capabilities: { ...SyncCapabilities, historyRead: 1 }, budgets: SyncBudgets, pdfPageImages: 1, mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
+		return { client: this.Id, dataIdentity: this.Store.Data.Identity, agentInstance: this.AgentInstance, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, bridgeVersion: ProductVersion, protocolVersion: SyncProtocol, capabilities: { ...SyncCapabilities, historyRead: 1, historyReadBodyVersions: 1 }, budgets: SyncBudgets, pdfPageImages: 1, mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
 	}
 
 	events(After: number, Protocol = 1): any
 	{
 		const Page = this.Events.filter(Entry => Entry.seq > After).slice(0, 256), Cursor = Page.at(-1)?.seq ?? this.Seq;
-		const Events = Protocol < 2 ? Page : Page.flatMap(Entry =>
+		const Events = Protocol < 2 ? Page.filter(E => E.message.method !== "bridge/message-checkpoint") : Page.flatMap(Entry =>
 		{
 			const M = Entry.message, P = M.params;
 			if(P?.syncMessage) { return [{ seq: Entry.seq, message: { method: "bridge/message-ref", params: { ...P.syncMessage, threadId: P.threadId, turnId: P.turnId } } }]; }
@@ -499,10 +523,10 @@ class DeviceAgent
 			const Thread = this.Threads.get(Id)!;
 			const Session = this.State?.Sessions?.find((Entry: any) => Entry.Id === Thread.Session);
 			const User = Session?.Messages.filter((Entry: any) => Entry.Role === "user").at(-1);
-			if(User && !User.TurnId && User.Prompt === Text)
+			if(User && !User.TurnId && (User.Prompt === Text || derived_message_prompt(User) === Text))
 			{
 				User.TurnId = Result.turn.id;
-				this.Messages.set(User.Id, { Session: Thread.Session, Message: structuredClone(User), Seq: this.Seq + 1 });
+				this.Messages.set(this.checkpoint_key(Thread.Session, User.Id), { Session: Thread.Session, Message: structuredClone(User), Seq: this.Seq + 1 });
 				this.Store.observe_message(Thread.Session, User);
 				this.save();
 			}
@@ -564,6 +588,10 @@ class DeviceAgent
 		if(!Operation) { return { operation: null }; }
 		return { operation: this.operation_meta(Operation) };
 	}
+	storage_report(): any
+	{
+		return { ...this.Store.storage_report(), Checkpoints: { ...this.Checkpoints.Stats }, EventReferences: this.Events.length, OperationSnapshots: this.OperationSnapshots.size, GarbageCollectionEnabled: false };
+	}
 	private OperationSnapshots = new Map<string, any[]>();
 	private operation_meta(Operation: SendOperation): any
 	{
@@ -593,7 +621,7 @@ class DeviceAgent
 		if(!Incoming || Incoming.Scope !== this.Store.Scope || typeof Incoming.Id !== "string" || Incoming.Id.length > 100 || typeof Incoming.SessionId !== "string" || typeof Incoming.MessageId !== "string") { throw new Error("发送操作身份或作用域无效"); }
 		const Digest = token_hash(canonical_json({ Scope: Incoming.Scope, SessionId: Incoming.SessionId, MessageId: Incoming.MessageId, Input })), RequestDigest = token_hash(canonical_json(Params));
 		if(Digest !== Incoming.Digest) { throw new Error("发送操作输入摘要不一致"); }
-		if(typeof Input?.Prompt !== "string" || Params?.input?.[0]?.type !== "text" || Params.input[0].text !== Input.Prompt) { throw new Error("解析后的问题不等于不可变操作输入, 不复用身份提交"); }
+		if(typeof Input?.Prompt !== "string" || Params?.input?.[0]?.type !== "text" || ![Input.Prompt, derived_message_prompt({ Text: "", Prompt: Input.Prompt, Context: Input.Context, Quote: Input.Quote })].includes(Params.input[0].text)) { throw new Error("解析后的问题不等于不可变操作输入或其已核对派生表示, 不复用身份提交"); }
 		if(Input.Run?.Model && Input.Run.Model !== Params.model || Input.Run?.Effort && Input.Run.Effort !== Params.effort || typeof Input.Run?.Fast === "boolean" && Input.Run.Fast !== ["priority", "fast"].includes(Params.serviceTier)) { throw new Error("解析后的模型选择不同于已保存操作, 请新建分支"); }
 		const Images = Params.input.slice(2);
 		if(Images.length && (!Array.isArray(Input.PdfRefs) || Images.length !== Input.PdfRefs.length || Images.some((I: any, N: number) => I.url !== "obsidian-pdf:" + Input.PdfRefs[N]?.Id))) { throw new Error("PDF 输入不同于已保存的原始引用"); }
@@ -630,6 +658,7 @@ class DeviceAgent
 
 	close(): void
 	{
+		this.Checkpoints.flush(); this.Checkpoints.close();
 		this.Completion.close(); this.Connection?.close(); this.Connection = null;
 	}
 }
@@ -714,6 +743,7 @@ export class RemoteBridge
 				Result = Agent.sync_page(Url.pathname === "/sync/catalog" ? "catalog" : "history", Revision, Number(Url.searchParams.get("offset") ?? 0), Url.searchParams.get("session") ?? undefined);
 			}
 			else if(Request.method === "GET" && Url.pathname === "/sync/blob") { Result = Agent.Store.blob_part(Url.searchParams.get("id") ?? "", Number(Url.searchParams.get("index") ?? 0)); }
+			else if(Request.method === "GET" && Url.pathname === "/sync/storage") { Result = Agent.storage_report(); }
 			else if(Request.method === "POST" && Url.pathname === "/sync/blob") { Result = Agent.Store.put_part(Body); }
 			else if(Request.method === "POST" && Url.pathname === "/sync/delta") { Result = Agent.sync_delta(Body); }
 			else if(Request.method === "GET" && Url.pathname === "/operations") { Result = Url.searchParams.has("id") ? Agent.operation_status(Url.searchParams.get("id")!) : Agent.operation_list(Number(Url.searchParams.get("offset") ?? 0), Url.searchParams.get("snapshot") ?? undefined); }

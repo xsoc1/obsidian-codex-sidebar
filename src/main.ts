@@ -3,7 +3,7 @@ import {
 	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, parseYaml, type App
 } from "obsidian";
 import { ContextCapture } from "./context";
-import { build_prompt, DefaultInstructions, client_instructions, migrate_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
+import { build_prompt, derived_message_prompt, assert_quote_read_capability, DefaultInstructions, client_instructions, migrate_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
 import { answer_quote, answer_status } from "./quote";
 import { followup_summary } from "./followup";
 import { branch_prefix, history_items, type ChatMessage } from "./history";
@@ -47,11 +47,15 @@ import { ensure_sync, create_send_operation, update_operation } from "./sync/ope
 import type { SendOperation, OperationStatus } from "./sync/types";
 import { content_digest } from "./sync/types";
 import { load_state_file, validate_saved_state, write_state_file } from "./runtime/state-store";
-import { build_history_input, plan_history_input, HistoryReadTool, read_history_page, type HistoryBudgetOptions } from "./history-budget";
+import { build_history_input, plan_history_input, HistoryReadTool, history_read_tool, read_history_page, type HistoryBudgetOptions } from "./history-budget";
 import { source_reference, tool_read_reference, rename_sources, type SourceReference } from "./sources";
 import { write_late_receipt, apply_late_receipts } from "./runtime/receipts";
 import { message_checkpoint } from "./runtime/message-events";
 import { merge_sync_metadata } from "./sync/metadata";
+import { SnapshotQueue, StreamCheckpoints } from "./runtime/checkpoints";
+import { OperationViewIndex } from "./runtime/operation-view";
+import { MessageIndex } from "./runtime/message-index";
+import { prepare_conflict_resolution, pending_conflicts, preserve_durable_resolved_messages } from "./sync/conflicts";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -105,6 +109,22 @@ async function instruction_hash(Text: string): Promise<string>
 
 export default class CodexSidebarPlugin extends Plugin
 {
+	private readonly Writes = new SnapshotQueue();
+	private readonly Checkpoints = new StreamCheckpoints();
+	private readonly OperationViews = new OperationViewIndex();
+	private readonly MessagesById = new MessageIndex();
+	private EditHistoryDirty = true;
+	private LastEditData: unknown;
+	private LastEditSession: ChatSession | null = null;
+	private SessionChoice = 0;
+	private history_changed(SessionId?: string, Ids?: readonly string[], EditRelevant = true): void
+	{
+		if(EditRelevant) { this.EditHistoryDirty = true; }
+		for(const Leaf of this.app.workspace.getLeavesOfType(ViewType))
+		{
+			if(Leaf.view instanceof CodexView) { for(const Id of SessionId ? [SessionId] : this.State.Sessions.map(S => S.Id)) { Leaf.view.history_changed(Id, Ids); } }
+		}
+	}
 	readonly Runtime = new RunLifecycle();
 	private Diagnosing = false;
 	private LastInputLedger = new Map<string, ChatMessage["InputLedger"]>();
@@ -132,13 +152,13 @@ export default class CodexSidebarPlugin extends Plugin
 			if(Message) { Message.TurnId = Result.turn.id; } else if(!Session) { Current.SessionDeleted = true; } else if(message_deleted(State, Current.SessionId, Current.MessageId)) { Current.MessageDeleted = true; }
 			if(this.Unloaded && Current.Status === "running") { Current.Status = "submission-unknown"; Current.Error = "插件已关闭, 原接收凭证保留, 运行结果需恢复后核对"; }
 		}
-		Object.assign(Operation, Current); await this.save_target(Target); return Result;
+		Object.assign(Operation, Current); this.history_changed(Current.SessionId); await this.save_target(Target); return Result;
 	}
 	get RuntimeState() { return { Stage: this.Runtime.Stage }; }
 	get CanStop(): boolean { return this.Runtime.CanStop || this.Busy || this.ChatPreparing || !!this.Connecting || !!this.TurnId; }
 	operation_state(Id: string): Pick<SendOperation, "Status" | "Error" | "TurnId" | "Attempted"> | null
 	{
-		return this.State.Sync?.Operations.find(O => O.Id === Id) ?? (this.State.Outbox?.some(O => O.Id === Id) ? { ...this.State.Outbox.find(O => O.Id === Id)!, Attempted: false } : null);
+		return this.OperationViews.get(Id, this.State.Sync?.Operations, this.State.Outbox);
 	}
 	async resume_operation(Id: string): Promise<void>
 	{
@@ -172,8 +192,48 @@ export default class CodexSidebarPlugin extends Plugin
 		});
 		if(!Accepted) { return; }
 		if(Scope !== this.local_scope() || !Conflicts.includes(C) || JSON.stringify(C) !== Stamp || JSON.stringify(Session.Messages[Index]) !== MessageStamp || !this.State.Sessions.includes(Session)) { throw new Error("确认期间冲突或消息发生变化, 未覆盖后续内容"); }
-		const Audit = ((this.State as any).ResolvedConflicts ??= []); Audit.push({ ...structuredClone(C), Choice }); Session.Messages[Index] = structuredClone(Candidate as ChatMessage);
-		Conflicts.splice(Conflicts.indexOf(C), 1); await this.persist(); this.refresh();
+		const Resolution = await prepare_conflict_resolution(this.State.Sync?.Scope ?? Scope, C, Choice), Target = this.state_target();
+		await this.Writes.enqueue(async () =>
+		{
+			const CurrentConflicts = this.State.Sync?.Conflicts ?? this.State.MessageConflicts ?? [];
+			if(Scope !== this.local_scope() || !CurrentConflicts.some(Current => JSON.stringify(Current) === Stamp) || this.State.Sessions.find(S => S.Id === SessionId)?.Messages.find(M => M.Id === MessageId) !== Session.Messages[Index] || JSON.stringify(Session.Messages[Index]) !== MessageStamp || JSON.stringify(C) !== Stamp) { throw new Error("保存前原消息或冲突已变化, 请重新核对"); }
+			const Next = structuredClone(this.State), Sync = ensure_sync(Next, Resolution.Scope);
+			Sync.Resolutions = [...(Sync.Resolutions ?? []), Resolution]; Sync.Conflicts = pending_conflicts(Sync.Conflicts, Sync.Resolutions);
+			Next.MessageConflicts = pending_conflicts(Next.MessageConflicts ?? [], Sync.Resolutions);
+			Next.Sessions.find(S => S.Id === SessionId)!.Messages[Index] = structuredClone(Candidate as ChatMessage);
+			await write_state_file(this.app.vault.adapter, Target.Path, Next);
+			if(Scope === this.local_scope() && !this.Unloaded) { this.merge_restored(Next); }
+		});
+		if(Scope === this.local_scope() && !this.Unloaded) { this.history_changed(SessionId); this.refresh(); await this.persist(); }
+	}
+	async ensure_session_history(Id: string): Promise<void>
+	{
+		if(this.State.Sync?.History?.[Id]?.Status !== "unloaded") { return; }
+		const Scope = this.local_scope();
+		await this.ensure_connection();
+		if(Scope !== this.local_scope() || this.Unloaded) { throw new Error("历史加载前连接已切换, 未读取新连接中的同名会话"); }
+		const Connection = this.Connection;
+		if(!(Connection instanceof RemoteConnection)) { throw new Error("原会话正文尚未加载, 需要原远程连接; 未当作空会话"); }
+		const State = await Connection.hydrate_session(this.State, Id);
+		if(Connection !== this.Connection || Scope !== this.local_scope() || this.Unloaded) { throw new Error("读取期间连接已切换, 未把原会话合并到新连接"); }
+		this.merge_restored(State);
+		if(this.State.Sync?.History?.[Id]?.Status === "unloaded") { throw new Error("会话正文仍未完整加载, 请核对连接"); }
+		await this.persist(false); this.refresh();
+	}
+	async export_conversations(): Promise<string>
+	{
+		const Scope = this.local_scope();
+		if(this.Remote.Enabled) { await this.ensure_connection(); }
+		if(Scope !== this.local_scope() || this.Unloaded) { throw new Error("导出前连接已切换, 请重新导出当前连接"); }
+		const Connection = this.Connection;
+		if(Connection instanceof RemoteConnection)
+		{
+			const Complete = await Connection.hydrate_all(this.State);
+			if(Connection !== this.Connection || Scope !== this.local_scope() || this.Unloaded) { throw new Error("导出期间连接已变化, 未导出不完整记录"); }
+			this.merge_restored(Complete); await this.persist(false);
+		}
+		if(this.State.Sessions.some(S => !this.State.DeletedSessionIds?.includes(S.Id) && this.State.Sync?.History?.[S.Id]?.Status === "unloaded")) { throw new Error("仍有未加载正文, 未导出不完整记录"); }
+		return JSON.stringify({ SchemaVersion: 2, Scope: this.State.Sync?.Scope ?? "desktop", Sessions: this.State.Sessions, ActiveId: this.State.ActiveId, DeletedSessionIds: this.State.DeletedSessionIds, DeletedMessages: this.State.DeletedMessages, Sync: this.State.Sync, Outbox: this.State.Outbox, ResolvedConflicts: (this.State as any).ResolvedConflicts }, null, 2);
 	}
 	private local_scope(): string { return this.Remote.Enabled ? "remote-local:" + this.Remote.CacheId : "desktop:" + this.app.vault.getName(); }
 	draft_scope(): string { return this.local_scope() + ":" + (this.Remote.CacheId ?? "local"); }
@@ -232,6 +292,7 @@ export default class CodexSidebarPlugin extends Plugin
 		const Fresh = this.State, Merged = restore_sessions(Fresh, Restored, this.NoteSessions?.Data.Enabled ? this.NoteSessions.Data.Links.map(L => L.SessionId) : [], !this.NoteSessions?.Manual);
 		if(Restored.Sync) { Merged.Sync = merge_sync_metadata(Merged.Sync, Restored.Sync); }
 		this.State = { ...Fresh, ...Merged, Settings: Bootstrap && !Fresh.Settings.Model ? { ...Fresh.Settings, Model: Restored.Settings.Model, Effort: Restored.Settings.Effort } : Fresh.Settings, Outbox: Fresh.Outbox };
+		this.history_changed();
 	}
 
 	async diagnose_environment(): Promise<void>
@@ -442,7 +503,7 @@ export default class CodexSidebarPlugin extends Plugin
 			try
 			{
 				for(const Session of this.State.Sessions) { for(const Message of Session.Messages) { if(Message.Sources) { Message.Sources = rename_sources(Message.Sources, Old, File.path); } if(Message.Quote?.SourceReferences) { Message.Quote.SourceReferences = rename_sources(Message.Quote.SourceReferences, Old, File.path); } } }
-				this.NoteSessions?.rename(Old, File.path); this.observe_note_file(); this.persist_background();
+				this.history_changed(); this.NoteSessions?.rename(Old, File.path); this.observe_note_file(); this.persist_background();
 			}
 			catch(ErrorValue) { this.NoteSessionError = error_text(ErrorValue); this.refresh(); }
 		}));
@@ -796,8 +857,11 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			return;
 		}
-		this.Edits?.consume(this.Session.Messages);
-		this.Edits?.Cache.poll();
+		if(this.EditHistoryDirty || this.LastEditSession !== this.Session || this.LastEditData !== this.Edits?.Store.Data)
+		{
+			this.EditHistoryDirty = false; this.LastEditSession = this.Session; this.LastEditData = this.Edits?.Store.Data;
+			this.Edits?.consume(this.Session.Messages); this.Edits?.Cache.poll();
+		}
 		this.Ribbon?.toggleClass("is-active", this.app.workspace.getLeavesOfType(ViewType).length > 0);
 		for(const Leaf of this.app.workspace.getLeavesOfType(ViewType))
 		{
@@ -814,17 +878,21 @@ export default class CodexSidebarPlugin extends Plugin
 		if(this.SessionDeletion) { return this.SessionDeletion.then(() => this.persist(SyncRemote)); }
 		return this.persist_snapshot(this.State, SyncRemote);
 	}
-	private persist_snapshot(State: SavedState, SyncRemote: boolean, Target = this.state_target()): Promise<void>
+	private persist_snapshot(State: SavedState, SyncRemote: boolean, Target = this.state_target(), CheckpointKey?: string): Promise<void>
 	{
 		const Data: SavedState = structuredClone(State); normalize_outbox(Data); Data.SchemaVersion = 2; validate_saved_state(Data);
 		const Connection = Target.Connection instanceof RemoteConnection ? Target.Connection : null, Cursor = Connection?.cursor_snapshot() ?? 0;
-		const QueueWrite = (Work: () => Promise<void>): Promise<void> => { this.SaveQueue = this.SaveQueue.catch(() => {}).then(Work); return this.SaveQueue; };
+		const QueueWrite = (Work: () => Promise<void>, Key?: string): Promise<void> => { this.SaveQueue = this.Writes.enqueue(Work, Key); return this.SaveQueue; };
 		const Local = QueueWrite(async () =>
 		{
-			const Current = Target.Scope === this.local_scope() ? this.State : Target.State;
-			if(Current.Sync) { Data.Sync = merge_sync_metadata(Data.Sync, Current.Sync); }
+			// Preserve earlier durable acknowledgements, never import a future in-memory terminal state.
+			if(await this.app.vault.adapter.exists(Target.Path))
+			{
+				const Durable = JSON.parse(await this.app.vault.adapter.read(Target.Path));
+				if(Durable.Sync) { Data.Sync = merge_sync_metadata(Data.Sync, Durable.Sync); preserve_durable_resolved_messages(Data, Durable); }
+			}
 			await write_state_file(this.app.vault.adapter, Target.Path, Data);
-		});
+		}, CheckpointKey);
 		if(!Target.Remote || !Connection || !SyncRemote) { return Local; }
 		return Local.then(async () =>
 		{
@@ -836,9 +904,10 @@ export default class CodexSidebarPlugin extends Plugin
 					await QueueWrite(async () =>
 					{
 						// Merge acknowledgements only, never replay an old whole snapshot.
-						const Fresh: SavedState = Target.Scope === this.local_scope() && !this.Unloaded ? this.State : JSON.parse(await this.app.vault.adapter.read(Target.Path));
+						const Fresh: SavedState = JSON.parse(await this.app.vault.adapter.read(Target.Path));
 						Fresh.Sync = merge_sync_metadata(Fresh.Sync, Data.Sync!); normalize_outbox(Fresh); Fresh.SchemaVersion = 2; validate_saved_state(Fresh);
 						await write_state_file(this.app.vault.adapter, Target.Path, structuredClone(Fresh));
+						if(Target.Scope === this.local_scope() && !this.Unloaded) { this.State.Sync = merge_sync_metadata(this.State.Sync, Fresh.Sync!); }
 					});
 				}
 			}
@@ -851,6 +920,17 @@ export default class CodexSidebarPlugin extends Plugin
 		void this.persist().catch(ErrorValue =>
 		{
 			if(!this.Unloaded && Generation === this.Generation) { this.Status = error_text(ErrorValue); this.refresh(); }
+		});
+	}
+	private stream_checkpoint(Session: ChatSession, MessageId: string, AddedBytes: number): void
+	{
+		const Target = this.state_target(), Message = this.MessagesById.get(Session, MessageId);
+		if(!Message || Message.CompletionStatus) { return; }
+		const Key = JSON.stringify([Target.Scope, Session.Id, Message.TurnId ?? "", MessageId]);
+		this.Checkpoints.offer(Key, AddedBytes, () =>
+		{
+			if(this.Unloaded || Target.Scope !== this.local_scope() || this.State.DeletedSessionIds?.includes(Session.Id)) { return; }
+			void this.persist_snapshot(this.State, false, Target, Key).catch(E => { this.Status = error_text(E); this.refresh(); });
 		});
 	}
 
@@ -1113,6 +1193,9 @@ export default class CodexSidebarPlugin extends Plugin
 		await this.ensure_connection();
 		await this.ensure_math_skill();
 		if(Ticket) { this.Runtime.check(Ticket); }
+		await this.ensure_session_history(Ticket?.SessionId ?? this.State.ActiveId);
+		if(Ticket) { this.Runtime.check(Ticket); }
+		if(Target.Scope !== this.local_scope() || this.Unloaded) { throw new PreparationCancelled(); }
 		const State = this.target_state(Target), Session = State.Sessions.find(S => S.Id === (Ticket?.SessionId ?? State.ActiveId));
 		if(!Session) { throw new PreparationCancelled(); }
 		const Connection = this.Connection!; Target.Connection = Connection;
@@ -1136,7 +1219,7 @@ export default class CodexSidebarPlugin extends Plugin
 			cwd: this.host_cwd(),
 			...(Target.Remote ? { clientSessionId: Session.Id } : {}),
 			ephemeral: true,
-			dynamicTools: [ObsidianTool, ...(!Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1 ? [HistoryReadTool] : [])],
+			dynamicTools: [ObsidianTool, ...(!Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1 ? [history_read_tool(!Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1)] : [])],
 			approvalPolicy: "on-request",
 			approvalsReviewer: "user",
 			sandbox: "read-only",
@@ -1147,8 +1230,10 @@ export default class CodexSidebarPlugin extends Plugin
 		};
 		const PriorMessages = Session.Messages.filter(M => M.Id !== ExcludeMessageId);
 		const Current = Session.Messages.find(M => M.Id === ExcludeMessageId), Required = [Current?.Quote?.MessageId, Current?.Quote?.RootMessageId].filter((Id): Id is string => !!Id && PriorMessages.some(M => M.Id === Id));
-		const Budget: HistoryBudgetOptions = { ModelContextWindow: Session.EffectiveModel === Options.model ? Session.Usage?.modelContextWindow : undefined, ReservedUtf8Bytes: new TextEncoder().encode(Instructions + (Current?.Prompt ?? "")).byteLength, MaxImages: 8, RequiredMessageIds: Required, UnresolvedMessageIds: State.Sync?.Operations.filter(O => O.SessionId === Session.Id && ["local", "received", "submission-unknown", "running"].includes(O.Status) && PriorMessages.some(M => M.Id === O.MessageId)).map(O => O.MessageId), UserConstraints: ["完整答案最小修补; 思路沿原路线; 工具只读; 只有当前客户端审核后写回. 旧消息来源与未知提交状态不补造."] };
+		const Budget: HistoryBudgetOptions = { ModelContextWindow: Session.EffectiveModel === Options.model ? Session.Usage?.modelContextWindow : undefined, ReservedUtf8Bytes: new TextEncoder().encode(Instructions).byteLength, CurrentMessage: Current, SessionId: Session.Id, MaxImages: 8, RequiredMessageIds: Required, UnresolvedMessageIds: State.Sync?.Operations.filter(O => O.SessionId === Session.Id && ["local", "received", "submission-unknown", "running"].includes(O.Status) && PriorMessages.some(M => M.Id === O.MessageId)).map(O => O.MessageId), UserConstraints: ["完整答案最小修补; 思路沿原路线; 工具只读; 只有当前客户端审核后写回. 旧消息来源与未知提交状态不补造."] };
 		Budget.HistoryReadAvailable = !Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1;
+		Budget.HistoryReadBodyVersionsAvailable = !Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1;
+		assert_quote_read_capability(Current?.Quote, Budget.HistoryReadBodyVersionsAvailable);
 		const Plan = Existing ? null : plan_history_input(PriorMessages, Budget);
 		if(Target.Remote && Plan?.Ledger.OmittedMessageIds.length && (this.HostInfo as any)?.capabilities?.historyRead !== 1) { throw new Error("完整历史已超过保守恢复预算, 当前旧桥没有授权历史分页读取能力; 请升级桥或明确分段/新建会话. 原历史保留"); }
 		const History = Plan ? build_history_input(PriorMessages, Budget, await this.prepare_pdf(history_pdf_refs(Plan.Messages), Target)).Items : [];
@@ -1185,6 +1270,8 @@ export default class CodexSidebarPlugin extends Plugin
 				{
 					const Message = this.assistant_message(Item.id, Turn.id, "assistant", Session);
 					Message.Text = Item.text;
+					if(["commentary", "final_answer"].includes(Item.phase)) { Message.Phase = Item.phase; }
+					if(["completed", "interrupted", "failed"].includes(Turn.status)) { Message.CompletionStatus = Turn.status; }
 				}
 				if(Item.type === "reasoning" && Item.summary?.length)
 				{
@@ -1198,6 +1285,7 @@ export default class CodexSidebarPlugin extends Plugin
 				this.StartedAt = Date.now();
 			}
 		}
+		if(Result.thread.turns?.length) { this.history_changed(Session.Id); }
 		if(this.Busy && Visible())
 		{
 			this.Activity = "保存会话";
@@ -1349,7 +1437,11 @@ export default class CodexSidebarPlugin extends Plugin
 			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId);
 			if(!Operation || Operation.Conflicts?.length) { throw new Error("原发送操作缺失或有冲突, 不自动提交"); }
 			const Chosen = ((Operation.Input as any)?.Run ?? this.State.Settings), Settings = { ...this.State.Settings, Model: Chosen.Model || this.State.Settings.Model, Effort: Chosen.Effort || this.State.Settings.Effort, Fast: Chosen.Fast ?? this.State.Settings.Fast };
-			const Options = run_options(Settings, this.Models), Params = { threadId: CurrentSession.ThreadId, input: [...skill_input(Message.Prompt!, Skill), ...Images], ...Options };
+			const BodyVersions = !Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1;
+			assert_quote_read_capability(Message.Quote, BodyVersions);
+			const DerivedPrompt = derived_message_prompt(Message);
+			if(!BodyVersions && DerivedPrompt !== Message.Prompt) { throw new Error("当前桥不支持已保存引用的派生输入校验, 请升级桥; 原 Prompt 和来源保留"); }
+			const Options = run_options(Settings, this.Models), Params = { threadId: CurrentSession.ThreadId, input: [...skill_input(DerivedPrompt, Skill), ...Images], ...Options };
 			let Result: any;
 			const BeforePost = async () =>
 			{
@@ -1373,7 +1465,7 @@ export default class CodexSidebarPlugin extends Plugin
 			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId) ?? Operation;
 			Operation.Result = structuredClone(Result); Operation.TurnId = Result.turn.id; Operation.ThreadId = Params.threadId ?? undefined;
 			const FinalSession = this.target_state(Target).Sessions.find(S => S.Id === Ticket.SessionId), FinalMessage = FinalSession?.Messages.find(M => M.Id === Message!.Id);
-			if(FinalMessage) { FinalMessage.TurnId = Result.turn.id; } else if(!FinalSession) { Operation.SessionDeleted = true; } else if(message_deleted(this.target_state(Target), Ticket.SessionId, Operation.MessageId)) { Operation.MessageDeleted = true; }
+			if(FinalMessage) { FinalMessage.TurnId = Result.turn.id; this.history_changed(Ticket.SessionId, [FinalMessage.Id]); } else if(!FinalSession) { Operation.SessionDeleted = true; } else if(message_deleted(this.target_state(Target), Ticket.SessionId, Operation.MessageId)) { Operation.MessageDeleted = true; }
 			if(FinalSession) { FinalSession.EffectiveModel = Options.model; FinalSession.EffectiveEffort = Options.effort; FinalSession.EffectiveTier = Options.serviceTier; }
 			await this.save_target(Target);
 			if(this.Runtime.current(Ticket) && !this.Unloaded && this.State.ActiveId === Ticket.SessionId)
@@ -1498,9 +1590,13 @@ export default class CodexSidebarPlugin extends Plugin
 			new Notice("请先停止当前回复");
 			return;
 		}
+		const Choice = ++this.SessionChoice, Scope = this.local_scope();
 		if(Id)
 		{
 			if(!this.State.Sessions.some(Value => Value.Id === Id)) { throw new Error("选择的会话已不存在"); }
+			await this.ensure_session_history(Id);
+			if(Choice !== this.SessionChoice || Scope !== this.local_scope() || this.Unloaded) { return; }
+			if(!this.State.Sessions.some(Value => Value.Id === Id) || this.State.DeletedSessionIds?.includes(Id)) { throw new Error("加载期间会话已删除, 未恢复旧会话"); }
 			this.State.ActiveId = Id;
 		}
 		else
@@ -1529,6 +1625,9 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async resend_message(Id: string, Text?: string): Promise<boolean>
 	{
+		const SessionId = this.State.ActiveId, Scope = this.local_scope(), Choice = this.SessionChoice;
+		await this.ensure_session_history(SessionId);
+		if(Scope !== this.local_scope() || this.State.ActiveId !== SessionId || Choice !== this.SessionChoice || this.Unloaded) { throw new Error("读取期间会话已切换, 未重发其他会话的内容"); }
 		if(this.Busy || this.ChatPreparing || this.SessionDeleting)
 		{
 			new Notice("请先停止当前回复");
@@ -1651,7 +1750,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private assistant_message(Id: string, TurnId: string, Role: "assistant" | "reasoning" = "assistant", Session = this.Session): ChatMessage
 	{
 		if(message_deleted(this.State, Session.Id, Id)) { return { Id, TurnId, Role, Text: "" }; }
-		let Message = Session.Messages.find(Value => Value.Id === Id);
+		let Message = this.MessagesById.get(Session, Id);
 		if(!Message)
 		{
 			Message = { Id, TurnId, Role, Text: "" };
@@ -1682,18 +1781,27 @@ export default class CodexSidebarPlugin extends Plugin
 		const Params = Message.params;
 		if(Message.method === "bridge/recovering") { this.Runtime.stage("recovering"); this.Status = Params?.message ?? "正在核对状态与恢复事件监听"; this.refresh(); return; }
 		if(Message.method === "bridge/recovered") { this.restore_runtime(); this.refresh(); return; }
+		if(Message.method === "bridge/storage-error") { this.Status = "远程正文检查点暂未保存, 正在保留并重试; " + (Params?.message ?? "请检查远程存储"); this.refresh(); return; }
 		if(!Params?.threadId) { return; }
 		const Session = this.thread_session(Params.threadId);
 		if(!Session || this.State.DeletedSessionIds?.includes(Session.Id) || (Params.sessionId && Params.sessionId !== Session.Id)) { return; }
 		const Visible = Session.Id === this.State.ActiveId, Target = this.state_target();
+		const EventId = Params.itemId ?? Params.item?.id;
+		if(EventId && ["item/agentMessage/delta", "item/reasoning/summaryTextDelta", "item/completed"].includes(Message.method ?? "") && this.MessagesById.get(Session, EventId)?.CompletionStatus) { return; }
 		if(Message.method === "bridge/message-updated")
 		{
 			if(message_deleted(this.State, Session.Id, Params.message?.Id)) { return; }
 			const Conflicts = this.State.Sync?.Conflicts ?? (this.State.MessageConflicts ??= []);
-			try { message_checkpoint(Session, Params.message, Conflicts); } catch(E) { if(Visible) { this.Status = error_text(E); } }
-			this.persist_background(); if(Visible) { this.refresh(); } return;
+			const ConflictCount = Conflicts.length, Previous = this.MessagesById.get(Session, Params.message?.Id), PreviousBytes = new TextEncoder().encode(Previous?.Text ?? "").byteLength;
+			let Changed = false;
+			try { Changed = message_checkpoint(Session, Params.message, Conflicts); } catch(E) { if(Visible) { this.Status = error_text(E); this.refresh(); } return; }
+			if(!Changed) { if(Conflicts.length !== ConflictCount) { this.persist_background(); if(Visible) { this.refresh(); } } return; }
+			this.history_changed(Session.Id, [Params.message.Id], !!Params.message.CompletionStatus);
+			if(Params.message.CompletionStatus) { this.persist_background(); }
+			else { this.stream_checkpoint(Session, Params.message.Id, Math.max(0, new TextEncoder().encode(Params.message.Text ?? "").byteLength - PreviousBytes)); }
+			if(Visible) { this.refresh(); } return;
 		}
-		if(Message.method === "bridge/source-read") { if(Params.source) { this.add_read_source(Session, Params.turnId, Params.source); this.persist_background(); } if(Visible) { this.refresh(); } return; }
+		if(Message.method === "bridge/source-read") { if(Params.source) { this.add_read_source(Session, Params.turnId, Params.source); this.history_changed(Session.Id, Session.Messages.filter(M => M.TurnId === Params.turnId).map(M => M.Id), false); this.persist_background(); } if(Visible) { this.refresh(); } return; }
 		switch(Message.method)
 		{
 			case "turn/started":
@@ -1711,6 +1819,7 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				const Summary = this.assistant_message(Params.itemId, Params.turnId, "reasoning", Session); Summary.SummaryParts ??= [];
 				Summary.SummaryParts[Params.summaryIndex] = (Summary.SummaryParts[Params.summaryIndex] ?? "") + Params.delta; Summary.Text = Summary.SummaryParts.filter(Boolean).join("\n\n");
+				this.stream_checkpoint(Session, Summary.Id, new TextEncoder().encode(Params.delta).byteLength);
 				if(Visible) { this.Activity = "思考中"; } break;
 			}
 			case "thread/tokenUsage/updated": Session.Usage = Params.tokenUsage; this.persist_background(); break;
@@ -1720,8 +1829,10 @@ export default class CodexSidebarPlugin extends Plugin
 			case "thread/compacted": Session.InstructionsHash = ""; this.LastInputLedger.delete(Session.Id); this.persist_background(); break;
 			case "item/agentMessage/delta":
 				this.assistant_message(Params.itemId, Params.turnId, "assistant", Session).Text += Params.delta;
+				this.stream_checkpoint(Session, Params.itemId, new TextEncoder().encode(Params.delta).byteLength);
 				if(Visible) { this.Status = "Codex 正在回答..."; this.Activity = "正在回答"; } break;
 			case "item/completed":
+				this.Checkpoints.forget(JSON.stringify([Target.Scope, Session.Id, Params.turnId ?? "", Params.item.id]));
 				if(Params.item.type === "agentMessage") { const Reply = this.assistant_message(Params.item.id, Params.turnId, "assistant", Session); Reply.Text = Params.item.text; Reply.Phase = ["commentary", "final_answer"].includes(Params.item.phase) ? Params.item.phase : null; }
 				if(Params.item.type === "reasoning" && Params.item.summary?.length) { this.assistant_message(Params.item.id, Params.turnId, "reasoning", Session).Text = Params.item.summary.join("\n\n"); }
 				if(Visible && this.Busy && ["commandExecution", "mcpToolCall", "webSearch"].includes(Params.item.type)) { this.Activity = "思考中"; }
@@ -1733,6 +1844,7 @@ export default class CodexSidebarPlugin extends Plugin
 				if(Visible && Params.item.type === "reasoning") { this.Activity = "思考中"; } break;
 			case "turn/completed":
 			{
+				for(const M of Session.Messages.filter(M => M.TurnId === Params.turn.id)) { this.Checkpoints.forget(JSON.stringify([Target.Scope, Session.Id, M.TurnId ?? "", M.Id])); }
 				for(const Reply of Session.Messages.filter(M => M.Role !== "reasoning" && M.TurnId === Params.turn.id)) { Reply.CompletionStatus = Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "interrupted" : "failed"; }
 				this.CompletedTurns.add(this.completed_key(Target.Scope, Params.threadId, Params.turn.id));
 				for(const O of this.State.Sync?.Operations.filter(O => O.SessionId === Session.Id && O.ThreadId === Params.threadId && O.TurnId === Params.turn.id) ?? []) { this.update_run_operation(Target, O.Id, Params.turn.status === "completed" ? "completed" : Params.turn.status === "interrupted" ? "cancelled" : "failed", { Error: Params.turn.error?.message }); }
@@ -1748,6 +1860,8 @@ export default class CodexSidebarPlugin extends Plugin
 			case "error": if(Visible) { this.Status = Params.error?.message ?? "Codex 错误"; } break;
 			case "model/rerouted": Session.EffectiveModel = Params.toModel; if(Visible) { this.Model = Params.toModel; this.Status = `后端已切换模型: ${Params.toModel}`; } break;
 		}
+		if(EventId) { this.history_changed(Session.Id, [EventId], Message.method === "item/completed"); }
+		else if(["turn/started", "turn/completed"].includes(Message.method ?? "")) { this.history_changed(Session.Id, Session.Messages.filter(M => M.TurnId === Params.turn.id).map(M => M.Id)); }
 		if(Visible) { this.refresh(); }
 	}
 
@@ -1764,9 +1878,9 @@ export default class CodexSidebarPlugin extends Plugin
 				if(Visible()) { this.Activity = "正在读取原始资料"; this.refresh(); }
 				try
 				{
-					Result = Message.params.tool === HistoryReadTool.name ? await read_history_page(Session.Id, Session.Messages, Message.params.arguments) : await run_obsidian_read(this.obsidian_cli(), this.app.vault.getName(), Message.params.arguments);
+					Result = Message.params.tool === HistoryReadTool.name ? await read_history_page(Session.Id, Session.Messages, Message.params.arguments, Scope) : await run_obsidian_read(this.obsidian_cli(), this.app.vault.getName(), Message.params.arguments);
 					const Ref = Message.params.tool === ObsidianTool.name ? tool_read_reference(Message.params.arguments, Result, "desktop-read") : null;
-					if(Ref && Scope === this.local_scope() && this.State.Sessions.includes(Session)) { this.add_read_source(Session, Message.params.turnId, Ref); this.persist_background(); }
+					if(Ref && Scope === this.local_scope() && this.State.Sessions.includes(Session)) { this.add_read_source(Session, Message.params.turnId, Ref); this.history_changed(Session.Id, Session.Messages.filter(M => M.TurnId === Message.params.turnId).map(M => M.Id), false); this.persist_background(); }
 				}
 				catch(E) { Result = { success: false, contentItems: [{ type: "inputText", text: error_text(E) }] }; }
 				if(Visible()) { this.Activity = this.Busy ? "思考中" : ""; this.refresh(); }
@@ -1815,6 +1929,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	onunload(): void
 	{
+		this.Checkpoints.flush(); this.Checkpoints.close();
 		this.Runtime.close();
 		this.Unloaded = true;
 		void this.Edits?.Store.close();

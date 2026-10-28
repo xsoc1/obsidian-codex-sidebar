@@ -147,7 +147,7 @@ window.run_followup_case = async () =>
 	const Root = document.body.createDiv({cls:'codex-sidebar'}); Root.style.cssText='width:420px;height:480px';
 	const Messages = [{Id:'root-explanation',Role:'assistant',Text:'原创完整说明: 固定 X, 分别核对交换子对加法与数乘的分配律.'}];
 	for(let I=0;I<82;I++)Messages.push({Id:'middle-'+I,Role:'assistant',Text:'中间的另一段原创说明 '+I});
-	for(let I=1;I<=3;I++)Messages.push({Id:'followup-u'+I,Role:'user',TurnId:'followup-t'+I,Text:'展开这一步',Quote:{SessionId:'followup-session',MessageId:I===1?'root-explanation':'followup-a'+(I-1),RootMessageId:'root-explanation',SelectedText:'分配律',SourceText:'固定 X, 核对分配律.',SelectedTruncated:false,SourceTruncated:false}},{Id:'followup-a'+I,Role:'assistant',TurnId:'followup-t'+I,Text:'第'+I+'次整合说明: '+('先展开乘法, 再合并各项. ').repeat(3)});
+	for(let I=1;I<=3;I++)Messages.push({Id:'followup-u'+I,Role:'user',TurnId:'followup-t'+I,Text:'展开这一步',Quote:{SessionId:'followup-session',MessageId:I===1?'root-explanation':'followup-a'+(I-1),RootMessageId:'root-explanation',SelectedText:'分配律',SourceText:'固定 X, 核对分配律.',SelectedTruncated:false,SourceTruncated:false}},{Id:'followup-a'+I,Role:'assistant',TurnId:'followup-t'+I,Phase:'final_answer',CompletionStatus:'completed',Text:'第'+I+'次整合说明: '+('先展开乘法, 再合并各项. ').repeat(3)});
 	const Before=JSON.stringify(Messages), Owner={Session:{Id:'followup-session',Messages},Capture:{LastView:null},Busy:false,refresh:()=>{}};
 	const View=new Sidebar.CodexView({},Owner);View.MessagesElement=Root.createDiv({cls:'codex-messages'});View.Opened=true;
 	const Wait=async Id=>{for(let I=0;I<200;I++){if(!View.Rendering&&Root.querySelector('[data-message-id="'+Id+'"]'))return true;await new Promise(R=>setTimeout(R,10));}return false;};

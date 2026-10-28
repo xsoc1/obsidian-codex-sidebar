@@ -39,8 +39,9 @@ test("history reads are versioned, bounded and tied to the host-bound conversati
 {
 	const Messages = history(2, 20), List = await read_history_page("host-session", Messages, { command: "list", limit: 1 }), Page = JSON.parse(List.contentItems[0].text);
 	assert.equal(Page.messages.length, 1); assert.equal(Page.next_offset, 1);
-	const Read = await read_history_page("host-session", Messages, { command: "read", message_id: "u-0", field: "prompt", length: 32, version: Page.version }), Body = JSON.parse(Read.contentItems[0].text);
+	assert.equal((await read_history_page("host-session", Messages, { command: "read", message_id: "u-0", field: "prompt", version: Page.version })).success, false);
+	const Read = await read_history_page("host-session", Messages, { command: "read", message_id: "u-0", field: "prompt", length: 32 }), Body = JSON.parse(Read.contentItems[0].text);
 	assert.equal(Body.text, Messages[0].Prompt!.slice(0, 32)); assert.equal(Body.next_offset, 32);
-	Messages[0].Prompt += " changed"; assert.equal((await read_history_page("host-session", Messages, { command: "read", message_id: "u-0", version: Page.version })).success, false);
+	Messages[0].Prompt += " changed"; assert.equal((await read_history_page("host-session", Messages, { command: "read", message_id: "u-0", field: "prompt", version: Body.version })).success, false);
 	for(const Input of [{ command: "list", session: "other" }, { command: "read", message_id: "not-current" }, { command: "read", message_id: "u-0", field: "source" }, { command: "read", message_id: "u-0", length: 16001 }]) { assert.equal((await read_history_page("host-session", Messages, Input)).success, false); }
 });

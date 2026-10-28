@@ -17,8 +17,10 @@ import { MessageList, type MessageNode } from "./message-list";
 import { SelectionPreview, selection_in_source } from "./selection-preview";
 import { accessible_name, error_text } from "./ui-helpers";
 import { HistoryWindow } from "./history-window";
-import { answer_sources, source_path, source_key, render_sources } from "./sources";
-import { followup_index, history_source_index, operation_label } from "./history-view-state";
+import { answer_sources, source_path, render_sources } from "./sources";
+import { followup_index, operation_label } from "./history-view-state";
+import { HistoryRenderState } from "./history-render-state";
+import { EditViewState } from "./edit-view-state";
 import { render_sync_conflicts } from "./conflict-view";
 import { ComposerDraftStore, type ComposerMaterial } from "./composer-draft";
 
@@ -31,6 +33,15 @@ export class CodexView extends ItemView
 	private NoteSessionBind!: HTMLButtonElement;
 	private ConflictsElement!: HTMLElement;
 	private ConflictsKey = "";
+	private ConflictBodies = new WeakMap<object, string>();
+	private DisplayedConflicts: NonNullable<SidebarOwner["State"]["Sync"]>["Conflicts"] = [];
+	private SessionOptionsSource: unknown;
+	private SessionOptionsCount = -1;
+	private SessionOptionsCurrent = "";
+	private SessionOptions = "";
+	private ContextValue: unknown;
+	private QuoteValue: unknown;
+	private QuoteCommitted = false;
 	private DraftStore: ComposerDraftStore | null = null;
 	private DraftRevision = 0;
 	private DraftMaterial: ComposerMaterial = { Context: null, Quote: null };
@@ -67,6 +78,8 @@ export class CodexView extends ItemView
 	private ActivityTimer: ReturnType<typeof setInterval> | null = null;
 	private MessageList: MessageList | null = null;
 	private HistoryWindow = new HistoryWindow();
+	private HistoryStates = new Map<string, HistoryRenderState>();
+	private EditState = new EditViewState();
 	private RenderTimer: ReturnType<typeof setTimeout> | null = null;
 	private LastRendered = "";
 	private Rendering = false;
@@ -106,6 +119,7 @@ export class CodexView extends ItemView
 		const Root = this.contentEl;
 		Root.empty();
 		this.ConflictsKey = "";
+		this.SessionOptionsSource = undefined; this.ContextValue = undefined; this.QuoteValue = undefined;
 		Root.addClass("codex-sidebar");
 		this.ReleaseFooter?.();
 		this.ReleaseFooter = observe_sidebar_footer(Root);
@@ -210,7 +224,7 @@ export class CodexView extends ItemView
 		const Message = this.Owner.Session.Messages.find(Value => Value.Id === Card?.dataset.messageId && Value.Role === "assistant");
 		const Previous = Message?.TurnId ? this.Owner.Session.Messages.find(M => M.Role === "user" && M.TurnId === Message.TurnId)?.Quote : null;
 		this.SelectedAnswer = RangeValue && !RangeValue.collapsed && Body && !Body.dataset.editStructured && this.MessagesElement.contains(Body) && Message && SelectionValue!.toString().trim()
-			? answer_quote(this.Owner.Session.Id, Message.Id, SelectionValue!.toString(), Message.Text, answer_status(Message, this.Owner.TurnId, this.Owner.Busy), { ...quote_blocks(Body, RangeValue, Message.Text), SourcePath: source_path(this.Owner.Session.Messages, Message), RootMessageId: Previous?.RootMessageId ?? Previous?.MessageId ?? Message.Id, ...(Previous ? { ParentMessageId: Previous.MessageId } : {}), SourceReferences: answer_sources(this.Owner.Session.Messages, Message) }) : null;
+			? answer_quote(this.Owner.Session.Id, Message.Id, SelectionValue!.toString(), Message.Text, answer_status(Message, this.Owner.TurnId, this.Owner.Busy), { ...quote_blocks(Body, RangeValue, Message.Text, JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Session.Id]) + ":" + Message.Id), SourcePath: source_path(this.Owner.Session.Messages, Message), RootMessageId: Previous?.RootMessageId ?? Previous?.MessageId ?? Message.Id, ...(Previous ? { ParentMessageId: Previous.MessageId } : {}), SourceReferences: answer_sources(this.Owner.Session.Messages, Message) }) : null;
 		this.refresh_quote();
 	}
 
@@ -228,6 +242,8 @@ export class CodexView extends ItemView
 		const CanStop = (this.Owner as SidebarOwner & { CanStop?: boolean }).CanStop ?? (this.Owner.Busy && !!this.Owner.TurnId);
 		this.ComposeActions?.refresh(this.input_blocked(), CanStop, !!this.Owner.AnswerQuote);
 		this.refresh_compose_summary();
+		if(this.QuoteValue === Quote && this.QuoteCommitted === !!this.Owner.AnswerQuote) { return; }
+		this.QuoteValue = Quote; this.QuoteCommitted = !!this.Owner.AnswerQuote;
 		this.QuoteElement.hidden = !Quote;
 		this.Input.placeholder = this.Owner.AnswerQuote ? "针对选中的回答继续提问... Enter 提问, Shift+Enter 换行" : "随时提问... Enter 提问, Shift+Enter 换行";
 		this.QuoteElement.empty();
@@ -484,11 +500,23 @@ export class CodexView extends ItemView
 		}
 		const Session = this.Owner.Session;
 		this.sync_draft(); this.refresh_draft_status();
-		const Conflicts = [...new Map([...(this.Owner.State.Sync?.Conflicts ?? []), ...(this.Owner.State.MessageConflicts ?? [])].map(C => [JSON.stringify(C), C])).values()];
-		const ConflictKey = JSON.stringify([this.Owner.State.Sync?.Scope, Conflicts, this.Owner.State.Sessions.map(S => [S.Id, S.Title]), this.Owner.State.DeletedSessionIds]);
-		if(this.ConflictsElement && ConflictKey !== this.ConflictsKey)
+		const CurrentLabel = JSON.stringify([Session.Id, Session.Title]);
+		if(this.SessionOptionsSource !== this.Owner.State.Sessions || this.SessionOptionsCount !== this.Owner.State.Sessions.length || this.SessionOptionsCurrent !== CurrentLabel)
 		{
-			this.ConflictsKey = ConflictKey;
+			this.SessionOptionsSource = this.Owner.State.Sessions; this.SessionOptionsCount = this.Owner.State.Sessions.length; this.SessionOptionsCurrent = CurrentLabel;
+			this.SessionOptions = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
+		}
+		const Conflicts = [...new Map([...(this.Owner.State.Sync?.Conflicts ?? []), ...(this.Owner.State.MessageConflicts ?? [])].map(C =>
+		{
+			let Key = this.ConflictBodies.get(C); if(Key === undefined) { Key = JSON.stringify(C); this.ConflictBodies.set(C, Key); }
+			return [Key, C] as const;
+		})).values()];
+		// Stable evidence bodies are cached once. Frame signatures contain only references and small labels.
+		const ConflictChanged = Conflicts.length !== this.DisplayedConflicts.length || Conflicts.some((C, I) => C !== this.DisplayedConflicts[I]);
+		const ConflictKey = JSON.stringify([this.Owner.State.Sync?.Scope, this.SessionOptions, this.Owner.State.DeletedSessionIds]);
+		if(this.ConflictsElement && (ConflictChanged || ConflictKey !== this.ConflictsKey))
+		{
+			this.ConflictsKey = ConflictKey; this.DisplayedConflicts = Conflicts;
 			render_sync_conflicts(this.ConflictsElement, Conflicts, this.Owner.State, (Key, Choice) => this.Owner.resolve_message_conflict(Key, Choice));
 		}
 		this.NavigationSummary?.setText(`会话与连接 · ${Session.Title}`);
@@ -501,7 +529,7 @@ export class CodexView extends ItemView
 		this.refresh_controls();
 		this.refresh_completion();
 		this.refresh_quote();
-		const Options = this.Owner.State.Sessions.map(Value => `${Value.Id}:${Value.Title}`).join("|");
+		const Options = this.SessionOptions;
 		if(this.SessionsElement.dataset.options !== Options)
 		{
 			this.SessionsElement.empty();
@@ -517,7 +545,8 @@ export class CodexView extends ItemView
 		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
 		this.refresh_compose_summary();
 		this.ContextSummary?.setText(Snapshot ? `上下文 · ${Snapshot.Kind}${Snapshot.Truncated ? " (已截断)" : ""}` : "上下文");
-		const ContextKey = JSON.stringify(Snapshot);
+		const ContextKey = this.ContextValue === Snapshot ? this.ContextKey : JSON.stringify(Snapshot);
+		this.ContextValue = Snapshot;
 		if(ContextKey !== this.ContextKey)
 		{
 			this.ContextKey = ContextKey; this.ContextElement.empty();
@@ -573,28 +602,59 @@ export class CodexView extends ItemView
 		if(this.EditingSession === Id) { this.EditingSession = ""; this.EditingId = ""; this.EditText = ""; }
 		this.MessageList?.forget(JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Id]));
 		this.HistoryWindow.forget(JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Id]));
+		this.HistoryStates.delete(JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Id]));
+	}
+	history_changed(SessionId: string, Ids?: readonly string[]): void
+	{
+		const Context = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", SessionId]);
+		this.HistoryStates.get(Context)?.invalidate(Ids);
+		if(!Ids) { this.SessionOptionsSource = undefined; this.ConflictBodies = new WeakMap(); }
+	}
+	private message_plan()
+	{
+		const Session = this.Owner.Session, Messages = Session.Messages;
+		const Context = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Session.Id]);
+		let State = this.HistoryStates.get(Context);
+		if(!State) { State = new HistoryRenderState(); this.HistoryStates.set(Context, State); }
+		this.HistoryStates.delete(Context); this.HistoryStates.set(Context, State);
+		while(this.HistoryStates.size > 3) { this.HistoryStates.delete(this.HistoryStates.keys().next().value!); }
+		const Visible = this.HistoryWindow.select(Context, Messages, this.MessageList?.has_context(Context) ?? false);
+		State.prepare(Messages, Visible.Items, this.Owner.Busy ? this.Owner.TurnId : null);
+		this.EditState.update(this.Owner.Edits?.Store.Data);
+		const Followups = State.Followups;
+		const Items = Visible.Items.map(Current =>
+		{
+			const Message = { ...Current }, User = State!.user(Current), Bound = User && User !== Current ? [User, Message] : [Message], Source = State!.source(Current);
+			const Task = structured_task(Bound, Message);
+			const EditState = Task?.Action === "edit" ? [this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, this.EditState.key(Task.Id), this.Owner.Edits?.Cache?.Turns] : null;
+			const Operation = Message.OperationId ? this.Owner.operation_state?.(Message.OperationId) : null;
+			const OperationKey = Operation ? [Operation.Status, Operation.Error, Operation.TurnId, Operation.Attempted] : null;
+			return { Id: Message.Id, Key: JSON.stringify([State!.version(Message.Id), Source.Key, Followups.get(Message.Id), OperationKey, Message.Role === "user" ? [this.input_blocked(), this.EditingId === Message.Id] : null, EditState]), Render: () => this.render_card(Message, Bound, Followups, Source, Context + ":" + Message.Id) };
+		});
+		const HistoryState = (this.Owner.State?.Sync as any)?.History?.[Session.Id]?.Status;
+		return { Session, Messages, Context, Visible, Items, HistoryState, Signature: JSON.stringify([Context, Visible.Signature, HistoryState, Items.map(Item => [Item.Id, Item.Key])]) };
 	}
 	private async render_messages(): Promise<void>
 	{
 		if(this.Rendering || !this.Opened) { return; }
-		const Session = this.Owner.Session, Messages = Session.Messages.map(Message => ({ ...Message }));
-		const Context = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Session.Id]);
-		if(this.EditingSession !== Session.Id) { this.EditingId = ""; }
-		const Signature = this.message_signature();
+		if(this.EditingSession !== this.Owner.Session.Id) { this.EditingId = ""; }
+		const { Session, Context, Visible, Items, HistoryState, Signature } = this.message_plan();
 		if(Signature === this.LastRendered && this.MessageList) { return; }
 		this.Rendering = true;
 		const Version = ++this.Version;
 		this.MessageList ??= new MessageList(this.MessagesElement);
-		const Visible = this.HistoryWindow.select(Context, Messages, this.MessageList.has_context(Context));
-		const PreparedSignature = this.message_signature(), Sources = history_source_index(Messages), Followups = followup_index(Messages);
+		const PreparedSignature = Signature;
 		try
 		{
-			const Items = Visible.Items.map(Message =>
+			if(HistoryState === "unloaded")
 			{
-				const Task = structured_task(Messages, Message), Record = Task?.Action === "edit" ? this.Owner.Edits?.Store.Data.Records.find(Value => Value.Spec.Id === Task.Id) : null;
-				const EditState = Task?.Action === "edit" ? [this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, Record?.Status, Record?.Error, Record?.Cache, this.Owner.Edits?.Cache?.Turns, this.Owner.Edits?.Store.Data.Writes.filter(Value => Value.TaskId === Task.Id).map(Value => [Value.Id, Value.State, Value.Error])] : null;
-				return { Id: Message.Id, Key: JSON.stringify([Message, Sources.get(Message.Id), Followups.get(Message.Id), Message.OperationId ? this.Owner.operation_state?.(Message.OperationId) : null, Message.Role === "user" ? [this.input_blocked(), this.EditingId === Message.Id] : null, EditState]), Render: () => this.render_card(Message, Messages, Followups) };
-			});
+				Items.unshift({ Id: "history-loading:" + Context, Key: "history-loading", Render: async () =>
+				{
+					const Element = this.MessagesElement.ownerDocument.createElement("div"); Element.className = "codex-history-load";
+					Element.setAttribute("role", "status"); Element.textContent = "原始历史尚未加载完成; 当前缓存可能不是最新版本. 读取失败时保留原记录, 不按空历史处理.";
+					return { Element, Dispose: () => {} };
+				} });
+			}
 			if(Visible.Earlier || Visible.Later)
 			{
 				Items.unshift({ Id: "history-controls:" + Context, Key: "history-controls:" + Visible.Earlier + ":" + Visible.Later, Render: async () =>
@@ -604,7 +664,11 @@ export class CodexView extends ItemView
 					{
 						this.HistoryWindow.older(Context, this.Owner.Session.Messages); this.Version++; this.LastRendered = ""; this.refresh();
 					}); }
-					if(Visible.Later) { this.button(Element, `回到最新回答 (后续 ${Visible.Later} 条)`, () => { this.HistoryWindow.latest(Context); this.Version++; this.LastRendered = ""; this.refresh(); }); }
+					if(Visible.Later)
+					{
+						this.button(Element, `查看较新 ${Math.min(this.HistoryWindow.Batch, Visible.Later)} 条`, () => { this.HistoryWindow.newer(Context, this.Owner.Session.Messages); this.Version++; this.LastRendered = ""; this.refresh(); });
+						this.button(Element, `回到最新回答 (后续 ${Visible.Later} 条)`, () => { this.HistoryWindow.latest(Context); this.Version++; this.LastRendered = ""; this.refresh(); });
+					}
 					return { Element, Dispose: () => {} };
 				} });
 			}
@@ -613,7 +677,7 @@ export class CodexView extends ItemView
 				Items.push({ Id: "welcome", Key: "welcome", Render: async () =>
 				{
 					const Element = this.MessagesElement.ownerDocument.createElement("div"); Element.className = "codex-welcome";
-					Element.textContent = "可以直接提问, 或选中笔记内容后点击解释选区 / 检查证明. 阅读模式会附带原始 Markdown 源块.";
+					Element.textContent = HistoryState === "unloaded" ? "当前会话的原始记录尚未加载, 正在核对; 不会把未加载内容当作空历史." : "可以直接提问, 或选中笔记内容后点击解释选区 / 检查证明. 阅读模式会附带原始 Markdown 源块.";
 					return { Element, Dispose: () => {} };
 				} });
 			}
@@ -627,7 +691,7 @@ export class CodexView extends ItemView
 		}
 	}
 
-	private async render_card(Message: ChatMessage, Messages: ChatMessage[], Followups = followup_index(Messages)): Promise<MessageNode>
+	private async render_card(Message: ChatMessage, Messages: ChatMessage[], Followups = followup_index(Messages), Source?: ReturnType<HistoryRenderState["source"]>, MessageKey?: string): Promise<MessageNode>
 	{
 		const RenderComponent = new Component(); RenderComponent.load();
 		try
@@ -727,9 +791,9 @@ export class CodexView extends ItemView
 				if(WorkTask && (WorkTask.Action !== "edit" || !safe_math_markdown(Message.Text))) { Body.createEl("pre", { text: Message.Text }); }
 				else
 				{
-					const Path = source_path(Messages, Message);
+					const Path = Source?.Path ?? source_path(Messages, Message);
 					await MarkdownRenderer.render(this.app, Message.Text || "...", Body, Path, RenderComponent);
-					const Directory = (P: string) => P.slice(0, P.lastIndexOf("/") + 1), Moved = answer_sources(Messages, Message).some(Ref => Ref.Path === Path && Ref.CurrentPath && Directory(Ref.CurrentPath) !== Directory(Path)), Missing = !!Path && typeof this.app?.vault?.getFileByPath === "function" && !this.app.vault.getFileByPath(Path);
+					const Directory = (P: string) => P.slice(0, P.lastIndexOf("/") + 1), Moved = (Source?.Sources ?? answer_sources(Messages, Message)).some(Ref => Ref.Path === Path && Ref.CurrentPath && Directory(Ref.CurrentPath) !== Directory(Path)), Missing = !!Path && typeof this.app?.vault?.getFileByPath === "function" && !this.app.vault.getFileByPath(Path);
 					if(!Path || Moved || Missing)
 					{
 						RenderComponent.registerDomEvent(Body, "click", Event =>
@@ -738,7 +802,7 @@ export class CodexView extends ItemView
 							if(Link && (Link.classList.contains("internal-link") || (!!Href && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(Href)))) { Event.preventDefault(); Event.stopImmediatePropagation(); new Notice(Moved || Missing ? "原来源已移动或缺失, 这条回答仍保留产生时的相对链接基准; 请从来源清单核对目标, 未按新目录或同名文件猜测跳转" : "这条旧回答缺少可靠来源路径, 请从原快照核对链接; 未按当前笔记或同名文件猜测跳转"); }
 						}, { capture: true });
 					}
-					if(Message.Role === "assistant") { bind_answer_blocks(Body, Message.Text); }
+					if(Message.Role === "assistant") { bind_answer_blocks(Body, Message.Text, MessageKey); }
 				}
 			}
 			else
@@ -747,14 +811,14 @@ export class CodexView extends ItemView
 			}
 			if(Message.Role === "assistant")
 			{
-				render_sources(this.app, Card, answer_sources(Messages, Message));
+				render_sources(this.app, Card, Source?.Sources ?? answer_sources(Messages, Message));
 				const Related = Followups.get(Message.Id);
 				if(Related)
 				{
 					const Chain = Card.createEl("details", { cls: "codex-followup-chain" }); Chain.createEl("summary", { text: "追问关联" });
 					if(Related.RootId !== Message.Id) { this.button(Chain, "原始说明", () => void this.reveal_message(Related.RootId)); }
 					if(Related.ParentId && Related.ParentId !== Related.RootId) { this.button(Chain, "上次引用的回答", () => void this.reveal_message(Related.ParentId!)); }
-					if(Related.LatestId && Related.LatestId !== Message.Id) { this.button(Chain, "最新整合说明", () => void this.reveal_message(Related.LatestId!)); }
+					if(Related.LatestId && Related.LatestId !== Message.Id) { this.button(Chain, Related.LatestUnknown ? "最近历史说明 (完成状态未知)" : "最新整合说明", () => void this.reveal_message(Related.LatestId!)); }
 				}
 			}
 			return { Element: Card, Dispose: () => RenderComponent.unload() };
@@ -763,7 +827,11 @@ export class CodexView extends ItemView
 	}
 	private async reveal_message(Id: string): Promise<void>
 	{
-		const Session = this.Owner.Session, Context = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Session.Id]);
+		const SessionId = this.Owner.Session.Id, Scope = this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop";
+		try { await this.Owner.ensure_session_history?.(SessionId); }
+		catch(ErrorValue) { new Notice("原消息尚未读完整: " + error_text(ErrorValue)); return; }
+		if(!this.Opened || this.Owner.Session.Id !== SessionId || Scope !== (this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop")) { return; }
+		const Session = this.Owner.Session, Context = JSON.stringify([Scope, SessionId]);
 		if(!this.HistoryWindow.focus(Context, Session.Messages, Id)) { new Notice("本会话没有这条原消息, 未跳转其他会话或补造内容"); return; }
 		this.Version++; this.LastRendered = "";
 		for(let I = 0; I < 200 && this.Rendering; I++) { await new Promise(R => setTimeout(R, 10)); }
@@ -819,13 +887,12 @@ export class CodexView extends ItemView
 			clearInterval(this.ActivityTimer);
 			this.ActivityTimer = null;
 		}
-		this.MessageList?.dispose(); this.MessageList = null; this.HistoryWindow.clear(); this.ContextKey = "";
+		this.MessageList?.dispose(); this.MessageList = null; this.HistoryWindow.clear(); this.HistoryStates.clear(); this.ContextKey = ""; this.ContextValue = undefined; this.QuoteValue = undefined;
 		this.Owner.refresh();
 	}
 
 	private message_signature(): string
 	{
-		const Context = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Session.Id]);
-		return JSON.stringify([Context, this.HistoryWindow.key(Context), this.Owner.Session.Messages, [...history_source_index(this.Owner.Session.Messages)], this.Owner.Session.Messages.map(M => M.OperationId ? this.Owner.operation_state?.(M.OperationId) : null), this.Owner.Busy, this.Owner.RuntimeState?.Stage, this.EditingId, this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, this.Owner.Edits?.Store.Data.Records.map(Value => [Value.Spec.Id, Value.Status, Value.Error, Value.Cache]), this.Owner.Edits?.Store.Data.Writes.map(Value => [Value.Id, Value.State, Value.Error])]);
+		return this.message_plan().Signature;
 	}
 }

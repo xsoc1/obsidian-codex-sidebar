@@ -38,13 +38,15 @@ export function merge_operations(Local: SendOperation[] = [], Remote: SendOperat
 	{
 		const L = Result.find(O => O.Id === R.Id);
 		if(!L) { Result.push(structuredClone(R)); continue; }
-		if(L.Scope !== R.Scope || L.Digest !== R.Digest || canonical_json(L.Input) !== canonical_json(R.Input) || L.SessionId !== R.SessionId || L.MessageId !== R.MessageId || L.RequestDigest && R.RequestDigest && L.RequestDigest !== R.RequestDigest || L.Request && R.Request && canonical_json(L.Request) !== canonical_json(R.Request)) { conflict(L, R, "相同操作 ID 的不可变输入或作用域不同, 未合并或重发", Conflicts); continue; }
+		if(L.Scope !== R.Scope || L.Digest !== R.Digest || !L.Evidence && !R.Evidence && canonical_json(L.Input) !== canonical_json(R.Input) || L.SessionId !== R.SessionId || L.MessageId !== R.MessageId || L.RequestDigest && R.RequestDigest && L.RequestDigest !== R.RequestDigest || L.Request && R.Request && canonical_json(L.Request) !== canonical_json(R.Request)) { conflict(L, R, "相同操作 ID 的不可变输入或作用域不同, 未合并或重发", Conflicts); continue; }
 		if(terminal(L.Status) && terminal(R.Status) && L.Status !== R.Status) { conflict(L, R, "同一发送操作出现不同终态, 保留双方供核对", Conflicts); continue; }
 		if(L.TurnId && R.TurnId && L.TurnId !== R.TurnId) { conflict(L, R, "同一发送操作出现不同回合身份, 不自动替换", Conflicts); continue; }
 		const ExistingConflicts = [...(L.Conflicts ?? []), ...(R.Conflicts ?? [])], Attempted = L.Attempted || R.Attempted, Deleted = L.SessionDeleted || R.SessionDeleted, MessageDeleted = L.MessageDeleted || R.MessageDeleted;
 		const Rank: Record<OperationStatus, number> = { local: 0, received: 1, "submission-unknown": 2, running: 3, completed: 4, cancelled: 4, failed: 4 };
 		const Comparable = L.Origin === L.Scope && R.Origin === L.Scope && L.Revision !== undefined && R.Revision !== undefined;
+		const Hydrated = !L.Evidence ? { Input: L.Input, Request: L.Request, Result: L.Result, Conflicts: L.Conflicts } : !R.Evidence ? { Input: R.Input, Request: R.Request, Result: R.Result, Conflicts: R.Conflicts } : null;
 		if(!terminal(L.Status) && Comparable ? R.Revision! > L.Revision! : Rank[R.Status] > Rank[L.Status] || Rank[R.Status] === Rank[L.Status] && R.Status === L.Status) { Object.assign(L, structuredClone(R)); }
+		if(Hydrated) { for(const [Key, Value] of Object.entries(Hydrated)) { if(Value !== undefined && (L as any)[Key] === undefined) { (L as any)[Key] = structuredClone(Value); } } if(L.Input !== undefined) { delete L.Evidence; } }
 		if(Attempted) { L.Attempted = true; } if(Deleted) { L.SessionDeleted = true; } if(MessageDeleted) { L.MessageDeleted = true; }
 		if(ExistingConflicts.length) { L.Conflicts = [...new Map(ExistingConflicts.map(C => [canonical_json(C), C])).values()]; for(const C of L.Conflicts) { if(Conflicts && !Conflicts.some(P => canonical_json(P) === canonical_json(C))) { Conflicts.push(structuredClone(C)); } } }
 	}

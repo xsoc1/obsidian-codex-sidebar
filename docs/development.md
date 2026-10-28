@@ -28,6 +28,20 @@ npm test
 - 原生测试使用唯一命名的临时插件或原创 scratch; 测试后只移除本次拥有的资源, 并核对日常会话、笔记、编辑器及启用状态未变. 移动布局优先使用独立浏览器 fixture, 避免全局 EmulateMobile 污染其他 vault.
 - 发起真实模型测试前确认授权及原始测试材料; 未知提交结果先核对, 不自动重试推理.
 - 普通 CI 只有读取仓库权限, 不安装日常插件、不启动独立桥、不创建 release. 标签发布流程另行校验版本和公开资产.
-- 当前候选版尚未获得本轮日常安装、在线桥重启或公开发布授权. 旧版本授权只对应当时的版本; 包装完成后核对本轮授权再部署.
+- 当前 `2.0.0-beta.2` 尚未获得日常安装、在线桥升级/重启或公开发布授权. beta.1 已授权发布的事实见 [归档](history/reliability-beta1-20261027.md), 不扩展为本轮授权.
+
+## 第二轮复验入口
+
+```bash
+node --import tsx --test tests/math-round2.test.ts tests/sync-round2.test.ts tests/checkpoint-round2.test.ts tests/history-render-state.test.ts tests/mobile-load.test.ts
+node --import tsx scripts/check-sync-cost.ts
+node --import tsx scripts/check-checkpoint-cost.ts
+node scripts/check-history-refresh.mjs
+node scripts/check-stream-layout.mjs
+```
+
+浏览器脚本要求 `CODEX_LAYOUT_BROWSER` 指向本机 Chromium 可执行文件, 使用独立临时 profile. 比较基线固定为 `4cc440be3e77dcd16d893ff6d9d7bcf1eee90b6a`, 通过 `git show` 读取代码, 不切换或重置工作树. 统计字节和工作量; 含固定 renderer 延迟的 SDK 时间不是原生 MathJax/iPad 性能.
+
+`scripts/reliability-round2-live.ts` 需显式 `CODEX_ROUND2_LIVE=1` 和新的 TEMP 子目录 `CODEX_ROUND2_EVIDENCE`. 独占 ledger 存在后拒绝新提交; `CODEX_ROUND2_RECOVER=1` 只读恢复已有操作. 使用实际完整 CLI 和私有技能, 仅提供原创样本, 不读取日常桥或笔记. 本轮只做了一次真实推理. 原生公式入口 `scripts/quote-native-probe.ts` 需唯一临时插件加载, 不能覆盖日常插件.
 
 当前约束见 [AGENTS.md](../AGENTS.md). 旧版本的真实验证与发布证据保存在 [1.1.0 及以前维护档案](history/maintenance-through-1.1.0.md), 其中旧的 current/pending 文字不表示本轮状态.

@@ -49,8 +49,15 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	const Required: string[] = []; const Files = Saved?.Files ?? new Map<string, string>(); const Local = Saved?.Local ?? new Map<string, string>();
 	if(!Databases.has(Local)) { Databases.set(Local, new IDBFactory()); }
 	const WorkspaceEvents = new Map<string, ((...Args: any[]) => void)[]>(), Views = new Map<string, (Leaf: any) => any>();
-	const Tabs: any[] = [], Settings: any[] = [], Notices: string[] = [];
+	const Tabs: any[] = [], Settings: any[] = [], Notices: string[] = [], Modals: any[] = [];
 	class Component { constructor(..._Args: any[]) { } }
+	class TestModal extends Component
+	{
+		Buttons: any[] = []; onClose = () => {};
+		contentEl = { empty() {}, createEl: (_Tag: string, Options: any) => { const Node = { ...Options, addEventListener: (_Event: string, Handler: () => void) => { Node.click = Handler; }, click: () => {} }; this.Buttons.push(Node); return Node; } };
+		constructor(...Args: any[]) { super(...Args); Modals.push(this); }
+		open() {} close() { this.onClose(); }
+	}
 	class Setting
 	{
 		Name = ""; Desc = ""; Controls: any[] = [];
@@ -149,7 +156,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 			Required.push(Name);
 			if(Name === "obsidian")
 			{
-				return { Plugin, ItemView: Component, PluginSettingTab: SettingTab, Setting, Modal: Component, MarkdownView: Component, Notice, Platform: { isMobileApp: true }, requestUrl: Http };
+				return { Plugin, ItemView: Component, PluginSettingTab: SettingTab, Setting, Modal: TestModal, MarkdownView: Component, Notice, Platform: { isMobileApp: true }, requestUrl: Http };
 			}
 			if(Name === "@codemirror/state")
 			{
@@ -163,7 +170,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 		}
 	});
 	const Instance = new Export.exports.default(); await Instance.onload();
-	return { Instance, Files, Required, Local, Tabs, Settings, Notices, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
+	return { Instance, Files, Required, Local, Tabs, Settings, Notices, Modals, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
 }
 
 function bootstrap_http(Before?: (Params: any) => Promise<void>)
@@ -1183,6 +1190,147 @@ test("returning to a conversation with an unknown submission restores its pendin
 		await P.choose_session(Id); assert.equal(P.operation_state(OperationId).Status, "submission-unknown");
 		assert.equal(P.RuntimeState.Stage, "submission-unknown", "choosing the old session must restore its operation-derived state");
 		assert.equal(await P.send_chat("不能在未知旧回合上再提交", null, null), false); assert.equal(Submissions, 1); assert.equal(P.Session.Messages.filter((M: any) => M.Role === "user").length, 1);
+	}
+	finally { P.onunload(); }
+});
+
+test("actual conflict confirmation keeps pending evidence on disk failure and only resolves after durable save", async () =>
+{
+	const F = await mobile_fixture(bootstrap_http()), P = F.Instance;
+	try
+	{
+		P.Remote.Enabled = false;
+		const S = P.Session, Local = { Id: "conflict-a", Role: "assistant", Text: "Original local proof" }, Remote = { ...Local, Text: "Original remote proof" };
+		S.Messages = [Local];
+		const C = { Key: JSON.stringify([S.Id, Local.Id]), Reason: "Original conflict", Local: structuredClone(Local), Remote };
+		P.State.Sync = { SchemaVersion: 1, Scope: "desktop:test", Revision: 0, Versions: {}, Operations: [], Conflicts: [C] };
+		await P.persist(false);
+		const Write = P.app.vault.adapter.write;
+		P.app.vault.adapter.write = async () => { throw Error("Original disk failure"); };
+		const Failed = P.resolve_message_conflict(C.Key, "remote");
+		F.Modals.at(-1)!.Buttons.find((B: any) => B.text === "确认采用此消息版本").click();
+		await assert.rejects(Failed, /disk failure/);
+		assert.equal(P.Session.Messages[0].Text, Local.Text); assert.equal(P.State.Sync.Conflicts.length, 1); assert.equal(P.State.Sync.Resolutions?.length ?? 0, 0);
+		P.app.vault.adapter.write = Write;
+		const Accepted = P.resolve_message_conflict(C.Key, "remote");
+		F.Modals.at(-1)!.Buttons.find((B: any) => B.text === "确认采用此消息版本").click(); await Accepted;
+		assert.equal(P.Session.Messages[0].Text, Remote.Text); assert.equal(P.State.Sync.Conflicts.length, 0); assert.equal(P.State.Sync.Resolutions.length, 1);
+		const Disk = JSON.parse(F.Files.get(".obsidian/plugins/codex-sidebar/desktop-state-v2.json")!);
+		assert.equal(Disk.Sync.Resolutions[0].Conflict.Local.Text, Local.Text); assert.equal(Disk.Sessions.find((V: any) => V.Id === S.Id).Messages[0].Text, Remote.Text);
+	}
+	finally { P.onunload(); }
+});
+
+test("actual stream finalization rejects late deltas and saves exact final text after checkpoint coalescing", async () =>
+{
+	const F = await mobile_fixture(bootstrap_http()), P = F.Instance;
+	try
+	{
+		P.Remote.Enabled = false; P.Session.ThreadId = "original-stream"; P.Busy = true; P.TurnId = "original-turn";
+		for(let I = 0; I < 400; I++) { P.handle_message({ method: "item/agentMessage/delta", params: { threadId: "original-stream", turnId: "original-turn", itemId: "a", delta: "original".repeat(32) } }); }
+		P.handle_message({ method: "item/completed", params: { threadId: "original-stream", turnId: "original-turn", item: { id: "a", type: "agentMessage", phase: "final_answer", text: "Final exact $x=1$" } } });
+		P.handle_message({ method: "turn/completed", params: { threadId: "original-stream", turn: { id: "original-turn", status: "completed" } } });
+		P.handle_message({ method: "item/agentMessage/delta", params: { threadId: "original-stream", turnId: "original-turn", itemId: "a", delta: "must not return" } });
+		await P.persist(false); assert.equal(P.Session.Messages[0].Text, "Final exact $x=1$");
+		assert.equal(JSON.parse(F.Files.get(".obsidian/plugins/codex-sidebar/desktop-state-v2.json")!).Sessions[0].Messages[0].Text, "Final exact $x=1$");
+		assert.equal(P.Checkpoints.Stats.checkpoints, 3);
+	}
+	finally { P.onunload(); }
+});
+
+test("queued old checkpoints cannot persist a future terminal operation before its final body is durable", async () =>
+{
+	const F = await mobile_fixture(bootstrap_http()), P = F.Instance;
+	const Canonical = ".obsidian/plugins/codex-sidebar/desktop-state-v2.json";
+	try
+	{
+		P.Remote.Enabled = false;
+		const S = P.Session;
+		S.Messages = [{ Id: "original-answer", Role: "assistant", Text: "A", TurnId: "original-turn" }];
+		P.State.Sync = { SchemaVersion: 1, Scope: "desktop:test", Revision: 0, Versions: {}, Conflicts: [], Operations: [{ Id: "original-operation", Scope: "desktop:test", SessionId: S.Id, MessageId: "original-question", Input: { Prompt: "Original proof" }, Digest: "original-digest", Status: "running", Attempted: true, TurnId: "original-turn" }] };
+		await P.persist(false);
+		const Gate = deferred(), Blocked = P.Writes.enqueue(() => Gate.Promise);
+		const Old = P.persist_snapshot(P.State, false, P.state_target(), "original-stream-checkpoint");
+		S.Messages[0].Text = "AB"; S.Messages[0].CompletionStatus = "completed"; P.State.Sync.Operations[0].Status = "completed";
+		const Write = P.app.vault.adapter.write;
+		P.app.vault.adapter.write = async (Path: string, Text: string) =>
+		{
+			if(Path === Canonical + ".save.stage.json" && JSON.parse(Text).Sessions.some((V: any) => V.Messages.some((M: any) => M.Text === "AB"))) { throw Error("Original final staging failure"); }
+			await Write(Path, Text);
+		};
+		const Final = P.persist(false), Rejected = assert.rejects(Final, /final staging failure/);
+		Gate.resolve(); await Blocked; await Old; await Rejected;
+		const Durable = JSON.parse(F.Files.get(Canonical)!);
+		assert.equal(Durable.Sessions.find((V: any) => V.Id === S.Id).Messages[0].Text, "A");
+		assert.equal(Durable.Sync.Operations[0].Status, "running", "future operation status must not cross its body persistence barrier");
+		assert.equal(JSON.parse(F.Files.get(Canonical + ".last-committed.json")!).Sync.Operations[0].Status, "running");
+		P.app.vault.adapter.write = Write;
+		await P.persist(false);
+		const FinalDisk = JSON.parse(F.Files.get(Canonical)!);
+		assert.equal(FinalDisk.Sessions.find((V: any) => V.Id === S.Id).Messages[0].Text, "AB");
+		assert.equal(FinalDisk.Sync.Operations[0].Status, "completed");
+	}
+	finally { P.onunload(); }
+});
+
+test("a queued pre-confirmation snapshot cannot separate a durable conflict decision from its chosen message", async () =>
+{
+	const F = await mobile_fixture(bootstrap_http()), P = F.Instance;
+	const Canonical = ".obsidian/plugins/codex-sidebar/desktop-state-v2.json", Committed: any[] = [];
+	try
+	{
+		P.Remote.Enabled = false;
+		const S = P.Session, Local = { Id: "original-conflict", Role: "assistant", Text: "Original local" }, Remote = { ...Local, Text: "Original chosen remote" };
+		S.Messages = [Local]; const C = { Key: JSON.stringify([S.Id, Local.Id]), Reason: "Original conflict", Local: structuredClone(Local), Remote };
+		P.State.Sync = { SchemaVersion: 1, Scope: "desktop:test", Revision: 0, Versions: {}, Operations: [], Conflicts: [C] };
+		await P.persist(false);
+		const Write = P.app.vault.adapter.write;
+		P.app.vault.adapter.write = async (Path: string, Text: string) => { await Write(Path, Text); if(Path === Canonical) { Committed.push(JSON.parse(Text)); } };
+		const Gate = deferred(), Blocked = P.Writes.enqueue(() => Gate.Promise), Resolving = P.resolve_message_conflict(C.Key, "remote");
+		F.Modals.at(-1)!.Buttons.find((B: any) => B.text === "确认采用此消息版本").click();
+		for(let I = 0; I < 100 && P.Writes.pending < 2; I++) { await new Promise(Resolve => setTimeout(Resolve, 1)); }
+		assert.equal(P.Writes.pending, 2, "confirmation must be queued before the older snapshot");
+		const Stale = P.persist(false); Gate.resolve(); await Blocked; await Stale; await Resolving;
+		assert.ok(Committed.some(V => V.Sync.Resolutions?.length === 1));
+		for(const V of Committed.filter(V => V.Sync.Resolutions?.length === 1))
+		{
+			assert.equal(V.Sessions.find((Entry: any) => Entry.Id === S.Id).Messages[0].Text, Remote.Text, "every durable resolution must retain its chosen body, including intermediate crash points");
+		}
+	}
+	finally { P.onunload(); }
+});
+
+test("late history hydration cannot reverse a newer session choice or resend the new session's same message id", async () =>
+{
+	const F = await mobile_fixture(bootstrap_http()), P = F.Instance;
+	try
+	{
+		P.Remote.Enabled = false;
+		const A = P.Session, B = { Id: "second-original", Title: "Second", ThreadId: null, Messages: [{ Id: "same-id", Role: "user", Text: "B distinct original" }] };
+		A.Messages = [{ Id: "same-id", Role: "user", Text: "A original source" }]; P.State.Sessions.push(B);
+		const Gate = deferred(); P.ensure_session_history = async (Id: string) => { if(Id === A.Id) { await Gate.Promise; } };
+		const Choosing = P.choose_session(A.Id); await P.choose_session(B.Id); Gate.resolve(); await Choosing;
+		assert.equal(P.State.ActiveId, B.Id);
+		P.State.ActiveId = A.Id;
+		const ResendGate = deferred(); P.ensure_session_history = async () => { await ResendGate.Promise; };
+		const Resending = P.resend_message("same-id"); P.State.ActiveId = B.Id; ResendGate.resolve();
+		await assert.rejects(Resending, /会话已切换/); assert.equal(P.State.Sessions.length, 2); assert.equal(P.Session.Messages[0].Text, B.Messages[0].Text);
+	}
+	finally { P.onunload(); }
+});
+
+test("a conflict confirmation queued behind another resolution must not resolve removed pending evidence again", async () =>
+{
+	const F = await mobile_fixture(bootstrap_http()), P = F.Instance;
+	try
+	{
+		P.Remote.Enabled = false; const S = P.Session, Local = { Id: "a", Role: "assistant", Text: "Original local" }, Remote = { ...Local, Text: "Original remote" };
+		S.Messages = [Local]; const C = { Key: JSON.stringify([S.Id, Local.Id]), Reason: "Original conflict", Local, Remote };
+		P.State.Sync = { SchemaVersion: 1, Scope: "desktop:test", Revision: 0, Versions: {}, Operations: [], Conflicts: [C] };
+		const Gate = deferred(), Blocked = P.Writes.enqueue(() => Gate.Promise), Resolving = P.resolve_message_conflict(C.Key, "remote");
+		F.Modals.at(-1)!.Buttons.find((B: any) => B.text === "确认采用此消息版本").click();
+		P.State.Sync.Conflicts = []; Gate.resolve(); await Blocked;
+		await assert.rejects(Resolving, /冲突已变化/); assert.equal(P.Session.Messages[0].Text, Local.Text); assert.equal(P.State.Sync.Resolutions?.length ?? 0, 0);
 	}
 	finally { P.onunload(); }
 });

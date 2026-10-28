@@ -141,9 +141,39 @@ export function build_prompt(Question: string, Context: ContextSnapshot | null, 
 	}
 	if(Quote)
 	{
-		Prompt += "\n\n" + followup_instructions(Quote) + "\n" + JSON.stringify({ reference: "selected_assistant_answer", session_id: Quote.SessionId, message_id: Quote.MessageId, selected_text: Quote.SelectedText, original_answer_markdown: Quote.SourceText, selected_text_truncated: Quote.SelectedTruncated, original_answer_truncated: Quote.SourceTruncated, followup_mode: Quote.FollowupMode, original_answer_status: Quote.SourceStatus, source_version: Quote.SourceVersion, source_range: Quote.SourceRange, source_blocks: Quote.SourceBlocks, source_path: Quote.SourcePath, source_references: Quote.SourceReferences, mapping: Quote.Mapping, root_message_id: Quote.RootMessageId, parent_message_id: Quote.ParentMessageId });
+		Prompt += "\n\n" + followup_instructions(Quote) + "\n" + JSON.stringify({ reference: "selected_assistant_answer", session_id: Quote.SessionId, message_id: Quote.MessageId, selected_text: Quote.SelectedText, original_answer_markdown: Quote.SourceText, selected_text_truncated: Quote.SelectedTruncated, original_answer_truncated: Quote.SourceTruncated, followup_mode: Quote.FollowupMode, original_answer_status: Quote.SourceStatus, source_version: Quote.SourceVersion, source_range: Quote.SourceRange, source_blocks: Quote.SourceBlocks?.map(Block => { const Start = Block.From - (Quote.SourceRange?.From ?? 0); if(Start < 0 || Quote.SourceText.slice(Start, Start + Block.Text.length) !== Block.Text) { return Block; } const { Text: _Text, ...Metadata } = Block; return Metadata; }), source_path: Quote.SourcePath, source_references: Quote.SourceReferences, mapping: Quote.Mapping, root_message_id: Quote.RootMessageId, parent_message_id: Quote.ParentMessageId, ...(Quote.SourceTruncated ? { original_message_read: { command: "read", message_id: Quote.MessageId, field: "text", ...(Quote.SourceVersion ? { source_version: Quote.SourceVersion } : {}) }, missing_source_rule: "按宿主当前会话读取; 第一页返回正文版本, 后续页必须使用该版本. 不把不含选区的前缀视为已定位原文." } : {}) });
 	}
 	return Prompt;
+}
+
+/** A sending-only view of an existing prompt. Opaque/custom prompts stay byte-identical. */
+export function derived_message_prompt(Message: { Text: string; Prompt?: string; Context?: ContextSnapshot | null; Quote?: AnswerQuote | null }): string
+{
+	const Original = Message.Prompt ?? build_prompt(Message.Text, Message.Context ?? null, Message.Quote ?? null), Quote = Message.Quote;
+	if(!Quote) { return Original; }
+	const At = Original.lastIndexOf("\n"), Tail = Original.slice(At + 1);
+	try
+	{
+		const Value = JSON.parse(Tail);
+		if(Value.reference !== "selected_assistant_answer" || Value.session_id !== Quote.SessionId || Value.message_id !== Quote.MessageId || Value.original_answer_markdown !== Quote.SourceText || Value.source_version !== Quote.SourceVersion || !Array.isArray(Value.source_blocks)) { return Original; }
+		let Changed = false;
+		const Blocks = Value.source_blocks.map((Block: any) =>
+		{
+			const Saved = Quote.SourceBlocks?.find(B => B.Id === Block.Id && B.From === Block.From && B.To === Block.To && B.Text === Block.Text);
+			if(!Saved || typeof Block.Text !== "string") { return Block; }
+			const Start = Saved.From - (Quote.SourceRange?.From ?? 0);
+			if(Start < 0 || Quote.SourceText.slice(Start, Start + Saved.Text.length) !== Saved.Text) { return Block; }
+			const { Text: _Text, ...Metadata } = Block; Changed = true; return Metadata;
+		});
+		return Changed ? Original.slice(0, At + 1) + JSON.stringify({ ...Value, source_blocks: Blocks }) : Original;
+	}
+	catch { return Original; }
+}
+
+export function assert_quote_read_capability(Quote: AnswerQuote | null | undefined, BodyVersionsAvailable: boolean): void
+{
+	if(Quote?.SourceTruncated && Quote.SourceVersion && !BodyVersionsAvailable) { throw new Error("该引用需要按原消息版本补读, 当前桥尚不支持正文版本分页; 请升级独立桥. 原引用与草稿保留."); }
+	if(Quote?.SourceTruncated && !Quote.SourceText && !Quote.SourceVersion) { throw new Error("该引用缺少可核验的原文版本, 请重新选择原回答; 未用无关前缀替代选区."); }
 }
 
 export function source_excerpt(Source: string, Start: number, End: number): string

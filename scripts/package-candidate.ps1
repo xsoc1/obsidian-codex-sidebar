@@ -18,7 +18,7 @@ try
 	New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 	$Sets = @(
 		@{ Name = "codex-sidebar-$($Manifest.version).zip"; Members = @("manifest.json", "main.js", "main.js.map", "styles.css") },
-		@{ Name = "codex-sidebar-windows-bridge-$($Manifest.version).zip"; Members = @("bridge.cjs", "manifest.json", "scripts/start-bridge.ps1", "scripts/stop-bridge.ps1", "docs/ipad-setup.md", "docs/pdf-support.md", "docs/migration.md", "docs/sync-protocol.md", "docs/development.md", "docs/reliability-suite.md", "docs/history/ipad-setup-through-1.1.0.md", "docs/history/pdf-support-through-1.1.0.md", "examples/pdf/text-mini.pdf", "examples/pdf/scanned-mini.pdf", "examples/pdf/dense-formula-mini.pdf", "README.md") }
+		@{ Name = "codex-sidebar-windows-bridge-$($Manifest.version).zip"; Members = @("bridge.cjs", "manifest.json", "scripts/start-bridge.ps1", "scripts/stop-bridge.ps1", "docs/ipad-setup.md", "docs/pdf-support.md", "docs/migration.md", "docs/sync-protocol.md", "docs/development.md", "docs/reliability-suite.md", "docs/history/reliability-beta1-20261027.md", "docs/history/ipad-setup-through-1.1.0.md", "docs/history/pdf-support-through-1.1.0.md", "examples/pdf/text-mini.pdf", "examples/pdf/scanned-mini.pdf", "examples/pdf/dense-formula-mini.pdf", "README.md") }
 	)
 	$Artifacts = @()
 	foreach($Set in $Sets)

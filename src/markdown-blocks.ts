@@ -1,7 +1,7 @@
 export interface MarkdownBlock
 {
 	Id: string;
-	Kind: "heading" | "paragraph" | "math" | "code" | "list" | "table" | "callout";
+	Kind: "heading" | "paragraph" | "math" | "code" | "list" | "table" | "callout" | "separator" | "footnote";
 	From: number;
 	To: number;
 	LineStart: number;
@@ -37,6 +37,7 @@ function math_open(Line: string): boolean { return /(?<!\\)\$\$|\\\[|\\begin\{(?
 function list_line(Line: string): boolean { return /^\s*(?:[-+*]|\d+[.)])\s+/.test(Line); }
 function table_line(Line: string): boolean { return /^\s*\|.*\|\s*$/.test(Line) || /\|/.test(Line) && /^\s*\|?\s*:?-{3,}/.test(Line); }
 function table_start(Lines: string[], Index: number): boolean { return table_line(Lines[Index]) || Lines[Index].includes("|") && /^\s*\|?\s*:?-{3,}/.test(Lines[Index + 1] ?? ""); }
+function separator(Line: string): boolean { return /^\s{0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/.test(Line); }
 
 export function markdown_blocks(Source: string): MarkdownBlock[]
 {
@@ -65,6 +66,8 @@ export function markdown_blocks(Source: string): MarkdownBlock[]
 			}
 			Closed = Stack.length === 0 && !InnerFence;
 		}
+		else if(separator(First)) { Kind = "separator"; I++; }
+		else if(/^\s*\[\^[^\]]+\]:/.test(First)) { Kind = "footnote"; I++; while(I < Lines.length && /^\s{2,}\S/.test(Lines[I])) { I++; } }
 		else if(math_open(First) && !list_line(First))
 		{
 			Kind = "math"; math_state(First, Stack); I++;
@@ -90,7 +93,7 @@ export function markdown_blocks(Source: string): MarkdownBlock[]
 		else
 		{
 			I++;
-			while(I < Lines.length && Lines[I].trim() && !/^\s*(?:#{1,6}\s|>|`{3,}|~{3,})/.test(Lines[I]) && !math_open(Lines[I]) && !list_line(Lines[I]) && !table_start(Lines, I)) { I++; }
+			while(I < Lines.length && Lines[I].trim() && !/^\s*(?:#{1,6}\s|>|`{3,}|~{3,}|\[\^[^\]]+\]:)/.test(Lines[I]) && !separator(Lines[I]) && !math_open(Lines[I]) && !list_line(Lines[I]) && !table_start(Lines, I)) { I++; }
 		}
 		const EndLine = Math.max(Start, I - 1), From = Offsets[Start], To = Offsets[EndLine] + Lines[EndLine].length, Text = Source.slice(From, To);
 		Blocks.push({ Id: `block-${Blocks.length}-${text_identity(Text)}`, Kind, From, To, LineStart: Start, LineEnd: EndLine, Closed, Text });

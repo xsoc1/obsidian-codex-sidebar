@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { canonical_json, entity_key, SyncBudgets, type DeltaMutation, type EntityVersion, type SendOperation } from "./types";
 import { merge_operations } from "./operations";
 import { deleted_messages } from "../sessions";
+import { conflict_evidence_key, merge_conflict_resolutions } from "./conflicts";
 
 interface Row extends EntityVersion { Key: string; Kind: DeltaMutation["Kind"]; SessionId?: string; MessageId?: string; Blob?: string; Deleted?: boolean; }
 interface Journal
@@ -28,11 +29,13 @@ export class SyncServerStore
 	private File: string;
 	private BlobDir: string;
 	private ChunkDir: string;
+	private LegacyFiles: string[];
 	private Snapshots = new Map<number, Row[]>();
 	constructor(Root: string, Client: string, LegacyFile?: string)
 	{
 		if(!/^[a-z0-9_-]{8,80}$/i.test(Client)) { throw new Error("设备身份无效"); }
 		this.File = join(Root, Client + "-sync-v2.json"); this.BlobDir = join(Root, Client + "-blobs"); this.ChunkDir = join(Root, Client + "-upload-parts");
+		this.LegacyFiles = [...new Set([LegacyFile, join(Root, Client + ".json")].filter(Boolean) as string[])].flatMap(File => [File, File + ".before-sync-v2"]);
 		mkdirSync(this.BlobDir, { recursive: true }); mkdirSync(this.ChunkDir, { recursive: true });
 		if(existsSync(this.File))
 		{
@@ -131,7 +134,16 @@ export class SyncServerStore
 	{
 		if(Kind === "message" && (this.deleted_session(SessionId) || this.is_message_deleted(SessionId, MessageId))) { return; }
 		if(Kind === "message") { const { SyncVersion: _Version, ...Content } = Value; Value = Content; }
-		if(Kind === "root") { const { Sync: _Sync, Outbox: _Outbox, Sessions: _Sessions, Settings: _Settings, ...Content } = Value; Value = Content; }
+		if(Kind === "root")
+		{
+			const { Sync: _Sync, Outbox: _Outbox, Sessions: _Sessions, Settings: _Settings, ...Content } = Value;
+			const Existing = this.Data.Rows.find(R => R.Kind === "root"), Previous = Existing?.Blob ? this.value(Existing.Blob) : {};
+			const Resolutions = merge_conflict_resolutions(this.Scope, Previous.ConflictResolutions, Content.ConflictResolutions);
+			for(const R of Resolutions) { if(R.ConflictId !== hash(canonical_json([this.Scope, conflict_evidence_key(R.Conflict)]))) { throw new Error("冲突决议摘要与双方版本证据不符"); } }
+			if(Resolutions.length) { Content.ConflictResolutions = Resolutions; }
+			const Legacy = [...new Map([...(Previous.ResolvedConflicts ?? []), ...(Content.ResolvedConflicts ?? [])].map(R => [canonical_json(R), R])).values()]; if(Legacy.length) { Content.ResolvedConflicts = Legacy; }
+			Value = Content;
+		}
 		const Key = entity_key(Kind, SessionId, MessageId), Blob = this.blob(canonical_json(Value)), Old = this.Data.Rows.find(R => R.Key === Key);
 		if(Old?.Blob === Blob) { return; }
 		const Row: Row = { Key, Kind, ...(SessionId ? { SessionId } : {}), ...(MessageId ? { MessageId } : {}), Revision: ++this.Data.Revision, Origin: this.Scope, Digest: Blob, Blob };
@@ -198,8 +210,16 @@ export class SyncServerStore
 		if(!Snapshot) { throw new Error("一致性快照已变化或过期, 请重新获取第一页"); }
 		if(!Number.isSafeInteger(Offset) || Offset < 0) { throw new Error("同步分页位置无效"); }
 		const Rows = Snapshot.filter(R => Kind === "history" ? R.Kind === "message" && R.SessionId === SessionId : R.Kind !== "message");
-		const Values: Row[] = []; let Bytes = 512;
-		for(const Row of Rows.slice(Offset, Offset + SyncBudgets.historyPage)) { const Size = Buffer.byteLength(canonical_json(Row)); if(Bytes + Size > SyncBudgets.pageBytes) { break; } Values.push(Row); Bytes += Size; }
+		const Values: any[] = []; let Bytes = 512;
+		for(const Row of Rows.slice(Offset, Offset + SyncBudgets.historyPage))
+		{
+			let Value: any = Row;
+			if(Kind === "catalog" && Row.Kind === "session" && Row.Blob)
+			{
+				const Meta = this.value(Row.Blob); if(Buffer.byteLength(canonical_json(Meta)) <= 4096) { Value = { ...Row, Inline: Meta }; }
+			}
+			const Size = Buffer.byteLength(canonical_json(Value)); if(Bytes + Size > SyncBudgets.pageBytes) { break; } Values.push(Value); Bytes += Size;
+		}
 		const Next = Offset + Values.length; return { schemaVersion: 2, scope: this.Scope, revision: Revision, rows: Values, next: Next < Rows.length ? Next : null };
 	}
 	delta(Body: any): any
@@ -263,12 +283,95 @@ export class SyncServerStore
 		const Candidate = { ...structuredClone(Operation), Revision: this.Data.Revision + 1, Origin: this.Scope };
 		const Next = Old ? merge_operations([Old], [Candidate])[0] : Candidate;
 		if(Old && canonical_json(Old) === canonical_json(Next)) { return; }
-		Next.Revision = ++this.Data.Revision; Next.Origin = this.Scope;
-		if(Old) { Object.assign(Old, Next); } else { this.Data.Operations.push(Next); }
-		this.Data.ProtocolUsed = true; this.save();
+		const Revision = this.Data.Revision, ProtocolUsed = this.Data.ProtocolUsed, Previous = Old ? structuredClone(Old) : undefined;
+		try
+		{
+			Next.Revision = ++this.Data.Revision; Next.Origin = this.Scope;
+			if(Old) { Object.assign(Old, Next); } else { this.Data.Operations.push(Next); }
+			this.Data.ProtocolUsed = true; this.save();
+		}
+		catch(E)
+		{
+			const Index = this.Data.Operations.findIndex(O => O.Id === Operation.Id); if(Previous) { this.Data.Operations[Index] = Previous; } else if(Index >= 0) { this.Data.Operations.splice(Index, 1); }
+			this.Data.Revision = Revision; this.Data.ProtocolUsed = ProtocolUsed; throw E;
+		}
 	}
 	observe_message(SessionId: string, Message: any): void
 	{
-		if(this.deleted_session(SessionId)) { return; } this.put("message", Message, SessionId, Message.Id); this.save();
+		if(this.deleted_session(SessionId) || this.is_message_deleted(SessionId, Message.Id)) { return; }
+		const Key = entity_key("message", SessionId, Message.Id), Existing = this.Data.Rows.find(R => R.Key === Key), Previous = Existing ? structuredClone(Existing) : undefined, Revision = this.Data.Revision;
+		try { this.put("message", Message, SessionId, Message.Id); if(this.Data.Revision !== Revision) { this.save(); } }
+		catch(E)
+		{
+			const Index = this.Data.Rows.findIndex(R => R.Key === Key); if(Previous) { this.Data.Rows[Index] = Previous; } else if(Index >= 0) { this.Data.Rows.splice(Index, 1); }
+			this.Data.Revision = Revision; throw E;
+		}
+	}
+	storage_report(External?: { SchemaVersion: 1; Complete: boolean; Blobs: readonly string[]; Revision: number }): any
+	{
+		const StartRevision = this.Data.Revision, Roots = new Map<string, Set<string>>(), Failures: string[] = [];
+		const Add = (Id: unknown, Kind: string) => { const Key = digest_id(Id); if(!Roots.has(Key)) { Roots.set(Key, new Set()); } Roots.get(Key)!.add(Kind); };
+		const Scan = (Value: any, Kind: string): void =>
+		{
+			if(Array.isArray(Value)) { for(const Child of Value) { Scan(Child, Kind); } return; }
+			if(!Value || typeof Value !== "object") { return; }
+			for(const [Key, Child] of Object.entries(Value))
+			{
+				if(["Blob", "InputBlob", "RequestBlob", "ResultBlob", "ConflictsBlob", "blob"].includes(Key) && Child !== undefined) { Add(Child, Kind); }
+				else if(Key === "Digest" && typeof Child === "string" && /^[0-9a-f]{64}$/.test(Child) && this.has_blob(Child)) { Add(Child, Kind); }
+				else if(Child && typeof Child === "object") { Scan(Child, Kind); }
+			}
+		};
+		try
+		{
+			this.validate(this.Data); Scan(this.Data.Rows, "current-entities");
+			for(const Snapshot of this.Snapshots.values()) { Scan(Snapshot, "active-catalog-snapshots"); }
+			for(const O of this.Data.Operations)
+			{
+				for(const Value of [O.Input, O.Request, O.Result, O.Conflicts]) { if(Value !== undefined) { const Id = hash(canonical_json(Value)); if(this.has_blob(Id)) { Add(Id, "operation-evidence"); } Scan(Value, "operation-evidence"); } }
+			}
+			Scan(this.Data.Receipts, "delta-receipts");
+			for(const File of [this.File, this.File + ".last-committed", this.File + ".tmp"])
+			{
+				if(!existsSync(File)) { continue; } const Saved = JSON.parse(readFileSync(File, "utf8")); this.validate(this.decode(Saved)); Scan(Saved, File === this.File ? "current-journal" : "recovery-journal");
+			}
+			for(const File of this.LegacyFiles)
+			{
+				if(!existsSync(File)) { continue; } const Saved = JSON.parse(readFileSync(File, "utf8"));
+				if(!Array.isArray(Saved.Sessions) || !Saved.Settings || Saved.SchemaVersion !== undefined && Saved.SchemaVersion !== 2) { throw new Error("旧恢复备份结构未知, 不推断可回收集合"); } Scan(Saved, "legacy-recovery-backup");
+			}
+			if(External)
+			{
+				if(External.SchemaVersion !== 1 || !Array.isArray(External.Blobs) || External.Revision !== StartRevision) { throw new Error("外部事件/操作快照引用版本无效"); }
+				for(const Id of External.Blobs) { Add(Id, "external-live-evidence"); }
+			}
+		}
+		catch(E) { Failures.push(String(E)); }
+		let BlobBytes = 0, CurrentBytes = 0, OperationBytes = 0, RecoveryBytes = 0, UnclassifiedBytes = 0, UploadBytes = 0;
+		const Candidates: { Id: string; Bytes: number }[] = [], Present = new Set<string>();
+		try
+		{
+			for(const Name of readdirSync(this.BlobDir))
+			{
+				if(!/^[0-9a-f]{64}\.json$/.test(Name)) { throw new Error("内容目录含未知候选或文件, 不推断可回收集合"); }
+				const Id = Name.slice(0, -5), Data = readFileSync(join(this.BlobDir, Name)); if(hash(Data) !== Id) { throw new Error("内容摘要异常, 停止回收分析"); } JSON.parse(Data.toString("utf8"));
+				Present.add(Id); BlobBytes += Data.length; const Kinds = Roots.get(Id);
+				if(Kinds?.has("current-entities")) { CurrentBytes += Data.length; }
+				else if(Kinds?.has("operation-evidence")) { OperationBytes += Data.length; }
+				else if(Kinds?.size) { RecoveryBytes += Data.length; }
+				else { UnclassifiedBytes += Data.length; Candidates.push({ Id, Bytes: Data.length }); }
+			}
+			for(const Id of Roots.keys()) { if(!Present.has(Id)) { throw new Error("恢复引用指向缺失内容, 不推断可回收集合"); } }
+			for(const Name of readdirSync(this.ChunkDir))
+			{
+				if(!/^[0-9a-f]{64}$/.test(Name)) { throw new Error("上传目录身份未知"); } const Directory = join(this.ChunkDir, Name);
+				for(const Part of readdirSync(Directory)) { if(!/^(count|\d+)$/.test(Part)) { throw new Error("上传分片结构未知"); } UploadBytes += statSync(join(Directory, Part)).size; }
+				Failures.push("仍有进行中上传, 本次不输出回收候选");
+			}
+		}
+		catch(E) { Failures.push(String(E)); }
+		if(StartRevision !== this.Data.Revision) { Failures.push("引用版本在统计期间变化"); }
+		if(!External?.Complete) { Failures.push("未证明外部有效事件、操作分页快照和在途引用完整; 保留所有内容"); }
+		return { SchemaVersion: 1, DryRun: true, AutomaticGc: false, Revision: StartRevision, CompleteRoots: Failures.length === 0, Failures, BlobCount: Present.size, BlobBytes, CurrentEntityBytes: CurrentBytes, OperationEvidenceBytes: OperationBytes, SnapshotAndRecoveryBytes: RecoveryBytes, UnclassifiedBytes, UploadBytes, Candidates: Failures.length ? [] : Candidates };
 	}
 }

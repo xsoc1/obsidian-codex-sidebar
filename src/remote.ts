@@ -99,6 +99,18 @@ export class RemoteConnection implements RpcConnection
 		const State = Result.state?.Sessions?.length ? restore_sessions(Local, Result.state, Linked, FollowLocal) : Local;
 		this.LastState = State; this.set_cursor(Result.cursor ?? 0); return State;
 	}
+	async hydrate_session<T extends SessionState>(State: T, Id: string): Promise<T>
+	{
+		if(this.Closed) { throw new Error("远程连接已关闭, 历史尚未加载"); }
+		const Result = this.Delta ? await this.Delta.hydrate_session(State, Id) : State;
+		if(this.Closed) { throw new Error("历史读取完成前连接已关闭, 不合并迟到结果"); } this.LastState = Result; return Result;
+	}
+	async hydrate_all<T extends SessionState>(State: T): Promise<T>
+	{
+		if(this.Closed) { throw new Error("远程连接已关闭, 未生成不完整导出"); }
+		const Result = this.Delta ? await this.Delta.hydrate_all(State) : State;
+		if(this.Closed) { throw new Error("完整历史读取完成前连接已关闭, 未生成导出"); } this.LastState = Result; return Result;
+	}
 
 	set_cursor(Cursor: number): void
 	{
