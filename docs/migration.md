@@ -1,6 +1,6 @@
 # 2.0 候选升级、迁移与回退
 
-当前适用 `2.0.0-beta.2` 候选, 包括从 beta.1 的增量升级和原 1.1.0 迁移. beta.1 已发布, beta.2 尚未授权安装或发布. 协议与兼容矩阵见 [sync-protocol.md](sync-protocol.md), 实际部署和测试结果见 [reliability-suite.md](reliability-suite.md).
+适用 `2.0.0-beta.2`, 包括从 beta.1 的增量升级和原 1.1.0 迁移. 用户在候选交付后已授权本版安装与发布. 协议与兼容矩阵见 [sync-protocol.md](sync-protocol.md), 实际部署和测试结果见 [reliability-suite.md](reliability-suite.md).
 
 ## beta.1 到 beta.2
 
