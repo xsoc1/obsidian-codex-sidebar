@@ -1,6 +1,6 @@
 # 2.0 第二轮修复与性能验证
 
-更新: 2026-10-28. **2.0.0-beta.2 已授权并完成 Windows/独立桥部署, GitHub beta 发布进行中**. 先前“未授权”仅描述候选交付时点, 后续实际收据见文末. beta.1 的实现、部署、CI、公开资产读回记录原样保存在 [2026-10-27 归档](history/reliability-beta1-20261027.md). 旧 current/pending 标签只表示当时状态.
+更新: 2026-10-28. **2.0.0-beta.2 已安装 Windows、升级独立桥并发布 GitHub beta, CI 与公开资产读回通过**. 先前“未授权”仅描述候选交付时点, 实际收据见文末. beta.1 记录原样保存在 [归档](history/reliability-beta1-20261027.md).
 
 ## 实际基线与授权
 
@@ -112,7 +112,7 @@ node scripts/check-stream-layout.mjs
 
 浏览器参数、真实调用独占 ledger、只读恢复和原生探针见 [development.md](development.md). 原始输出/失败探针/模型 ledger/native 哈希保留在仓库外私有证据目录, 不把本机路径或正文日志放入公开包.
 
-源码审查并本地提交后, PowerShell 7 执行 scripts/package-candidate.ps1, 从干净 HEAD 重建. 插件固定 4 个成员, 桥固定 17 个公开成员. candidate-manifest.json 绑定完整源码 commit/版本/Node/包与每个成员 SHA-256, 不在源码内自引用包摘要. 包不含个人配置、技能、状态或令牌. 最终源码/工作树与独立读回结果见交付回执; 未 push 或建立 PR/tag/release.
+源码审查并本地提交后, PowerShell 7 执行 scripts/package-candidate.ps1, 从干净 HEAD 重建. 插件固定 4 个成员, 桥固定 17 个公开成员. candidate-manifest.json 绑定源码 commit/版本/Node/包与成员 SHA-256. 包不含个人配置、技能、状态或令牌. 候选交付时未 push/tag/release, 后续授权发布事实见下文; 本版未建立 PR.
 
 2026-10-28 已执行首包交付验证: 功能提交 `4d6cc8f4ff1ec541ca2e440041c57122d62ffb9a`, 插件 4/桥 17 成员均逐个读回核对字节与 SHA-256, 私有路径/配置扫描通过. 从解包的实际 bridge.cjs 在唯一 TEMP 状态/loopback 启动, 查询真实 CLI 的 info、操作页及存储统计, 返回 beta.2 / protocol 2、两项新增能力及实际 math-writing 版本; 操作数和新推理数均为 0. 只清理该测试拥有的进程树, 无残留. 日常插件/桥 8 个程序文件与先前回退副本哈希一致. 此后仅记录收据的提交重新绑定候选包, 具体最终 commit 以其 manifest 为准.
 
@@ -126,4 +126,8 @@ node scripts/check-stream-layout.mjs
 
 Windows 仅替换 4 个程序文件并重载. 原 22 会话/187 消息、设置、10 条修改记录/9 次写入、全部原设备键、启用集合与 3 个编辑缓冲保持. 当前 8 模型及实际 math-writing 就绪. 窗口在后台时异步渲染未结束, 激活原窗口后显示 40 卡片/332 公式节点; 不将后台空 DOM 误记成前台通过. 原生错误检查无捕获记录. iPad/物理 IME/切网仍未验.
 
-GitHub beta 标签、普通 Windows/Ubuntu CI、发布工作流及 7 项公开资产需以实际远端结果补记; 此段本地部署不代替远端成功.
+公开预发布 [2.0.0-beta.2](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.2) 已实际读回, draft=false / prerelease=true. 标签源码为 `409ea6871e68e6a3a89f73a88aeebee23631e6c3`. [普通 Windows/Ubuntu Node 24 CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40666346895) 与 [发布工作流](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/40666602462) 均 success.
+
+7 个公开资产已全部下载: manifest.json、main.js、main.js.map、styles.css、插件 ZIP、Windows 桥 ZIP 和 candidate-manifest.json. 独立 Python 校验 ZIP CRC、4/17 成员白名单、全部成员 SHA-256、单独插件文件与 ZIP 一致性、源码 commit/版本绑定及私有路径排除均通过. 公开插件 ZIP SHA-256 为 `cecd963a6cef51c0f0c47168ff697ad6c6eb4f5cc47de8bed11206d612dca885`, 桥 ZIP 为 `f2a578d44a21afc56fb3fde011b4a3646074b5c03f88047ba1c1836a534e7d7d`.
+
+Windows 4 个程序文件与公开资产逐字一致; 只有调试 map 需从 Windows 构建换为发布构建, 不改变运行逻辑. 完整桥版本目录 17 个成员也与公开包一致, bridge.cjs 本体无需再重启. 私有 HTTPS 元数据读回 beta.2/protocol 2/新增能力正常; 这是电脑链路验证, 不是 iPad 验收. stable latest 仍为 1.1.0, 默认分支未变; BRAT 使用 beta.2 指定版本. 后续仅记录收据的分支提交不改变已发布标签源码.
