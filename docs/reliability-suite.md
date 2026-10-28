@@ -114,4 +114,6 @@ node scripts/check-stream-layout.mjs
 
 源码审查并本地提交后, PowerShell 7 执行 scripts/package-candidate.ps1, 从干净 HEAD 重建. 插件固定 4 个成员, 桥固定 17 个公开成员. candidate-manifest.json 绑定完整源码 commit/版本/Node/包与每个成员 SHA-256, 不在源码内自引用包摘要. 包不含个人配置、技能、状态或令牌. 最终源码/工作树与独立读回结果见交付回执; 未 push 或建立 PR/tag/release.
 
+2026-10-28 已执行首包交付验证: 功能提交 `4d6cc8f4ff1ec541ca2e440041c57122d62ffb9a`, 插件 4/桥 17 成员均逐个读回核对字节与 SHA-256, 私有路径/配置扫描通过. 从解包的实际 bridge.cjs 在唯一 TEMP 状态/loopback 启动, 查询真实 CLI 的 info、操作页及存储统计, 返回 beta.2 / protocol 2、两项新增能力及实际 math-writing 版本; 操作数和新推理数均为 0. 只清理该测试拥有的进程树, 无残留. 日常插件/桥 8 个程序文件与先前回退副本哈希一致. 此后仅记录收据的提交重新绑定候选包, 具体最终 commit 以其 manifest 为准.
+
 候选交付保留已安装程序的回退副本. 部署时仍需重新备份当时的会话/IndexedDB/草稿、完整桥 StateDir/日志/blob 和配对配置, 不用较早快照覆盖继续产生的历史. 获得新授权后使用同一配对/数据目录, 先桥后客户端, 核对版本与原操作, 再进行 iPad 真机闭环. 本地候选通过不等于已经部署.
