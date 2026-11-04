@@ -38,3 +38,5 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 - `npm run build` 与 `npm test` 通过. 移动构建使用模拟 HTTPS 请求复验 DeepSeek 选段改稿、确认前零写入、确认写入、服务商切换、重载恢复、密钥不落盘和网络结果未知时不重发. 单测核对五个直连预设的请求结构.
 - Windows 使用真实 Claude Code 2.1.318 调用一次回环 mock, 收到正文且模型请求包含零工具. DeepSeek Harness 0.2.1-rc.5 的真实 Windows 进程先加载工具拦截, 空 stdin 被拒绝, 没有提交推理. Antigravity SDK 0.1.23 的真实 Windows Python 环境成功构造只允许 `FINISH` 的配置.
 - 以上不含实际服务商密钥问答或 iPad 真机测试. 验证使用原创样本、合成密钥和隔离目录.
+- 2026-11-04 Windows「数学」库安装 beta.4 后重新加载. 原生设置可见 API 预设、Windows Agent、本机 Codex 和桥入口. 本机已有登录读取到 8 个模型并发现 math-writing. 30 个会话和 246 条消息的历史、设置、笔记关联、18 条发送事务及打开的编辑器内容保持一致. 11 条修改记录和 10 条写入计划的内容在校正 JSON 字段顺序后匹配安装前的摘要. 活动临时线程与工作提示词哈希按原有重连行为清理. Obsidian 捕获日志中没有本插件相关错误.
+- GitHub 的 [Windows/Ubuntu 检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41755562570) 和 [发布任务](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41755817625) 成功. [公开预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.4) 绑定 `ca4304b571cbbaaeb3d00a87673251eb01a0a2e2`. 匿名下载 7 个文件核对 GitHub 摘要, 两个 ZIP 的 4/17 个成员匹配构建清单. Windows 四个安装文件与公开资产逐字节一致.
