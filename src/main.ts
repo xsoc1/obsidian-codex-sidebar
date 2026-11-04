@@ -58,8 +58,9 @@ import { MessageIndex } from "./runtime/message-index";
 import { prepare_conflict_resolution, pending_conflicts, preserve_durable_resolved_messages } from "./sync/conflicts";
 import { authenticate_api_key, openai_api_key } from "./api-auth";
 import { BackendConnection } from "./backend";
-import { backend_profile, backend_name, backend_identity, backend_model, type ApiCatalogModel, type BackendProfile } from "./backend-profile";
+import { backend_profile, backend_name, backend_identity, backend_model, api_reasoning_supported, type ApiCatalogModel, type BackendProfile } from "./backend-profile";
 import { list_api_models } from "./api-models";
+import { google_reasoning } from "./google-reasoning";
 import { direct_api, direct_api_key } from "./direct-api";
 import { snapshot_instructions } from "./prompt";
 import { MathCompletionInstructions, completion_prompt, parse_completion } from "./completion-prompt";
@@ -1010,7 +1011,7 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		if(!this.Backend) { return; }
 		const Model = backend_model(this.Backend), Current = this.State.Settings;
-		const Effort = this.Backend.Kind === "api" && this.Backend.Provider === "opencode" && Current.Model === Model ? Current.Effort : "";
+		const Effort = this.Backend.Kind === "api" && api_reasoning_supported(this.Backend.Provider) && Current.Model === Model ? Current.Effort : "";
 		Object.assign(Current, { Model, Effort, Fast: false });
 		for(const Operation of this.State.Sync?.Operations ?? [])
 		{
@@ -1182,10 +1183,11 @@ export default class CodexSidebarPlugin extends Plugin
 			const CliPath = this.Remote.Enabled || Backend ? "" : this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
 			const Send = (Value: BrowserRequest) => requestUrl({ ...Value, throw: false });
 			let Reasoning: ApiCatalogModel["Reasoning"], ReasoningError = "";
-			if(Backend?.Kind === "api" && Backend.Provider === "opencode" && this.BackendKey)
+			if(Backend?.Kind === "api" && Backend.Provider === "google") { Reasoning = google_reasoning(Backend.Model); }
+			if(Backend?.Kind === "api" && (Backend.Provider === "opencode" || Backend.Provider === "deepseek") && this.BackendKey)
 			{
-				try { Reasoning = (Catalog ?? await list_api_models("opencode", "", "", Send, 6000)).find(Item => Item.Id === Backend.Model)?.Reasoning; }
-				catch { ReasoningError = "OpenCode Go 思考档次目录暂不可用. 可使用服务商默认, 或重连后再查."; }
+				try { Reasoning = (Catalog ?? await list_api_models(Backend.Provider, Backend.Base, this.BackendKey, Send, 6000)).find(Item => Item.Id === Backend.Model)?.Reasoning; }
+				catch { ReasoningError = `${backend_name(Backend)} 思考档次目录暂不可用. 可使用服务商默认, 或重连后再查.`; }
 			}
 			const Driver = Backend?.Kind === "api" ? direct_api(Backend, this.BackendKey, Send, Reasoning)
 				: Backend?.Kind === "agent" ? await (await import("./headless-agents")).headless_agent(Backend, this.BackendKey) : null;

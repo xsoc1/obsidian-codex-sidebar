@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { BackendConnection, type BackendInput } from "../src/backend";
 import { backend_profile, backend_identity } from "../src/backend-profile";
 import { direct_api } from "../src/direct-api";
+import { google_reasoning } from "../src/google-reasoning";
 import { agent_text } from "../src/headless-agents";
 import { snapshot_instructions, DefaultInstructions } from "../src/prompt";
 
@@ -76,6 +77,48 @@ test("explicit Go effort uses the matching wire field and default leaves the exi
 		else { assert.ok(Calls[0].Url.endsWith("/responses")); assert.deepEqual(Calls[0].Body.reasoning, { effort: "high" }); }
 		assert.ok(Calls[1].Url.endsWith("/chat/completions"));
 		assert.equal(Calls[1].Body.reasoning_effort, undefined); assert.equal(Calls[1].Body.reasoning, undefined);
+	}
+});
+
+test("Google exposes exact model-level options and never guesses for an alias or non-chat model", () =>
+{
+	assert.deepEqual(google_reasoning("models/gemini-3.1-pro-preview")?.Efforts, ["low", "medium", "high"]);
+	assert.deepEqual(google_reasoning("gemini-3-pro-preview")?.Efforts, ["low", "high"]);
+	assert.deepEqual(google_reasoning("gemini-3.8-flash")?.Efforts, ["low", "medium", "high"]);
+	assert.deepEqual(google_reasoning("gemini-3.1-flash-lite")?.Efforts, ["minimal", "low", "medium", "high"]);
+	assert.deepEqual(google_reasoning("gemini-2.5-pro")?.Efforts, ["low", "medium", "high"]);
+	assert.deepEqual(google_reasoning("gemini-2.5-flash-lite")?.Efforts, ["none", "low", "medium", "high"]);
+	for(const Id of ["gemini-flash-latest", "gemini-3.8-flash-tts", "gemini-3.1-flash-lite-image", "gemini-4-future"])
+	{
+		assert.equal(google_reasoning(Id), undefined);
+	}
+});
+
+test("DeepSeek and Gemini chat effort requests match each wire contract and preserve the default request", async () =>
+{
+	for(const Case of [
+		{ Provider: "deepseek", Model: "deepseek-flash", Effort: "max", Fields: { thinking: { type: "enabled" }, reasoning_effort: "max" } },
+		{ Provider: "deepseek", Model: "deepseek-flash", Effort: "none", Fields: { thinking: { type: "disabled" } } },
+		{ Provider: "google", Model: "gemini-3.1-flash-lite", Effort: "minimal", Fields: { extra_body: { google: { thinking_config: { thinking_level: "minimal" } } } } },
+		{ Provider: "google", Model: "gemini-2.5-flash-lite", Effort: "none", Fields: { reasoning_effort: "none" } }
+	])
+	{
+		const Profile = backend_profile({ Kind: "api", Provider: Case.Provider, Model: Case.Model, Vision: true });
+		if(Profile.Kind !== "api") { throw Error("fixture"); }
+		const Bodies: object[] = [];
+		const Generate = direct_api(Profile, Key, async Request =>
+		{
+			assert.equal(Request.url, Profile.Base + "/chat/completions");
+			const { model, messages, stream, ...Fields } = JSON.parse(Request.body!);
+			assert.equal(model, Case.Model); assert.equal(stream, false); assert.equal(messages[1].content[0].text, "$x$");
+			Bodies.push(Fields);
+			return { status: 200, json: { choices: [{ finish_reason: "stop", message: { content: "ok" } }] } };
+		}, Case.Provider === "google" ? google_reasoning(Case.Model) : { Format: "chat", Efforts: ["none", "low", "high", "max"] });
+		const Signal = new AbortController().signal;
+		await Generate({ ...Input, Effort: Case.Effort }, Signal);
+		await Generate(Input, Signal);
+		await assert.rejects(Generate({ ...Input, Effort: "xhigh" }, Signal), /不支持/);
+		assert.deepEqual(Bodies, [Case.Fields, {}]);
 	}
 });
 

@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-05: User requested DeepSeek and Google AI Studio per-model reasoning controls and authorized Windows “数学” installation and a GitHub prerelease. **2.0.0-beta.8** uses authenticated DeepSeek catalog metadata and exact documented Gemini chat IDs. Explicit options use the provider wire format; default remains unchanged. The bridge and local Codex paths stay unchanged. See [verification](docs/backends.md#200-beta8-验证).
+
 - 2026-11-04: User requested implementing Go API reasoning controls and authorized Windows “数学” installation and a GitHub prerelease. **2.0.0-beta.7** is installed and published. Read declared efforts for Go native Chat Completions and Responses models; persist selection in existing backend state and the original run snapshot. Never send unsupported or unverified explicit effort. Provider default omits the field and retains the existing route. The bridge and Codex controls are unchanged. See [beta.7 verification](docs/backends.md#200-beta7-验证).
 
 - 2026-11-04: User reported that clicking API activation emptied the settings and failed to connect, then authorized installing **2.0.0-beta.6** in Windows vault “数学” and publishing it as a prerelease for BRAT. Both are complete. The fix keeps the draft and catalog on both outcomes, shows errors inline, and retains the masked Key after a failed attempt. A successful activation, provider change or closing the form clears the password input. Initial configuration and first-request permissions are separate. See [activation regression evidence](docs/backends.md#200-beta6-验证). The independent bridge remains unchanged.

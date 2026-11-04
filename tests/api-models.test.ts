@@ -49,6 +49,22 @@ test("Go advertises only allowlisted effort values on an implemented native wire
 	assert.ok((await list_api_models("deepseek", "", Key, Send)).every(Model => !Model.Reasoning));
 });
 
+test("DeepSeek uses per-model supported levels and does not infer options for legacy IDs", async () =>
+{
+	const Models = await list_api_models("deepseek", "", Key, async () => ({ status: 200, json: { data: [
+		{ id: "deepseek-flash", effort: { supported_levels: ["low", "high", "max", "low", "xhigh"], default_level: "high" } },
+		{ id: "deepseek-v4-pro", effort: { supported_levels: ["high", "max"] } },
+		{ id: "deepseek-chat" },
+		{ id: "unknown", effort: { default_level: "high" } }
+	] } }));
+	assert.deepEqual(Models, [
+		{ Id: "deepseek-chat" },
+		{ Id: "deepseek-flash", Reasoning: { Format: "chat", Efforts: ["none", "low", "high", "max"] } },
+		{ Id: "deepseek-v4-pro", Reasoning: { Format: "chat", Efforts: ["none", "high", "max"] } },
+		{ Id: "unknown" }
+	]);
+});
+
 test("API catalog rejects invalid config before networking and exposes only safe, actionable failures", async () =>
 {
 	const Never = async () => assert.fail("must not send a request");

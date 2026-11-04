@@ -10,7 +10,7 @@ export type ApiProvider = keyof typeof ApiProviders;
 export type LocalAgent = keyof typeof AgentNames;
 export interface ApiReasoning
 {
-	Format: "chat" | "responses";
+	Format: "chat" | "responses" | "gemini-level";
 	Efforts: string[];
 }
 export interface ApiCatalogModel { Id: string; Reasoning?: ApiReasoning; }
@@ -63,3 +63,8 @@ export function backend_identity(Profile: BackendProfile): string
 }
 
 export function backend_model(Profile: BackendProfile): string { return Profile.Model || `${Profile.Kind === "agent" ? Profile.Agent : Profile.Provider}-default`; }
+
+export function api_reasoning_supported(Provider: ApiProvider): boolean
+{
+	return Provider === "opencode" || Provider === "deepseek" || Provider === "google";
+}

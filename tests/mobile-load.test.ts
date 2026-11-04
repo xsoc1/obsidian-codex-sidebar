@@ -357,11 +357,12 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 		{
 			assert.equal(Params.url, "https://api.deepseek.com/models");
 			assert.equal(Params.body, undefined);
-			return { status: 200, json: { data: [{ id: "deepseek-v4-pro" }] } };
+			return { status: 200, json: { data: [{ id: "deepseek-v4-pro", effort: { supported_levels: ["high", "max"] } }] } };
 		}
 		assert.equal(Params.url, "https://api.deepseek.com/chat/completions");
 		const Body = JSON.parse(Params.body); Requests.push(Body);
 		assert.equal(Body.model, "deepseek-v4-pro");
+		assert.equal(Body.reasoning_effort, "max"); assert.equal(Body.thinking.type, "enabled");
 		assert.ok(Body.messages.at(-1).content.includes(Old)); assert.ok(!Params.body.includes("unrelated note text"));
 		assert.ok(!Params.body.includes(Key)); assert.equal(Body.tools, undefined);
 		const State = [...F.Files.entries()].find(([Path]) => /backend-.*-state-v2\.json$/.test(Path))?.[1];
@@ -393,6 +394,8 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 		assert.equal(F.Settings.find(S => S.Name === "上游模型").Controls[0].Value, "deepseek-v4-pro");
 		assert.equal(F.Settings.find(S => S.Name === "API 模型 ID").Controls[0].Value, "deepseek-v4-pro");
 		Id = P.Session.Id; assert.notEqual(Id, Remote); assert.equal(Requests.length, 0);
+		assert.deepEqual(Array.from(P.Models[0].supportedReasoningEfforts, (X: any) => X.reasoningEffort), ["none", "high", "max"]);
+		await P.update_run_settings("deepseek-v4-pro", "max", false);
 		assert.equal(await P.send_chat("修正这段", Source, null, { Mode: "edit", Scope: "captured" }), true);
 		await wait_for_edit(P);
 		assert.equal(Requests.length, 1); assert.equal(Writes, 0); assert.equal(P.Session.Messages.at(-1).CompletionStatus, "completed");
@@ -403,6 +406,7 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 		await P.set_remote_mode(true); assert.equal(P.Session.Id, Remote);
 		await P.start_backend({ Kind: "api", Provider: "deepseek", Model: "deepseek-v4-pro" }, Key);
 		assert.equal(P.Session.Id, Id); assert.equal(P.Session.Messages.length, 2);
+		assert.equal(P.State.Settings.Effort, "max");
 		assert.ok(F.Required.every(Name => !Name.startsWith("node:")));
 		assert.ok([...F.Local.values(), ...F.Files.values(), ...F.Notices].every(Value => !Value.includes(Key)));
 	}
@@ -581,6 +585,36 @@ test("Go effort flows from the catalog through sidebar settings and the saved ru
 		await P.update_run_settings(Model, "", false);
 		assert.equal(await P.send_message("use provider default", null), true); await Finish();
 		assert.equal(Requests.length, 2); assert.equal(Requests[1].reasoning_effort, undefined);
+	}
+	finally { P.onunload(); }
+});
+
+test("Gemini model-specific effort survives reactivation and enters the durable chat request", async () =>
+{
+	const Key = "fixture-gemini-effort-key", Model = "gemini-3.1-flash-lite", Bodies: any[] = [];
+	const F = await mobile_fixture(async Params =>
+	{
+		assert.equal(Params.method, "POST"); assert.equal(Params.url, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+		assert.equal(Params.headers.Authorization, "Bearer " + Key);
+		Bodies.push(JSON.parse(Params.body));
+		return { status: 200, json: { choices: [{ finish_reason: "stop", message: { content: "fixture answer" } }] } };
+	});
+	const P = F.Instance;
+	try
+	{
+		await P.start_backend({ Kind: "api", Provider: "google", Model }, Key);
+		assert.deepEqual(Array.from(P.Models[0].supportedReasoningEfforts, (X: any) => X.reasoningEffort), ["minimal", "low", "medium", "high"]);
+		await P.update_run_settings(Model, "minimal", false);
+		await P.start_backend({ Kind: "api", Provider: "google", Model }, Key);
+		assert.equal(P.State.Settings.Effort, "minimal");
+		assert.equal(await P.send_message("verify the selected level", null), true);
+		for(let I = 0; I < 40 && P.Busy; I++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
+		assert.equal(Bodies.length, 1); assert.equal(P.Busy, false);
+		assert.equal(Bodies[0].extra_body.google.thinking_config.thinking_level, "minimal");
+		assert.equal(Bodies[0].reasoning_effort, undefined);
+		assert.equal(P.State.Sync.Operations.at(-1).Input.Run.Effort, "minimal");
+		await P.start_backend({ Kind: "api", Provider: "google", Model: "gemini-flash-latest" }, Key);
+		assert.equal(P.State.Settings.Effort, ""); assert.equal(P.Models[0].supportedReasoningEfforts.length, 0);
 	}
 	finally { P.onunload(); }
 });

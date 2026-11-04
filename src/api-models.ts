@@ -3,14 +3,26 @@ import { direct_api_key } from "./direct-api";
 import { native_http } from "./native-http";
 
 const GoEffortNames = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const DeepSeekEffortNames = new Set(["low", "high", "max"]);
+
+function effort_levels(Value: unknown, Accepted: ReadonlySet<string>): string[]
+{
+	return Array.isArray(Value) ? [...new Set(Value.filter((Item): Item is string => typeof Item === "string" && Accepted.has(Item)))] : [];
+}
 
 function go_reasoning(Item: { capabilities?: { reasoning?: { supported?: unknown; effort?: unknown } }; api?: Record<string, unknown> }): ApiReasoning | undefined
 {
 	const Reasoning = Item.capabilities?.reasoning;
 	if(Reasoning?.supported !== true || !Array.isArray(Reasoning.effort)) { return; }
 	const Format = Item.api?.["chat-completions"] ? "chat" : Item.api?.responses ? "responses" : null;
-	const Efforts = [...new Set(Reasoning.effort.filter((Value): Value is string => typeof Value === "string" && GoEffortNames.has(Value)))];
+	const Efforts = effort_levels(Reasoning.effort, GoEffortNames);
 	if(Format && Efforts.length) { return { Format, Efforts }; }
+}
+
+function deepseek_reasoning(Item: { effort?: { supported_levels?: unknown } }): ApiReasoning | undefined
+{
+	const Efforts = effort_levels(Item.effort?.supported_levels, DeepSeekEffortNames);
+	if(Efforts.length) { return { Format: "chat", Efforts: ["none", ...Efforts] }; }
 }
 
 export async function list_api_models(Provider: ApiProvider, CustomBase: string, Key: string, Send: Parameters<typeof native_http>[1], Timeout?: number): Promise<ApiCatalogModel[]>
@@ -43,7 +55,7 @@ export async function list_api_models(Provider: ApiProvider, CustomBase: string,
 	{
 		const Id = Item?.id;
 		if(!valid_backend_model_id(Id) || Secret && Id.includes(Secret) || Models.has(Id)) { continue; }
-		const Reasoning = Public ? go_reasoning(Item) : undefined;
+		const Reasoning = Public ? go_reasoning(Item) : Provider === "deepseek" ? deepseek_reasoning(Item) : undefined;
 		Models.set(Id, Reasoning ? { Id, Reasoning } : { Id });
 	}
 	return [...Models.values()].sort((A, B) => A.Id < B.Id ? -1 : 1);

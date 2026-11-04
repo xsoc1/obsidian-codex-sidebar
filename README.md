@@ -36,7 +36,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.7` 属于预发布版本, 在 BRAT 中需指定此版本. 已在使用 beta.2 独立桥的用户可以保留原桥; 从旧版迁移协议 2 请参阅 [升级说明](docs/migration.md).
+`2.0.0-beta.8` 属于预发布版本, 在 BRAT 中需指定此版本. 已在使用 beta.2 独立桥的用户可以保留原桥; 从旧版迁移协议 2 请参阅 [升级说明](docs/migration.md).
 
 
 ### iPad

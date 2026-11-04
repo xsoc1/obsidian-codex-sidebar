@@ -9,7 +9,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 	let Provider: ApiProvider = Active?.Provider ?? "openai";
 	let Model = Active?.Model ?? "", Base = Active?.Provider === "compatible" ? Active.Base : "", Vision = Active?.Vision ?? false;
 	let ApiInput: HTMLInputElement, Picker: DropdownComponent, Manual: TextComponent, Load: ButtonComponent;
-	let Models: ApiCatalogModel[] = [], GoCatalog: ApiCatalogModel[] | undefined, Revision = 0, Closed = false;
+	let Models: ApiCatalogModel[] = [], ReasoningCatalog: ApiCatalogModel[] | undefined, Revision = 0, Closed = false;
 	const Initial = "读取服务商目录后选择. 可用权限以实际请求为准.";
 	const Select = () => { Picker.setValue(Models.some(Item => Item.Id === Model) ? Model : ""); };
 	const Options = (Items: ApiCatalogModel[]) =>
@@ -24,7 +24,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 	const Invalidate = () =>
 	{
 		Revision++;
-		GoCatalog = undefined;
+		ReasoningCatalog = undefined;
 		Options([]);
 		Catalog.setDesc(Initial);
 		Load.setDisabled(false).setButtonText("加载模型");
@@ -62,7 +62,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		Button.setButtonText("加载模型").onClick(async () =>
 		{
 			const Request = ++Revision, Key = ApiInput.value;
-			GoCatalog = undefined;
+			ReasoningCatalog = undefined;
 			Options([]);
 			Button.setDisabled(true).setButtonText("加载中…");
 			Catalog.setDesc("正在读取模型列表…");
@@ -70,7 +70,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 			{
 				const Items = await list_api_models(Provider, Base, Key, Value => requestUrl({ ...Value, throw: false }));
 				if(Request !== Revision) { return; }
-				if(Provider === "opencode") { GoCatalog = Items; }
+				if(Provider === "opencode" || Provider === "deepseek") { ReasoningCatalog = Items; }
 				Options(Items);
 				Catalog.setDesc(Items.length ? `已读取 ${Items.length} 个模型. ${Provider === "opencode" ? "公开目录不代表 Go 工作区权限." : "可用权限以实际请求为准."}`
 					: "服务商没有返回可选模型. 可以手动填写模型 ID.");
@@ -104,7 +104,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		Setup.setDesc("正在启用直连…");
 		try
 		{
-			await Activate(Profile, Key, GoCatalog);
+			await Activate(Profile, Key, ReasoningCatalog);
 			if(Closed) { return; }
 			if(Provider === Profile.Provider && Base === Profile.Base && ApiInput.value === Key) { ApiInput.value = ""; }
 			Setup.setDesc(`已启用 ${ApiProviders[Profile.Provider].Label} · ${Profile.Model.trim()}. 回侧栏发一条短问题验证权限.`);
