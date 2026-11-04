@@ -9,7 +9,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 	let Provider: ApiProvider = Active?.Provider ?? "openai";
 	let Model = Active?.Model ?? "", Base = Active?.Provider === "compatible" ? Active.Base : "", Vision = Active?.Vision ?? false;
 	let ApiInput: HTMLInputElement, Picker: DropdownComponent, Manual: TextComponent, Load: ButtonComponent;
-	let Models: string[] = [], Revision = 0;
+	let Models: string[] = [], Revision = 0, Closed = false;
 	const Initial = "读取服务商目录后选择. 可用权限以实际请求为准.";
 	const Select = () => { Picker.setValue(Models.includes(Model) ? Model : ""); };
 	const Options = (Items: string[]) =>
@@ -92,11 +92,27 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 	});
 	new Setting(Root).setName("模型支持图片").setDesc("确认该模型支持图像后启用, 才可发送 PDF 页图.")
 		.addToggle(Toggle => Toggle.setValue(Vision).onChange(Value => { Vision = Value; }));
-	new Setting(Root).addButton(Button => Button.setButtonText("启用 API 直连").onClick(async () =>
+	const Setup = new Setting(Root);
+	Setup.descEl.setAttribute("aria-live", "polite");
+	Setup.addButton(Button => Button.setButtonText("启用 API 直连").onClick(async () =>
 	{
-		const Key = ApiInput.value; ApiInput.value = ""; Revision++; Button.setDisabled(true);
-		try { await Activate({ Kind: "api", Provider, Model, Base, Vision }, Key); }
+		const Key = ApiInput.value, Profile = { Kind: "api", Provider, Model, Base, Vision };
+		Button.setDisabled(true);
+		Setup.setDesc("正在启用直连…");
+		try
+		{
+			await Activate(Profile, Key);
+			if(Closed) { return; }
+			if(Provider === Profile.Provider && Base === Profile.Base && ApiInput.value === Key) { ApiInput.value = ""; }
+			Setup.setDesc(`已启用 ${ApiProviders[Profile.Provider].Label} · ${Profile.Model.trim()}. 回侧栏发一条短问题验证权限.`);
+		}
+		catch(ErrorValue)
+		{
+			if(Closed) { return; }
+			const Message = error_text(ErrorValue), Secret = Key.trim();
+			Setup.setDesc(`启用失败: ${Secret.length >= 8 ? Message.replaceAll(Secret, "[redacted]") : Message}`);
+		}
 		finally { Button.setDisabled(false); }
 	}));
-	return () => { Revision++; ApiInput.value = ""; };
+	return () => { Closed = true; Revision++; ApiInput.value = ""; };
 }

@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-04: User reported that clicking API activation emptied the settings and failed to connect. **2.0.0-beta.6** candidate keeps the draft and catalog on both outcomes, shows errors inline, and retains the masked Key after a failed attempt. A successful activation, provider change or closing the form clears the password input. Initial configuration and first-request permissions are separate. See [activation regression evidence](docs/backends.md#200-beta6-候选验证). This candidate is not installed or published.
+
 - 2026-11-04: User requested upstream model discovery and authorized installing **2.0.0-beta.5** in the Windows vault “数学” and publishing it as a GitHub prerelease for BRAT. Both are complete; the independent bridge remains on beta.2 and the latest stable release remains 1.1.0. The picker retains manual model entry. Discovery must never start inference, submit note content, or override the configured ID. OpenCode Go uses its public catalog without sending a Key. Changing provider, custom base or authenticated Key invalidates outstanding results. See [setup and verification](docs/backends.md#200-beta5-验证).
 
 - 2026-11-04: **2.0.0-beta.4** installed in Windows vault “数学” and published as a GitHub prerelease at `ca4304b`. BRAT users select the tag explicitly. The stable channel remains 1.1.0. [Backend setup and validation](docs/backends.md) records endpoint formats, prerequisites, verification and rollback.

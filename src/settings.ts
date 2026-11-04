@@ -25,9 +25,19 @@ export class CodexSettings extends PluginSettingTab
 			catch(ErrorValue) { this.Owner.Status = error_text(ErrorValue); this.Owner.refresh(); new Notice(this.Owner.Status); }
 			this.display();
 		};
-		new Setting(this.containerEl).setName("当前连接").setDesc(Current ? backend_name(Current) + " · " + (Current.Model || "Agent 当前模型")
-			: this.Owner.Remote.Enabled ? "电脑上的独立远程桥" : "本机 Codex");
-		this.CloseApiSettings = api_settings(this.containerEl, Current, Activate);
+		const Connection = new Setting(this.containerEl).setName("当前连接");
+		const UpdateConnection = () =>
+		{
+			const Active = this.Owner.Backend;
+			Connection.setDesc(Active ? backend_name(Active) + " · " + (Active.Model || "Agent 当前模型")
+				: this.Owner.Remote.Enabled ? "电脑上的独立远程桥" : "本机 Codex");
+		};
+		UpdateConnection();
+		this.CloseApiSettings = api_settings(this.containerEl, Current, async (Profile, Key) =>
+		{
+			try { await this.Owner.start_backend(Profile, Key); }
+			finally { UpdateConnection(); }
+		});
 		if(!Platform.isWin || Platform.isMobileApp) { return; }
 		let Agent: LocalAgent = Current?.Kind === "agent" ? Current.Agent : "claude";
 		let Path = Current?.Kind === "agent" ? Current.Path : "", AgentModel = Current?.Kind === "agent" ? Current.Model : "";

@@ -77,7 +77,9 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 				selectEl: { setAttribute() {}, replaceChildren: () => { Value.Options = {}; } },
 				Options: {}, setValue(Value: unknown) { this.Value = Value; return this; }, setDisabled(Value: boolean) { this.Disabled = Value; return this; },
 				setPlaceholder() { return this; }, setButtonText(Text: string) { this.Text = Text; return this; }, setCta() { return this; },
-				addOption(Key: string, Label: string) { this.Options[Key] = Label; return this; }, onChange(Handler: any) { this.Change = Handler; return this; }, onClick(Handler: any) { this.Click = Handler; return this; }
+				addOption(Key: string, Label: string) { this.Options[Key] = Label; return this; },
+				onChange(Handler: any) { this.Change = (Next: unknown) => { this.Value = Next; return Handler(Next); }; return this; },
+				onClick(Handler: any) { this.Click = Handler; return this; }
 			};
 			this.Controls.push(Value); Build(Value); return this;
 		}
@@ -388,6 +390,8 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 		const Button = F.Settings.flatMap(S => S.Controls).find(Control => Control.Text === "启用 API 直连");
 		await Button.Click();
 		assert.equal(Input.inputEl.value, ""); assert.equal(P.Remote.Enabled, false); assert.equal(P.State.Settings.Completion, false);
+		assert.equal(F.Settings.find(S => S.Name === "上游模型").Controls[0].Value, "deepseek-v4-pro");
+		assert.equal(F.Settings.find(S => S.Name === "API 模型 ID").Controls[0].Value, "deepseek-v4-pro");
 		Id = P.Session.Id; assert.notEqual(Id, Remote); assert.equal(Requests.length, 0);
 		assert.equal(await P.send_chat("修正这段", Source, null, { Mode: "edit", Scope: "captured" }), true);
 		await wait_for_edit(P);
@@ -410,6 +414,55 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 		await assert.rejects(Restart.Instance.ensure_connection(), /API Key/); assert.equal(Requests.length, 1);
 	}
 	finally { Restart.Instance.onunload(); }
+});
+
+test("failed API activation keeps the draft and the selected catalog model for an in-place retry", async () =>
+{
+	const Key = "fixture-valid-format", Model = "go-fixture-model";
+	let DirectoryRequests = 0;
+	const F = await mobile_fixture(async Params =>
+	{
+		assert.equal(Params.method, "GET");
+		assert.equal(Params.url, "https://opencode.ai/inference/go/v1/models");
+		DirectoryRequests++;
+		return { status: 200, json: { data: [{ id: Model }] } };
+	});
+	const P = F.Instance, Original = P.State.ActiveId, Tab = F.Tabs[0];
+	const Row = (Name: string) => F.Settings.find(S => S.Name === Name);
+	const Setup = () => F.Settings.find(S => S.Controls.some((Control: { Text?: string }) => Control.Text === "启用 API 直连"));
+	const Activate = () => Setup().Controls[0].Click();
+	try
+	{
+		Tab.display();
+		Row("API 直连").Controls[0].Change("opencode");
+		const [Picker, Load] = Row("上游模型").Controls, [Input] = Row("直连 API Key").Controls;
+		await Load.Click(); Picker.Change(Model);
+		await Activate(); // Missing key; no backend change.
+		assert.match(Setup().Desc, /启用失败.*API Key/);
+		assert.equal(Row("API 模型 ID").Controls[0].Value, Model);
+		assert.equal(Row("上游模型").Controls[0].Value, Model);
+		assert.equal(P.State.ActiveId, Original);
+		Input.inputEl.value = Key;
+		P.ChatPreparing = true;
+		await Activate(); // Busy state must not destroy the filled form either.
+		P.ChatPreparing = false;
+		assert.match(Setup().Desc, /启用失败.*等待当前操作/);
+		assert.equal(Input.inputEl.value, Key);
+		assert.equal(Row("API 模型 ID").Controls[0].Value, Model);
+		assert.equal(Row("上游模型").Controls[0].Value, Model);
+		await Activate();
+		assert.equal(P.Backend.Provider, "opencode");
+		assert.equal(P.Backend.Model, Model);
+		assert.match(Setup().Desc, /已启用 OpenCode Go.*验证权限/);
+		assert.equal(Row("当前连接").Desc, "OpenCode Go · " + Model);
+		assert.equal(DirectoryRequests, 1);
+		assert.equal(Input.inputEl.value, "");
+		assert.ok([...F.Local.values(), ...F.Files.values(), ...F.Notices].every(Value => !Value.includes(Key)));
+		Input.inputEl.value = Key;
+		Tab.hide();
+		assert.equal(Input.inputEl.value, "");
+	}
+	finally { P.onunload(); }
 });
 
 test("model picker drops late catalogs on provider or key changes and still accepts a manual ID if discovery fails", async () =>
