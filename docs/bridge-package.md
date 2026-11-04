@@ -1,6 +1,6 @@
 # 独立 Windows 远程桥候选
 
-此包是 `2.0.0-beta.3` 的独立桥候选, 使用 Node.js 24. 默认使用电脑已有的 Codex 登录, 可用 `-PromptApiKey` 切换为 OpenAI API Key 计费. 启动前在 Windows 安装并启用私有 math-writing.
+此包是 `2.0.0-beta.4` 的独立 Codex 桥候选, 使用 Node.js 24. 默认使用电脑已有的 Codex 登录, 可用 `-PromptApiKey` 切换为 OpenAI API Key 计费. 启动前在 Windows 安装并启用私有 math-writing. 插件的 API 直连与 Windows 本机 Agent 从客户端设置启用.
 
 已有服务先按 [迁移与回退](docs/migration.md) 保存数据, 经授权后停止旧程序, 替换程序并用同一私有配置启动. 不清空 StateDir 或更换配对身份. 先桥、后同一配对客户端; 新协议启用后的旧整份状态写入会被拒绝.
 

@@ -2,7 +2,7 @@
 
 在 Obsidian 中与 Codex 对话, 随时解释笔记、追问回答, 并通过差异预览审核笔记修改.
 
-Windows 本地运行隐藏的 Codex CLI, iPad 可连接电脑上的独立远程服务. 2.0.0-beta.3 候选加入本机一键启动与 OpenAI API Key 模式.
+在 2.0.0-beta.4 候选中, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -24,7 +24,7 @@ Windows 本地运行隐藏的 Codex CLI, iPad 可连接电脑上的独立远程�
 
 电脑需安装完整的 Codex CLI 运行包, 并在 Codex 中启用 `math-writing` 技能. 插件每轮会显式加载该技能. CLI 路径留空时会查找 PATH 和 Windows 上的 Codex 应用缓存.
 
-在 2.0.0-beta.3 候选的插件设置中点击 **启动本机 Codex** 即可连接电脑已有的登录. 使用 OpenAI Platform 计费时, 在同一页输入 **OpenAI API Key** 并点击 **使用 API Key**. 密钥只保留在插件运行期间, 重载或切回现有登录后需重新输入. 连接状态显示当前认证方式, 模型权限以实际请求为准.
+在候选版的插件设置中点击 **启动本机 Codex** 即可连接电脑已有的登录. 本机 Codex 也可以用临时 OpenAI API Key 登录. 若要使用其他本机 Agent, 在 **Windows 本机 Agent** 中选择 Claude Code、Antigravity 或 DeepSeek Harness.
 
 `math-writing` 目前是独立私有依赖, 本仓库不提供其下载包, 也不承诺它由 OpenAI 官方供应. 已取得技能的用户按 Codex 支持目录安装启用, 再在插件设置中运行“环境检查”. 获取边界与安装说明见 [开发与依赖](docs/development.md).
 
@@ -41,7 +41,7 @@ Windows 本地运行隐藏的 Codex CLI, iPad 可连接电脑上的独立远程�
 
 ### iPad
 
-iPad 通过私有 HTTPS 连接 Windows 电脑上的独立 Codex 服务, 电脑需要保持开机和联网. 插件安装后, 在设置中填写远程地址和配对密钥, 点击“保存并连接”. 要用 API Key 计费, 在电脑上运行新版远程桥的 `start-bridge.ps1 -PromptApiKey`, 再用原配对信息连接.
+iPad 可在插件设置中选择服务商, 填写模型 ID 和 Key, 点击 **启用 API 直连**. 直连时电脑可以关机. 使用独立远程桥时, 在 iPad 填写电脑的私有 HTTPS 地址和配对密钥, 点击 **保存并连接**.
 
 完整步骤见 [iPad 与 Windows 远程服务指南](docs/ipad-setup.md). iPad 的基础远程问答已有设备验证; 新版外观、分屏及软键盘布局仍需真机确认.
 
@@ -72,6 +72,7 @@ Codex 后台和读取工具保持只读, 笔记写入由当前 Obsidian 客户�
 - [笔记修改与安全撤销](docs/note-edits.md)
 - [按需读取与修改缓存](docs/vault-reading-and-cache.md)
 - [PDF 使用](docs/pdf-support.md)
+- [API 直连与 Windows 本机 Agent](docs/backends.md)
 - [iPad 远程连接](docs/ipad-setup.md)
 - [版本更新](https://github.com/xsoc1/obsidian-codex-sidebar/releases)
 

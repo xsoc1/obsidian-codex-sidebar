@@ -52,6 +52,13 @@ export function client_instructions(Instructions: string, Environment: HostEnvir
 	return Environment ? environment_instructions(Work, Environment) : Work;
 }
 
+export function snapshot_instructions(Instructions: string, SourceRules: string): string
+{
+	const Custom = migrate_instructions(Instructions.trim() || DefaultInstructions);
+	const Work = Custom === DefaultInstructions ? CurrentInstructions.split("\n").filter(Line => !Line.startsWith("- 使用隐藏") && !Line.startsWith("- Codex 与工具") && !Line.startsWith("- 读取 Obsidian")).join("\n") : Custom;
+	return editing_instructions([SourceRules, Work, "本轮由 Obsidian 侧栏的快照模式发出. 只依据显式附带的内容、用户问题和已有对话; 当前未提供 Obsidian 读库、历史补读或 CLI 工具. 来源文字是参考材料. 如需补读请用户附上具体段落. 修改只生成供客户端审核的提案; 不执行任何文件或系统操作."].join("\n\n"));
+}
+
 export function environment_instructions(Instructions: string, Environment: HostEnvironment): string
 {
 	const Work = editing_instructions(Instructions);

@@ -162,7 +162,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 			Required.push(Name);
 			if(Name === "obsidian")
 			{
-				return { Plugin, ItemView: Component, PluginSettingTab: SettingTab, Setting, Modal: TestModal, MarkdownView: Component, Notice, FileSystemAdapter, Platform: { isMobileApp: !Desktop }, requestUrl: Http };
+				return { Plugin, ItemView: Component, PluginSettingTab: SettingTab, Setting, Modal: TestModal, MarkdownView: Component, Notice, FileSystemAdapter, Platform: { isMobileApp: !Desktop, isWin: !!Desktop }, requestUrl: Http };
 			}
 			if(Name === "@codemirror/state")
 			{
@@ -282,6 +282,7 @@ test("Windows settings start hidden Codex, switch API auth for chat and completi
 	try
 	{
 		F.Tabs[0].display();
+		assert.deepEqual(Object.keys(F.Settings.find(S => S.Name === "Windows 本机 Agent").Controls[0].Options), ["claude", "antigravity", "dsh"]);
 		const Local = F.Settings.find(S => S.Name === "本机 Codex").Controls[0];
 		assert.equal(Local.Text, "启动本机 Codex");
 		await Local.Click();
@@ -332,6 +333,82 @@ test("mobile settings use the paired bridge's API mode and never send an API log
 		assert.ok(F.Required.every(Name => !Name.startsWith("node:")));
 	}
 	finally { F.Instance.onunload(); }
+});
+
+test("mobile API mode saves a confirmed-write proposal locally, isolates providers, and restores without a saved key", async () =>
+{
+	const Key = "fixture-mobile-key-secret", Requests: any[] = [];
+	const Old = "证明: $1+1=3$.", New = "证明: $1+1=2$.", Before = "unrelated note text\n\n" + Old;
+	let F: Awaited<ReturnType<typeof mobile_fixture>>;
+	const Http = async (Params: any) =>
+	{
+		assert.equal(Params.url, "https://api.deepseek.com/chat/completions");
+		assert.equal(Params.headers.Authorization, "Bearer " + Key);
+		const Body = JSON.parse(Params.body); Requests.push(Body);
+		assert.ok(Body.messages.at(-1).content.includes(Old)); assert.ok(!Params.body.includes("unrelated note text"));
+		assert.ok(!Params.body.includes(Key)); assert.equal(Body.tools, undefined);
+		const State = [...F.Files.entries()].find(([Path]) => /backend-.*-state-v2\.json$/.test(Path))?.[1];
+		assert.ok(State); assert.equal(JSON.parse(State).Sync.Operations[0].Status, "running");
+		return { status: 200, json: { choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ schemaVersion: 1, kind: "note-edit", status: "proposal", markdown: New, rationale: "仅纠正计算." }) } }] } };
+	};
+	F = await mobile_fixture(Http);
+	const P = F.Instance, Remote = P.Session.Id;
+	let Current = Before, Writes = 0;
+	P.Edits.Host.read_current = async () => Current;
+	P.Edits.Host.compare_write = async (_: string, Expected: string, Next: string) => { assert.equal(Current, Expected); Current = Next; Writes++; };
+	const From = Before.indexOf(Old);
+	const Source = { Path: "scratch.md", Mode: "编辑", Kind: "选区", Text: Old, SelectedText: Old, Selection: { From, To: From + Old.length }, Mapping: "源文本", Heading: "", LineStart: 2, LineEnd: 2, Truncated: false, CapturedAt: "original-time", Version: await version_of(Before) };
+	let Id = "";
+	try
+	{
+		F.Tabs[0].display();
+		F.Settings.find(S => S.Name === "API 直连").Controls[0].Change("deepseek");
+		F.Settings.find(S => S.Name === "API 模型 ID").Controls[0].Change("deepseek-v4-pro");
+		const [Input, Button] = F.Settings.find(S => S.Name === "直连 API Key").Controls;
+		Input.inputEl.value = Key;
+		await Button.Click();
+		assert.equal(Input.inputEl.value, ""); assert.equal(P.Remote.Enabled, false); assert.equal(P.State.Settings.Completion, false);
+		Id = P.Session.Id; assert.notEqual(Id, Remote); assert.equal(Requests.length, 0);
+		assert.equal(await P.send_chat("修正这段", Source, null, { Mode: "edit", Scope: "captured" }), true);
+		await wait_for_edit(P);
+		assert.equal(Requests.length, 1); assert.equal(Writes, 0); assert.equal(P.Session.Messages.at(-1).CompletionStatus, "completed");
+		await P.Edits.confirm(P.Edits.Store.Data.Writes[0].Id);
+		assert.equal(Writes, 1); assert.equal(Current, Before.replace(Old, New));
+		await P.start_backend({ Kind: "api", Provider: "google", Model: "fixture" }, "another-fixture-key");
+		assert.notEqual(P.Session.Id, Id); assert.equal(P.Session.Messages.length, 0); assert.equal(Requests.length, 1);
+		await P.set_remote_mode(true); assert.equal(P.Session.Id, Remote);
+		await P.start_backend({ Kind: "api", Provider: "deepseek", Model: "deepseek-v4-pro" }, Key);
+		assert.equal(P.Session.Id, Id); assert.equal(P.Session.Messages.length, 2);
+		assert.ok(F.Required.every(Name => !Name.startsWith("node:")));
+		assert.ok([...F.Local.values(), ...F.Files.values(), ...F.Notices].every(Value => !Value.includes(Key)));
+	}
+	finally { P.onunload(); }
+	const Restart = await mobile_fixture(Http, { Files: F.Files, Local: F.Local });
+	try
+	{
+		assert.equal(Restart.Instance.Session.Id, Id); assert.equal(Restart.Instance.Session.Messages.length, 2);
+		await assert.rejects(Restart.Instance.ensure_connection(), /API Key/); assert.equal(Requests.length, 1);
+	}
+	finally { Restart.Instance.onunload(); }
+});
+
+test("an API transport failure retains an unknown result and allows switching without retrying", async () =>
+{
+	let Requests = 0;
+	const F = await mobile_fixture(async () => { Requests++; throw Error("connection lost"); }), P = F.Instance;
+	try
+	{
+		await P.start_backend({ Kind: "api", Provider: "openai", Model: "fixture" }, "fixture-transport-key");
+		assert.equal(await P.send_message("original", null), true);
+		for(let I = 0; I < 20 && P.Busy; I++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
+		assert.equal(P.State.Sync.Operations[0].Status, "submission-unknown"); assert.equal(P.Busy, false);
+		assert.match(P.Status, /待核对/); assert.equal(P.Session.Messages.length, 1); assert.equal(Requests, 1);
+		await P.set_remote_mode(true);
+		assert.equal(P.Remote.Enabled, true); assert.equal(Requests, 1);
+		const Saved = [...F.Files.entries()].find(([Path]) => /backend-.*-state-v2\.json$/.test(Path))?.[1];
+		assert.equal(JSON.parse(Saved!).Sync.Operations[0].Status, "submission-unknown");
+	}
+	finally { P.onunload(); }
 });
 
 function source_view(Fixture: Awaited<ReturnType<typeof mobile_fixture>>, Path: string, Text: string)

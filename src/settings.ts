@@ -4,6 +4,7 @@ import { DefaultInstructions } from "./prompt";
 import { EditScopeOptions, edit_scope } from "./edit/options";
 import { export_edits } from "./edit/panel";
 import { error_text } from "./ui-helpers";
+import { AgentNames, ApiProviders, backend_name, type ApiProvider, type LocalAgent } from "./backend-profile";
 
 export class CodexSettings extends PluginSettingTab
 {
@@ -12,10 +13,68 @@ export class CodexSettings extends PluginSettingTab
 		super(AppValue, Owner);
 	}
 
+	private backend_settings(): void
+	{
+		const Current = this.Owner.Backend;
+		const Activate = async (Profile: unknown, Key: string) =>
+		{
+			try { await this.Owner.start_backend(Profile, Key); new Notice(this.Owner.Status); }
+			catch(ErrorValue) { this.Owner.Status = error_text(ErrorValue); this.Owner.refresh(); new Notice(this.Owner.Status); }
+			this.display();
+		};
+		new Setting(this.containerEl).setName("当前连接").setDesc(Current ? backend_name(Current) + " · " + (Current.Model || "Agent 当前模型")
+			: this.Owner.Remote.Enabled ? "电脑上的独立远程桥" : "本机 Codex");
+		let Provider: ApiProvider = Current?.Kind === "api" ? Current.Provider : "openai";
+		let Model = Current?.Kind === "api" ? Current.Model : "", Base = Current?.Kind === "api" && Current.Provider === "compatible" ? Current.Base : "";
+		let Vision = Current?.Kind === "api" && Current.Vision, ApiInput: HTMLInputElement;
+		new Setting(this.containerEl).setName("API 直连").setDesc("Windows、iPad 等端可单独连接服务商. 每次插件重载后重新输入 Key, 发送时所附笔记内容交给所选服务商.")
+			.addDropdown(Dropdown =>
+			{
+				for(const [Id, Entry] of Object.entries(ApiProviders)) { Dropdown.addOption(Id, Entry.Label); }
+				Dropdown.setValue(Provider).onChange(Value => { Provider = Value as ApiProvider; ApiInput.value = ""; });
+			});
+		new Setting(this.containerEl).setName("API 模型 ID").setDesc("填写厂商控制台给出的模型标识. 实际权限由首轮回复确认.")
+			.addText(Text => Text.setValue(Model).onChange(Value => { Model = Value; }));
+		new Setting(this.containerEl).setName("自定义 HTTPS 基础地址").setDesc("仅自定义 OpenAI 兼容模式使用, 如 https://example.com/v1.")
+			.addText(Text => Text.setValue(Base).onChange(Value => { Base = Value; }));
+		new Setting(this.containerEl).setName("模型支持图片").setDesc("确认该模型支持图像后启用, 才可发送 PDF 页图.")
+			.addToggle(Toggle => Toggle.setValue(Vision).onChange(Value => { Vision = Value; }));
+		new Setting(this.containerEl).setName("直连 API Key").addText(Text => { ApiInput = Text.inputEl; ApiInput.type = "password"; ApiInput.autocomplete = "off"; ApiInput.spellcheck = false; })
+			.addButton(Button => Button.setButtonText("启用 API 直连").onClick(async () =>
+			{
+				const Key = ApiInput.value; ApiInput.value = ""; Button.setDisabled(true);
+				try { await Activate({ Kind: "api", Provider, Model, Base, Vision }, Key); }
+				finally { Button.setDisabled(false); }
+			}));
+		if(!Platform.isWin || Platform.isMobileApp) { return; }
+		let Agent: LocalAgent = Current?.Kind === "agent" ? Current.Agent : "claude";
+		let Path = Current?.Kind === "agent" ? Current.Path : "", AgentModel = Current?.Kind === "agent" ? Current.Model : "";
+		let AgentInput: HTMLInputElement;
+		new Setting(this.containerEl).setName("Windows 本机 Agent").setDesc("后台读取侧栏提供的快照. 可用 Codex 入口见下方.")
+			.addDropdown(Dropdown =>
+			{
+				for(const [Id, Label] of Object.entries(AgentNames)) { Dropdown.addOption(Id, Label); }
+				Dropdown.setValue(Agent).onChange(Value => { Agent = Value as LocalAgent; AgentInput.value = ""; });
+			});
+		new Setting(this.containerEl).setName("Agent 运行入口").setDesc("可留空自动查找. Claude 用 claude.exe, Antigravity 用安装官方 SDK 的 python.exe, DeepSeek Harness 用 dsh.exe 或 Node 入口.")
+			.addText(Text => Text.setValue(Path).onChange(Value => { Path = Value; }));
+		new Setting(this.containerEl).setName("Agent 模型 ID").setDesc("可留空使用 Agent 当前模型. DeepSeek Harness 请留空.")
+			.addText(Text => Text.setValue(AgentModel).onChange(Value => { AgentModel = Value; }));
+		new Setting(this.containerEl).setName("Agent API Key").setDesc("Claude Code 使用已有登录. Antigravity 与 DeepSeek Harness 可临时填入各自密钥, 或使用现有进程环境.")
+			.addText(Text => { AgentInput = Text.inputEl; AgentInput.type = "password"; AgentInput.autocomplete = "off"; AgentInput.spellcheck = false; })
+			.addButton(Button => Button.setButtonText("启用本机 Agent").onClick(async () =>
+			{
+				const Key = AgentInput.value; AgentInput.value = ""; Button.setDisabled(true);
+				try { await Activate({ Kind: "agent", Agent, Path, Model: AgentModel }, Key); }
+				finally { Button.setDisabled(false); }
+			}));
+	}
+
 	display(): void
 	{
 		this.containerEl.empty();
 		this.containerEl.createEl("h2", { text: "Codex Sidebar" });
+		this.backend_settings();
 		if(!Platform.isMobileApp)
 		{
 			const StartLocal = async (Key?: string) =>
@@ -138,7 +197,7 @@ export class CodexSettings extends PluginSettingTab
 				Button.setDisabled(false).setButtonText("保存并连接");
 			}
 		}));
-		new Setting(this.containerEl).setName("math-writing 技能").setDesc(`${this.Owner.SkillStatus}. 从${this.Owner.Remote.Enabled ? "Windows 服务端" : "本机"} Codex 的 skills/list 自动发现, 聊天与补全每次通过 skill 输入加载. 技能未安装或被禁用时明确报错; 不更改全局配置.`).addButton(Button => Button.setButtonText("重新检查").onClick(async () =>
+		new Setting(this.containerEl).setName("math-writing 技能").setDesc(this.Owner.Backend ? "当前连接使用插件内置数学规则. Codex 连接可加载已启用的 math-writing." : `${this.Owner.SkillStatus}. 从${this.Owner.Remote.Enabled ? "Windows 服务端" : "本机"} Codex 的 skills/list 自动发现, 聊天与补全每次通过 skill 输入加载. 技能未安装或被禁用时明确报错; 不更改全局配置.`).addButton(Button => Button.setButtonText("重新检查").setDisabled(!!this.Owner.Backend).onClick(async () =>
 		{
 			try
 			{
@@ -189,7 +248,7 @@ export class CodexSettings extends PluginSettingTab
 				await this.Owner.persist();
 			}
 		}));
-		if(!this.Owner.Remote.Enabled)
+		if(!this.Owner.Remote.Enabled && !this.Owner.Backend)
 		{
 			new Setting(this.containerEl).setName("Obsidian CLI 路径").setDesc("默认检测当前 Obsidian 安装的 Obsidian.com, 将实际路径和 vault 注入工作提示词. 也可填写自定义路径.").addText(TextValue => TextValue.setValue(this.Owner.State.Settings.ObsidianCliPath).onChange(async Value =>
 			{

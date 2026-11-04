@@ -57,6 +57,11 @@ import { OperationViewIndex } from "./runtime/operation-view";
 import { MessageIndex } from "./runtime/message-index";
 import { prepare_conflict_resolution, pending_conflicts, preserve_durable_resolved_messages } from "./sync/conflicts";
 import { authenticate_api_key, openai_api_key } from "./api-auth";
+import { BackendConnection } from "./backend";
+import { backend_profile, backend_name, backend_identity, backend_model, type BackendProfile } from "./backend-profile";
+import { direct_api, direct_api_key } from "./direct-api";
+import { snapshot_instructions } from "./prompt";
+import { MathCompletionInstructions, completion_prompt, parse_completion } from "./completion-prompt";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -130,10 +135,14 @@ export default class CodexSidebarPlugin extends Plugin
 	private Diagnosing = false;
 	private LastInputLedger = new Map<string, ChatMessage["InputLedger"]>();
 	private thread_session(ThreadId: string): ChatSession | undefined { return this.State.Sessions.find(S => S.ThreadId === ThreadId || this.LiveThreads.get(S.Id) === ThreadId); }
+	private local_operation_version(Operation: SendOperation): Partial<SendOperation>
+	{
+		return Operation.Scope.startsWith("backend:") ? { Origin: Operation.Scope, Revision: (Operation.Revision ?? 0) + 1 } : {};
+	}
 	private update_run_operation(Target: StateTarget, Id: string, Status: OperationStatus, Details: Partial<SendOperation> = {}): void
 	{
 		const State = this.target_state(Target), Operation = State.Sync?.Operations.find(O => O.Id === Id), Intent = State.Outbox?.find(O => O.Id === Id);
-		if(Operation) { update_operation(State.Sync!, Id, Status, Details); }
+		if(Operation) { update_operation(State.Sync!, Id, Status, { ...Details, ...this.local_operation_version(Operation) }); }
 		if(Intent && !["completed", "cancelled", "failed"].includes(Intent.Status)) { Intent.Status = Status; if(Details.Error) { Intent.Error = Details.Error; } }
 	}
 
@@ -147,6 +156,7 @@ export default class CodexSidebarPlugin extends Plugin
 		if(Terminal) { Current.Status = TerminalStatus; }
 		if(Result?.turn?.id)
 		{
+			Object.assign(Current, this.local_operation_version(Current));
 			Current.Result = structuredClone(Result); Current.TurnId = Result.turn.id; Current.ThreadId = (Current.Request as any)?.threadId ?? Current.ThreadId;
 			if(!Remote && !["completed", "cancelled", "failed"].includes(Current.Status)) { Current.Status = this.CompletedTurns.has(this.completed_key(Target.Scope, Current.ThreadId ?? "", Result.turn.id)) ? "completed" : "running"; }
 			const Session = State.Sessions.find(S => S.Id === Current.SessionId), Message = Session?.Messages.find(M => M.Id === Current.MessageId);
@@ -236,9 +246,14 @@ export default class CodexSidebarPlugin extends Plugin
 		if(this.State.Sessions.some(S => !this.State.DeletedSessionIds?.includes(S.Id) && this.State.Sync?.History?.[S.Id]?.Status === "unloaded")) { throw new Error("仍有未加载正文, 未导出不完整记录"); }
 		return JSON.stringify({ SchemaVersion: 2, Scope: this.State.Sync?.Scope ?? "desktop", Sessions: this.State.Sessions, ActiveId: this.State.ActiveId, DeletedSessionIds: this.State.DeletedSessionIds, DeletedMessages: this.State.DeletedMessages, Sync: this.State.Sync, Outbox: this.State.Outbox, ResolvedConflicts: (this.State as any).ResolvedConflicts }, null, 2);
 	}
-	private local_scope(): string { return this.Remote.Enabled ? "remote-local:" + this.Remote.CacheId : "desktop:" + this.app.vault.getName(); }
+	private local_scope(): string { return this.Backend ? "backend:" + this.backend_state_id() : this.Remote.Enabled ? "remote-local:" + this.Remote.CacheId : "desktop:" + this.app.vault.getName(); }
 	draft_scope(): string { return this.local_scope() + ":" + (this.Remote.CacheId ?? "local"); }
-	private state_path(Remote = this.Remote.Enabled): string { return `${this.manifest.dir}/${Remote ? "remote-" + this.Remote.CacheId : "desktop"}-state-v2.json`; }
+	private backend_state_id(Id = this.BackendId): string { return this.BackendDeviceId + "-" + Id; }
+	private state_path(Remote = this.Remote.Enabled, BackendId = Remote ? "" : this.BackendId, CacheId = this.Remote.CacheId): string { return `${this.manifest.dir}/${Remote ? "remote-" + CacheId : BackendId ? "backend-" + this.backend_state_id(BackendId) : "desktop"}-state-v2.json`; }
+	private legacy_state_path(Remote = this.Remote.Enabled, BackendId = Remote ? "" : this.BackendId, CacheId = this.Remote.CacheId): string
+	{
+		return `${this.manifest.dir}/${Remote ? "remote-" + CacheId + "-state.json" : BackendId ? "backend-" + this.backend_state_id(BackendId) + "-state.json" : "data.json"}`;
+	}
 	private state_target(): StateTarget { return { Scope: this.local_scope(), Remote: this.Remote.Enabled, Path: this.state_path(), State: this.State, Connection: this.Connection }; }
 	private target_state(Target: StateTarget): SavedState { if(Target.Scope === this.local_scope()) { Target.State = this.State; } return Target.State; }
 	private async save_target(Target: StateTarget, SyncRemote = false): Promise<void>
@@ -307,16 +322,18 @@ export default class CodexSidebarPlugin extends Plugin
 		const Probes: DiagnosticProbe[] = [
 			{ Name: "完整 Codex 运行包", Run: async () =>
 			{
+				if(this.Backend) { return { Status: "unavailable", Detail: "当前连接使用 " + backend_name(this.Backend) }; }
 				if(this.Remote.Enabled) { return { Status: "unavailable", Detail: "运行包在 Windows 桥主机, 客户端无法逐文件核验", Action: "在 Windows 使用同一检查入口核验 CLI 与配套程序" }; }
 				this.Desktop ??= await import("./desktop"); const Cli = this.State.Settings.CliPath || await this.Desktop.discover_cli(), Info = await this.Desktop.runtime_info(Cli);
 				return { Status: Info.Complete ? "ok" : "warning", Detail: `${Info.Version}; ${Info.Complete ? "配套工具程序齐全" : "当前目录未找到全部配套程序"}${Info.Resolved ? "; 已为插件进程定位完整应用运行包" : ""}`, Action: Info.Complete ? undefined : "在设置中选择完整 CLI 安装目录, 不仅复制单个 exe" };
 			} },
-			{ Name: "登录", Run: async () => { await Ready; const Account = await this.Connection!.request("account/read", { refreshToken: false }); return { Status: Account.account ? "ok" : "error", Detail: Account.account ? "Codex 已登录" : "尚未登录", Action: Account.account ? undefined : "在 Codex 应用或 CLI 完成登录, 不向插件粘贴认证文件" }; } },
+			{ Name: "登录", Run: async () => { await Ready; if(this.Backend) { return { Status: "warning", Detail: "已配置连接, 模型权限由实际问答验证" }; } const Account = await this.Connection!.request("account/read", { refreshToken: false }); return { Status: Account.account ? "ok" : "error", Detail: Account.account ? "Codex 已登录" : "尚未登录", Action: Account.account ? undefined : "在 Codex 应用或 CLI 完成登录, 不向插件粘贴认证文件" }; } },
 			{ Name: "模型目录", Run: async () => { await Ready; return { Status: this.Models.length ? "ok" : "error", Detail: this.Models.length ? `读取到 ${this.Models.length} 个模型, 不等同于推理额度验收` : this.CatalogError || "目录为空", Action: this.Models.length ? undefined : "连接恢复后重查目录" }; } },
-			{ Name: "math-writing", Run: async () => { await Ready; await this.ensure_math_skill(); return { Status: "ok", Detail: this.SkillStatus }; } },
+			{ Name: "math-writing", Run: async () => { await Ready; if(!this.Backend) { await this.ensure_math_skill(); } return { Status: "ok", Detail: this.SkillStatus }; } },
 			{ Name: "Obsidian CLI 与当前库", Run: async () =>
 			{
 				await Ready;
+				if(this.Backend) { return { Status: "unavailable", Detail: "当前使用客户端提供的笔记快照" }; }
 				if(this.Remote.Enabled) { return { Status: this.HostInfo?.vault === this.app.vault.getName() ? "ok" : "error", Detail: "读取发生在 Windows 同步副本; 客户端快照保持独立", Action: this.HostInfo?.vault === this.app.vault.getName() ? undefined : "核对桥绑定的库, 不跨库重定向" }; }
 				const Result = await run_obsidian_read(this.obsidian_cli(), this.app.vault.getName(), { command: "vault", params: { info: "name" } });
 				const Matched = Result.success && Result.contentItems[0].text.trim() === this.app.vault.getName();
@@ -354,6 +371,11 @@ export default class CodexSidebarPlugin extends Plugin
 	private RemoteStatePath = "";
 	private Desktop: typeof import("./desktop") | null = null;
 	private LocalApiKey: string | undefined;
+	Backend: BackendProfile | null = null;
+	private BackendId = "";
+	private BackendStorage = "";
+	private BackendDeviceId = "";
+	private BackendKey = "";
 	private HostInfo: { cwd: string; vault: string; cli: string; client: string; mathWritingVersion?: string; pdfPageImages?: number } | null = null;
 	private Connecting: Promise<void> | null = null;
 	private LoadingSkill: Promise<SkillInput> | null = null;
@@ -395,6 +417,10 @@ export default class CodexSidebarPlugin extends Plugin
 	async onload(): Promise<void>
 	{
 		this.RemoteKey = `codex-sidebar-remote:${this.app.vault.getName()}`;
+		this.BackendStorage = `codex-sidebar-backend:${this.app.vault.getName()}`;
+		const Device = localStorage.getItem(this.BackendStorage + ":device") ?? "";
+		this.BackendDeviceId = /^[0-9a-f-]{36}$/i.test(Device) ? Device : crypto.randomUUID();
+		localStorage.setItem(this.BackendStorage + ":device", this.BackendDeviceId);
 		let RemoteSaved: Partial<RemoteConfig> = {};
 		try
 		{
@@ -409,19 +435,33 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			this.Remote.CacheId = crypto.randomUUID();
 		}
-		if(Platform.isMobileApp)
+		try
+		{
+			const Raw = localStorage.getItem(this.BackendStorage);
+			if(Raw)
+			{
+				const Profile = backend_profile(JSON.parse(Raw));
+				if(!Platform.isMobileApp || Profile.Kind === "api")
+				{
+					this.BackendId = await instruction_hash(backend_identity(Profile));
+					this.Backend = Profile;
+				}
+			}
+		}
+		catch { /* Invalid device-local profiles cannot select a backend. */ }
+		if(this.Backend) { this.Remote.Enabled = false; }
+		else if(Platform.isMobileApp)
 		{
 			this.Remote.Enabled = true;
 		}
 		this.RemoteStatePath = this.state_path(true);
 		this.save_remote_config();
-		if(!this.Remote.Enabled)
+		if(!this.Remote.Enabled && !this.Backend)
 		{
 			this.Desktop = await import("./desktop");
 			this.CompletionWorker = new this.Desktop.CompletionService();
 		}
-		const LegacyStatePath = `${this.manifest.dir}/${this.Remote.Enabled ? "remote-" + this.Remote.CacheId + "-state.json" : "data.json"}`;
-		const Saved = await load_state_file(this.app.vault.adapter, this.state_path(), LegacyStatePath) as SavedState | null;
+		const Saved = await load_state_file(this.app.vault.adapter, this.state_path(), this.legacy_state_path()) as SavedState | null;
 		const Sessions = Saved?.Sessions?.filter(Value => Value.Id && Array.isArray(Value.Messages)) ?? [];
 		if(!Sessions.length)
 		{
@@ -442,7 +482,7 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		this.State = prune_sessions({
 			...Saved, SchemaVersion: 2 as const,
-			Settings: { CliPath: "", Model: "", Effort: "", Fast: false, ShowUsage: true, Instructions: DefaultInstructions, AttachContext: true, AutoCapture: true, Completion: true, CompletionDelay: 1200, ObsidianCliPath: "", ...Saved?.Settings, EditScope: edit_scope(Saved?.Settings?.EditScope) },
+			Settings: { CliPath: "", Model: "", Effort: "", Fast: false, ShowUsage: true, Instructions: DefaultInstructions, AttachContext: true, AutoCapture: true, Completion: !this.Backend, CompletionDelay: 1200, ObsidianCliPath: "", ...Saved?.Settings, EditScope: edit_scope(Saved?.Settings?.EditScope) },
 			Sessions,
 			ActiveId: Sessions.some(Value => Value.Id === Saved?.ActiveId) ? Saved!.ActiveId! : Sessions[0].Id,
 			...(Saved?.DeletedSessionIds !== undefined ? { DeletedSessionIds: Saved.DeletedSessionIds } : {})
@@ -451,6 +491,7 @@ export default class CodexSidebarPlugin extends Plugin
 		normalize_outbox(this.State);
 		if(await apply_late_receipts(this.app.vault.adapter, this.state_path(), this.State)) { await write_state_file(this.app.vault.adapter, this.state_path(), this.State); }
 		this.State.Settings.Instructions = migrate_instructions(this.State.Settings.Instructions);
+		this.configure_backend_state();
 		if(!this.State.Settings.Model)
 		{
 			this.State.Settings.Model = this.Session.EffectiveModel ?? "";
@@ -459,7 +500,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.CompletionStatus = this.addStatusBarItem();
 		this.CompletionStatus.setText(this.State.Settings.Completion ? "Codex 补全已开启" : "Codex 补全已关闭");
 		this.Inline = new InlineCompletions({
-			Enabled: () => this.State.Settings.Completion && !this.Unloaded,
+			Enabled: () => this.State.Settings.Completion && !this.Unloaded && (!this.Backend || !!this.Connection),
 			Delay: () => Math.max(500, this.State.Settings.CompletionDelay),
 			Path: View => View.state.field(editorInfoField, false)?.file?.path ?? null,
 			Request: (Input, Signal) => this.request_completion(Input, Signal),
@@ -556,7 +597,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.NoteSessions?.dispose(); this.NoteSessions = null; this.NoteSessionError = "";
 		try
 		{
-			this.NoteSessions = new NoteSessions(localStorage, this.app.vault.getName(), this.Remote.Enabled ? `remote:${this.Remote.CacheId}` : "desktop", {
+			this.NoteSessions = new NoteSessions(localStorage, this.app.vault.getName(), this.Backend ? `backend:${this.backend_state_id()}` : this.Remote.Enabled ? `remote:${this.Remote.CacheId}` : "desktop", {
 				active: () => this.State.ActiveId, exists: Id => this.State.Sessions.some(Value => Value.Id === Id), blocked: () => this.note_switch_blocked(), changed: () => this.refresh(),
 				activate: async (Id, Path) =>
 				{
@@ -608,6 +649,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	private work_instructions(): string
 	{
+		if(this.Backend) { return snapshot_instructions(this.State.Settings.Instructions, PdfInstructions); }
 		return client_instructions(this.State.Settings.Instructions, this.Remote.Enabled ? null : {
 			Vault: this.app.vault.getName(), Root: this.host_cwd(),
 			Cli: this.obsidian_cli()
@@ -616,7 +658,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	private host_cwd(): string
 	{
-		return this.Remote.Enabled ? this.HostInfo?.cwd ?? "" : (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+		return this.Backend ? "" : this.Remote.Enabled ? this.HostInfo?.cwd ?? "" : (this.app.vault.adapter as FileSystemAdapter).getBasePath();
 	}
 
 	save_remote_config(): void
@@ -666,6 +708,13 @@ export default class CodexSidebarPlugin extends Plugin
 			throw new Error("补全已取消");
 		}
 		await this.ensure_connection();
+		if(this.Connection instanceof BackendConnection)
+		{
+			const Text = await this.Connection.complete({ Session: "completion-" + this.Session.Id, Messages: [
+				{ Role: "system", Text: MathCompletionInstructions }, { Role: "user", Text: completion_prompt(Input) }
+			] }, Signal);
+			return parse_completion(Text);
+		}
 		const Skill = await this.ensure_math_skill();
 		if(Signal.aborted || this.Unloaded)
 		{
@@ -702,6 +751,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async ensure_math_skill(): Promise<SkillInput>
 	{
+		if(this.Backend) { throw new Error("当前使用插件内置数学规则; Codex 模式支持加载本机 math-writing 技能"); }
 		if(this.MathWritingSkill)
 		{
 			return this.MathWritingSkill;
@@ -845,7 +895,7 @@ export default class CodexSidebarPlugin extends Plugin
 
 	private edit_cache_context(Key?: string): CacheContext | null
 	{
-		const Device = this.Remote.Enabled ? this.Remote.CacheId : "desktop";
+		const Device = this.Backend ? this.backend_state_id() : this.Remote.Enabled ? this.Remote.CacheId : "desktop";
 		let Id = this.State.ActiveId;
 		if(Key)
 		{
@@ -941,32 +991,55 @@ export default class CodexSidebarPlugin extends Plugin
 	async set_remote_mode(Enabled: boolean): Promise<void>
 	{
 		this.check_connection_change();
-		await this.switch_remote_mode(Enabled);
+		this.ChatPreparing = true;
+		try { await this.switch_remote_mode(Enabled); }
+		finally { this.ChatPreparing = false; this.refresh(); }
 	}
 
 	private check_connection_change(): void
 	{
-		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting || this.NoteSessions?.Switching || this.Connecting)
+		const AlternateUncertain = this.Backend && this.Runtime.Stage === "submission-unknown";
+		if((this.Runtime.BlocksInput && !AlternateUncertain) || this.Busy || this.ChatPreparing || this.SessionDeleting || this.NoteSessions?.Switching || this.Connecting)
 		{
 			throw new Error("请等待当前操作完成或停止回复后再切换连接");
 		}
 	}
 
-	private async switch_remote_mode(Enabled: boolean): Promise<void>
+	private configure_backend_state(): void
+	{
+		if(!this.Backend) { return; }
+		Object.assign(this.State.Settings, { Model: backend_model(this.Backend), Effort: "", Fast: false });
+		for(const Operation of this.State.Sync?.Operations ?? [])
+		{
+			if(Operation.Status === "running") { update_operation(this.State.Sync!, Operation.Id, "submission-unknown", { ...this.local_operation_version(Operation), Error: "此前的直连或本机进程已关闭, 不自动重发" }); }
+		}
+		this.SkillStatus = "使用插件内置数学规则";
+	}
+
+	private async switch_remote_mode(Enabled: boolean, Backend: BackendProfile | null = null, RemoteOptions: Partial<RemoteConfig> = {}): Promise<void>
 	{
 		await this.persist(false);
+		const Remote = !Backend && (Enabled || Platform.isMobileApp);
+		const BackendId = Backend ? await instruction_hash(backend_identity(Backend)) : "";
+		const RemoteNext = { ...this.Remote, ...RemoteOptions, Enabled: Remote };
+		const Saved = await load_state_file(this.app.vault.adapter, this.state_path(Remote, BackendId, RemoteNext.CacheId), this.legacy_state_path(Remote, BackendId, RemoteNext.CacheId)) as SavedState | null;
+		if(this.Unloaded) { throw new Error("插件已关闭"); }
 		this.Generation++;
 		this.close_connection();
+		this.Runtime.finish();
+		this.TurnId = null;
 		this.Inline.clear();
 		this.CompletionWorker?.close();
 		this.Connecting = null;
-		this.Remote.Enabled = Enabled || Platform.isMobileApp;
-		if(this.Remote.Enabled) { this.LocalApiKey = undefined; }
+		this.Remote = RemoteNext;
+		this.Backend = Backend;
+		this.BackendId = BackendId;
+		this.BackendKey = "";
+		if(this.Remote.Enabled || Backend) { this.LocalApiKey = undefined; }
 		this.RemoteStatePath = this.state_path(true);
 		this.save_remote_config();
-		const LegacyStatePath = `${this.manifest.dir}/${this.Remote.Enabled ? "remote-" + this.Remote.CacheId + "-state.json" : "data.json"}`;
-		const Saved = await load_state_file(this.app.vault.adapter, this.state_path(), LegacyStatePath);
-		this.State = prune_sessions(Saved?.Sessions?.length ? Saved : { Settings: { ...this.State.Settings }, Sessions: [new_session()], ActiveId: "" });
+		localStorage.setItem(this.BackendStorage, JSON.stringify(Backend));
+		this.State = prune_sessions(Saved?.Sessions?.length ? Saved : { Settings: { ...this.State.Settings, Model: "", Effort: "", Fast: false, Completion: !Backend }, Sessions: [new_session()], ActiveId: "" });
 		this.State.Settings.EditScope = edit_scope(this.State.Settings.EditScope);
 		if(!this.State.Sessions.some(Value => Value.Id === this.State.ActiveId))
 		{
@@ -974,16 +1047,38 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		if(!this.Remote.Enabled)
 		{
-			this.Desktop ??= await import("./desktop");
-			this.CompletionWorker = new this.Desktop.CompletionService();
+			if(!Backend)
+			{
+				this.Desktop ??= await import("./desktop");
+				this.CompletionWorker = new this.Desktop.CompletionService();
+			}
 			this.State.Sessions.forEach(Value => { Value.ThreadId = null; Value.InstructionsHash = ""; });
 		}
+		this.configure_backend_state();
 		this.AnswerQuote = null;
 		this.Models = [];
+		this.CompletionStatus.setText(this.State.Settings.Completion ? "Codex 补全已开启" : "Codex 补全已关闭");
 		this.configure_note_sessions(); this.observe_note_file();
-		this.Status = this.Remote.Enabled ? "独立远程会话, 连接后使用" : "本机桌面会话";
+		this.Status = Backend ? backend_name(Backend) : this.Remote.Enabled ? "独立远程会话, 连接后使用" : "本机桌面会话";
 		this.refresh();
 		await this.persist();
+	}
+
+	async start_backend(Input: unknown, Key = ""): Promise<void>
+	{
+		const Profile = backend_profile(Input);
+		if(Profile.Kind === "agent" && Platform.isMobileApp) { throw new Error("本机 Agent 需要 Windows"); }
+		const Secret = Profile.Kind === "api" || Key.trim() && Profile.Agent !== "claude" ? direct_api_key(Key) : "";
+		if(Secret && JSON.stringify(Profile).includes(Secret)) { throw new Error("请只在密钥栏输入 API Key"); }
+		this.check_connection_change();
+		this.ChatPreparing = true;
+		try
+		{
+			await this.switch_remote_mode(false, Profile);
+			this.BackendKey = Secret;
+			await this.ensure_connection();
+		}
+		finally { this.ChatPreparing = false; this.refresh(); }
 	}
 
 	async start_local_codex(Key?: string): Promise<void>
@@ -998,7 +1093,7 @@ export default class CodexSidebarPlugin extends Plugin
 		try
 		{
 			this.Inline.clear();
-			if(this.Remote.Enabled) { await this.switch_remote_mode(false); }
+			if(this.Remote.Enabled || this.Backend) { await this.switch_remote_mode(false); }
 			this.Generation++;
 			this.close_connection();
 			this.CompletionWorker?.close();
@@ -1020,27 +1115,21 @@ export default class CodexSidebarPlugin extends Plugin
 		if(Transport !== "browser" && Transport !== "native") { throw new Error("未知网络传输方式"); }
 		remote_url(Url);
 		this.check_connection_change();
-		await this.persist(false);
-		this.close_connection();
-		if(this.Remote.Url !== Url || this.Remote.Token !== Token)
+		this.ChatPreparing = true;
+		try
 		{
-			this.Remote.CacheId = crypto.randomUUID();
-			this.Remote.Cursor = 0;
-			this.Remote.Server = "";
+			const Changed = this.Remote.Url !== Url || this.Remote.Token !== Token;
+			await this.switch_remote_mode(true, null, { Url, Token, Transport, ...(Changed ? { CacheId: crypto.randomUUID(), Cursor: 0, Server: "" } : {}) });
+			await this.ensure_thread();
+			this.Busy = !!this.TurnId;
 		}
-		this.Remote.Url = Url;
-		this.Remote.Token = Token;
-		this.Remote.Transport = Transport;
-		this.save_remote_config();
-		await this.set_remote_mode(true);
-		await this.ensure_thread();
-		this.Busy = !!this.TurnId;
+		finally { this.ChatPreparing = false; }
 		this.refresh();
 	}
 
 	async update_run_settings(Model: string, Effort: string, Fast: boolean): Promise<void>
 	{
-		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting)
+		if(this.Backend || this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting)
 		{
 			return;
 		}
@@ -1073,18 +1162,21 @@ export default class CodexSidebarPlugin extends Plugin
 		}
 		const Generation = ++this.Generation;
 		this.Runtime.stage("connecting");
-		this.Status = this.Remote.Enabled ? "连接独立远程 Codex..." : "连接本机 Codex...";
+		this.Status = this.Backend ? `准备 ${backend_name(this.Backend)}...` : this.Remote.Enabled ? "连接独立远程 Codex..." : "连接本机 Codex...";
 		this.refresh();
 		const Work = (async () =>
 		{
-			const ApiKey = this.Remote.Enabled ? undefined : this.LocalApiKey;
-			const CliPath = this.Remote.Enabled ? "" : this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
+			const Backend = this.Backend;
+			const ApiKey = this.Remote.Enabled || Backend ? undefined : this.LocalApiKey;
+			const CliPath = this.Remote.Enabled || Backend ? "" : this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
+			const Driver = Backend?.Kind === "api" ? direct_api(Backend, this.BackendKey, Value => requestUrl({ ...Value, throw: false }))
+				: Backend?.Kind === "agent" ? await (await import("./headless-agents")).headless_agent(Backend, this.BackendKey) : null;
 			if(Generation !== this.Generation || this.Unloaded)
 			{
 				throw new Error("连接已取消");
 			}
 			const Adapter = this.app.vault.adapter;
-			if(!this.Remote.Enabled && !(Adapter instanceof FileSystemAdapter))
+			if(!this.Remote.Enabled && !Backend && !(Adapter instanceof FileSystemAdapter))
 			{
 				throw new Error("此插件需要桌面本地 vault");
 			}
@@ -1115,7 +1207,7 @@ export default class CodexSidebarPlugin extends Plugin
 						this.persist_background();
 					}
 				};
-			const Connection: RpcConnection = this.Remote.Enabled
+			const Connection: RpcConnection = Backend && Driver ? new BackendConnection(Backend, Driver, OnMessage) : this.Remote.Enabled
 				? new RemoteConnection((Path, Method, Body) => this.remote_http(Path, Method, Body), this.Remote, OnMessage, OnClosed, () => this.save_remote_config())
 				: new this.Desktop!.CodexConnection(CliPath, this.host_cwd(), OnMessage, OnClosed, ApiKey);
 			this.Connection = Connection;
@@ -1146,7 +1238,7 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				throw new Error("本机 Codex 尚未登录. 请先在 Codex 应用或 CLI 中登录");
 			}
-			const Legacy = ApiKey ? [] : this.State.Sessions.filter(Value => Value.LegacyThreadId);
+			const Legacy = ApiKey || Backend ? [] : this.State.Sessions.filter(Value => Value.LegacyThreadId);
 			const Archived = new Set<string>();
 			if(Legacy.length)
 			{
@@ -1202,8 +1294,9 @@ export default class CodexSidebarPlugin extends Plugin
 				throw new Error("连接已取消");
 			}
 			const Auth = Account.account.type === "chatgpt" ? "ChatGPT 登录" : Account.account.type === "apiKey" ? "API Key" : Account.account.type;
-			this.Status = `${this.Remote.Enabled ? "独立远程已连接" : "本机 Codex 已连接"} (${Auth})`;
-			await this.ensure_math_skill().catch(() => {});
+			this.Status = Backend ? `${backend_name(Backend)} 已配置, 首轮验证推理` : `${this.Remote.Enabled ? "独立远程已连接" : "本机 Codex 已连接"} (${Auth})`;
+			if(Backend) { this.SkillStatus = "使用插件内置数学规则"; }
+			else { await this.ensure_math_skill().catch(() => {}); }
 			this.refresh();
 			if(Connection instanceof RemoteConnection)
 			{
@@ -1236,7 +1329,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private async ensure_thread(Ticket?: PreparationTicket, ExcludeMessageId?: string, Target = this.state_target()): Promise<void>
 	{
 		await this.ensure_connection();
-		await this.ensure_math_skill();
+		if(!this.Backend) { await this.ensure_math_skill(); }
 		if(Ticket) { this.Runtime.check(Ticket); }
 		await this.ensure_session_history(Ticket?.SessionId ?? this.State.ActiveId);
 		if(Ticket) { this.Runtime.check(Ticket); }
@@ -1246,13 +1339,14 @@ export default class CodexSidebarPlugin extends Plugin
 		const Connection = this.Connection!; Target.Connection = Connection;
 		const Visible = () => !this.Unloaded && Target.Scope === this.local_scope() && this.State.ActiveId === Session.Id && (!Ticket || this.Runtime.current(Ticket));
 		const LiveId = this.LiveThreads.get(Session.Id);
-		if(LiveId)
+		const Alternate = Connection instanceof BackendConnection;
+		if(LiveId && !Alternate)
 		{
 			Session.ThreadId = LiveId;
 			if(Visible()) { this.LoadedThread = LiveId; }
 			return;
 		}
-		const Options = run_options(this.State.Settings, this.Models);
+		const Options = this.Backend ? { model: backend_model(this.Backend), serviceTier: "default", effort: undefined } : run_options(this.State.Settings, this.Models);
 		const Instructions = this.work_instructions();
 		let Existing: any = null;
 		if(Target.Remote && Session.ThreadId)
@@ -1262,10 +1356,10 @@ export default class CodexSidebarPlugin extends Plugin
 		const Params =
 		{
 			cwd: this.host_cwd(),
-			...(Target.Remote ? { clientSessionId: Session.Id } : {}),
+			...(Target.Remote || Alternate ? { clientSessionId: Session.Id } : {}),
 			ephemeral: true,
-			dynamicTools: [ObsidianTool, ...(!Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1 ? [history_read_tool(!Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1)] : [])],
-			approvalPolicy: "on-request",
+			dynamicTools: Alternate ? [] : [ObsidianTool, ...(!Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1 ? [history_read_tool(!Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1)] : [])],
+			approvalPolicy: Alternate ? "never" : "on-request",
 			approvalsReviewer: "user",
 			sandbox: "read-only",
 			developerInstructions: Instructions,
@@ -1276,8 +1370,8 @@ export default class CodexSidebarPlugin extends Plugin
 		const PriorMessages = Session.Messages.filter(M => M.Id !== ExcludeMessageId);
 		const Current = Session.Messages.find(M => M.Id === ExcludeMessageId), Required = [Current?.Quote?.MessageId, Current?.Quote?.RootMessageId].filter((Id): Id is string => !!Id && PriorMessages.some(M => M.Id === Id));
 		const Budget: HistoryBudgetOptions = { ModelContextWindow: Session.EffectiveModel === Options.model ? Session.Usage?.modelContextWindow : undefined, ReservedUtf8Bytes: new TextEncoder().encode(Instructions).byteLength, CurrentMessage: Current, SessionId: Session.Id, MaxImages: 8, RequiredMessageIds: Required, UnresolvedMessageIds: State.Sync?.Operations.filter(O => O.SessionId === Session.Id && ["local", "received", "submission-unknown", "running"].includes(O.Status) && PriorMessages.some(M => M.Id === O.MessageId)).map(O => O.MessageId), UserConstraints: ["完整答案最小修补; 思路沿原路线; 工具只读; 只有当前客户端审核后写回. 旧消息来源与未知提交状态不补造."] };
-		Budget.HistoryReadAvailable = !Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1;
-		Budget.HistoryReadBodyVersionsAvailable = !Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1;
+		Budget.HistoryReadAvailable = !Alternate && (!Target.Remote || (this.HostInfo as any)?.capabilities?.historyRead === 1);
+		Budget.HistoryReadBodyVersionsAvailable = !Alternate && (!Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1);
 		assert_quote_read_capability(Current?.Quote, Budget.HistoryReadBodyVersionsAvailable);
 		const Plan = Existing ? null : plan_history_input(PriorMessages, Budget);
 		if(Target.Remote && Plan?.Ledger.OmittedMessageIds.length && (this.HostInfo as any)?.capabilities?.historyRead !== 1) { throw new Error("完整历史已超过保守恢复预算, 当前旧桥没有授权历史分页读取能力; 请升级桥或明确分段/新建会话. 原历史保留"); }
@@ -1467,7 +1561,8 @@ export default class CodexSidebarPlugin extends Plugin
 			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId) ?? Operation;
 			if(!CurrentSession || !Message) { throw new PreparationCancelled(); }
 			if(this.TurnId) { RecoveredTurn = true; throw new Error("已恢复原来正在运行的回复; 新问题仅本地保存, 未提交推理"); }
-			this.Activity = "检查 math-writing"; this.refresh(); const Skill = await preparation_step(this.ensure_math_skill(), Ticket, this.Runtime);
+			this.Activity = this.Backend ? "准备数学工作说明" : "检查 math-writing"; this.refresh();
+			const Skill = this.Backend ? null : await preparation_step(this.ensure_math_skill(), Ticket, this.Runtime);
 			const Instructions = this.work_instructions(), Hash = await preparation_step(instruction_hash(Instructions), Ticket, this.Runtime);
 			if(CurrentSession.InstructionsHash !== Hash)
 			{
@@ -1482,11 +1577,13 @@ export default class CodexSidebarPlugin extends Plugin
 			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId);
 			if(!Operation || Operation.Conflicts?.length) { throw new Error("原发送操作缺失或有冲突, 不自动提交"); }
 			const Chosen = ((Operation.Input as any)?.Run ?? this.State.Settings), Settings = { ...this.State.Settings, Model: Chosen.Model || this.State.Settings.Model, Effort: Chosen.Effort || this.State.Settings.Effort, Fast: Chosen.Fast ?? this.State.Settings.Fast };
-			const BodyVersions = !Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1;
+			const BodyVersions = !this.Backend && (!Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1);
 			assert_quote_read_capability(Message.Quote, BodyVersions);
 			const DerivedPrompt = derived_message_prompt(Message);
-			if(!BodyVersions && DerivedPrompt !== Message.Prompt) { throw new Error("当前桥不支持已保存引用的派生输入校验, 请升级桥; 原 Prompt 和来源保留"); }
-			const Options = run_options(Settings, this.Models), Params = { threadId: CurrentSession.ThreadId, input: [...skill_input(DerivedPrompt, Skill), ...Images], ...Options };
+			if(Target.Remote && !BodyVersions && DerivedPrompt !== Message.Prompt) { throw new Error("当前桥不支持已保存引用的派生输入校验, 请升级桥; 原 Prompt 和来源保留"); }
+			const Options = this.Backend ? { model: Settings.Model, serviceTier: "default", effort: undefined } : run_options(Settings, this.Models);
+			if(this.Backend && Settings.Model !== backend_model(this.Backend)) { throw new Error("已保存操作使用另一模型, 请恢复原模型或明确建立重发分支"); }
+			const Params = { threadId: CurrentSession.ThreadId, input: [...(Skill ? skill_input(DerivedPrompt, Skill) : [{ type: "text", text: DerivedPrompt }]), ...Images], ...Options };
 			let Result: any;
 			const BeforePost = async () =>
 			{
@@ -1516,9 +1613,10 @@ export default class CodexSidebarPlugin extends Plugin
 			if(this.Runtime.current(Ticket) && !this.Unloaded && this.State.ActiveId === Ticket.SessionId)
 			{
 				this.Model = Options.model; this.Busy = Operation.Status === "running"; this.TurnId = this.Busy ? Result.turn.id : null; this.ChatPreparing = false;
-				if(this.Busy) { this.Runtime.stage("generating", Ticket); this.Status = "Codex 正在回答..."; this.Activity = "思考中"; } else { this.Runtime.finish(Ticket); this.Activity = ""; }
+				if(this.Busy) { this.Runtime.stage("generating", Ticket); this.Status = `${this.Backend ? backend_name(this.Backend) : "Codex"} 正在回答...`; this.Activity = "思考中"; } else { this.Runtime.finish(Ticket); this.Activity = ""; }
 				this.refresh();
 			}
+			if(Target.Connection instanceof BackendConnection) { Target.Connection.begin_turn(Result.turn.id); }
 			return true;
 		}
 		catch(ErrorValue)
@@ -1887,6 +1985,22 @@ export default class CodexSidebarPlugin extends Plugin
 				if(Params.item.type === "fileChange") { this.ApprovalItems.set(Params.item.id, Params.item.changes); }
 				if(Visible && ["commandExecution", "mcpToolCall", "webSearch"].includes(Params.item.type)) { this.Status = "Codex 正在运行工具..."; this.Activity = "正在运行工具"; }
 				if(Visible && Params.item.type === "reasoning") { this.Activity = "思考中"; } break;
+			case "backend/result-unknown":
+			{
+				if(!(this.Connection instanceof BackendConnection)) { break; }
+				for(const O of this.State.Sync?.Operations.filter(O => O.SessionId === Session.Id && O.ThreadId === Params.threadId && O.TurnId === Params.turn.id && O.Status === "running") ?? [])
+				{
+					this.update_run_operation(Target, O.Id, "submission-unknown", { Error: Params.turn.error?.message });
+				}
+				if(Visible && this.TurnId === Params.turn.id)
+				{
+					this.Busy = false; this.TurnId = null; this.Activity = "结果待核对";
+					this.Status = Params.turn.error?.message ?? "结果待核对, 未自动重发";
+					this.Runtime.stage("submission-unknown");
+				}
+				this.history_changed(Session.Id, Session.Messages.filter(M => M.TurnId === Params.turn.id).map(M => M.Id));
+				this.persist_background(); break;
+			}
 			case "turn/completed":
 			{
 				for(const M of Session.Messages.filter(M => M.TurnId === Params.turn.id)) { this.Checkpoints.forget(JSON.stringify([Target.Scope, Session.Id, M.TurnId ?? "", M.Id])); }
@@ -1898,7 +2012,7 @@ export default class CodexSidebarPlugin extends Plugin
 				{
 					this.ApprovalItems.clear(); this.Busy = false; this.ChatPreparing = false; this.TurnId = null; this.Activity = ""; this.StartedAt = 0;
 					if(!this.Runtime.Active || this.Runtime.Active.SessionId === Session.Id) { this.Runtime.finish(); }
-					this.Status = Params.turn.status === "completed" ? "回复完成" : Params.turn.status === "interrupted" ? "已停止" : `回复失败: ${Params.turn.error?.message ?? Params.turn.status}`;
+					this.Status = Params.turn.status === "completed" ? "回复完成" : Params.turn.status === "interrupted" ? this.Backend ? "已停止等待; 已提交的请求可能仍在服务端处理" : "已停止" : `回复失败: ${Params.turn.error?.message ?? Params.turn.status}`;
 				}
 				this.persist_background(); break;
 			}
@@ -1977,6 +2091,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Checkpoints.flush(); this.Checkpoints.close();
 		this.Runtime.close();
 		this.Unloaded = true;
+		this.BackendKey = "";
 		this.LocalApiKey = undefined;
 		void this.Edits?.Store.close();
 		this.NoteSessions?.dispose();
