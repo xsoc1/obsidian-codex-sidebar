@@ -27,3 +27,9 @@ PDF++ [文字选区与回链](https://ryotaushio.github.io/obsidian-pdf-plus/bac
 - Windows Obsidian「数学」库实读 PDF++ `0.40.31` 已启用，注册了文字选区链接和矩形选区命令；Codex Sidebar 当前为 `2.0.0-beta.8`。核对 PDF++ 同版本源码和现有 [PDF 捕获](pdf-support.md)。现版侧栏能捕获 PDF 文本和局部图，但来源跳转只到页；还没有导入 PDF++ 链接的入口。
 - 以仓库原创 `examples/pdf/dense-formula-mini.pdf` 在宿主 PDF.js 中复验：`getViewport`、`convertToPdfPoint`、`convertToViewportRectangle` 在 0/90/180/270 度下往返误差不超过 `1.2e-16`（归一化坐标）；另用与现有 reader 相同的渲染平移方式得到 599×354 的非空局部图。该探针只验证坐标及裁切原理，未执行真实的菜单联动或 PDF++ 手势。
 - 开发验收应覆盖：选文字→发送→回到原选段；框扫描公式→局部预览→发送→回到原区域；同名文件、旋转页、PDF 变化、插件缺失时正确拒绝或降级。iPad 需在真机验证长按、拖框和粘贴；源码有触摸分支，但不能用桌面探针替代。调研没有改代码、插件配置、PDF 或课程笔记。
+
+## 2.0.0-beta.9 实施与发布
+
+- 实现提交 `2848c39`. 本地 `npm run build` 和 321 项测试通过, 含无 PDF++ 时的降级, 选区链接与越界校验, 只发文本/仅一张裁切图, 原快照重发以及版本一致/变化时的来源导航. [普通 CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41937156553) 在 Windows 与 Ubuntu 的 Node 24 均通过.
+- Windows “数学”库已热重载 beta.9, PDF++ 0.40.31 下原生侧栏可见导入按钮. 原创样本用 Obsidian PDF.js 5.3.34 验证了文字选区不渲染图像、扫描局部图 1600×1120、旧整页入口 1236×1600. 原生脚本用实际 viewer 的选区偏移、程序生成的文字层、菜单处理器和导入对话框走过捕获; 无真实右键手势或模型发送. 探针打开临时页触发笔记自动会话, 随后仅移除该空会话与两个原创临时文件; 已回读原会话、编辑器内容、笔记关联和编辑记录保持一致.
+- [GitHub beta.9](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.9) 已公开. [发布流程](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41937724583) 成功, 匿名下载 7 个资产并核对两个 ZIP 的 4/17 个成员, Windows 安装的四个文件与公开资产一致. Stable latest 仍为 1.1.0, 独立桥未变. 本轮没有 iPad 真机、真实模型请求或真实导航手势验收.
