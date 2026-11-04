@@ -35,11 +35,13 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 
 升级保留已有客户端和桥状态文件. 回退插件程序后, 直连与非 Codex Agent 的独立记录保留在设备状态目录中, 再升回候选即可恢复. 普通 Codex 的桌面与远程记录沿用原存储和回退流程.
 
-## 2.0.0-beta.5 候选验证
+## 2.0.0-beta.5 验证
 
 - Node 24 上运行 `npm run build` 和 `npm test`, 310 项通过. 目录测试覆盖五种预设、认证和错误映射. 移动构建在受控请求下走通目录读取、选模型、用选中 ID 发送和确认写入; 切换服务商或 Key 后忽略旧响应, 无目录时仍能手填.
 - Windows Obsidian 用一次性探针实际请求 OpenCode Go 的公开目录, 读到 28 个模型, 并用原生控件选择 `glm-5.3-flash`. 设置行在 360px 和 640px 容器下均无横向溢出. 该探针没有调用推理、替换日常安装或改动远程桥.
 - 其他服务商的真实 Key 目录与 iPad 真机未实测. 模型目录不写入状态; 已有直连配置和手填模型 ID 沿用 beta.4 的存储格式.
+- Windows「数学」库已从 beta.4 安装并重载 beta.5. 已安装设置从 Go 公开目录读取 28 个模型并选中 `glm-5.3-flash`, 未提交推理. 本机 Codex 已恢复连接, 可见 8 个模型和已启用的 math-writing. 30 个会话、246 条消息、11 条修改记录、10 条写入计划、18 条发送操作和打开的编辑器内容均保持一致. 独立桥未改动.
+- [Windows/Ubuntu CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41776341451) 和 [发布任务](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41776443977) 通过. [公开预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.5) 绑定 `3154c48d98153356ccb68767d54320aa9a3a806c`. 匿名下载校验了 7 个公开资产, 插件与桥 ZIP 分别含 4 和 17 个白名单文件; Windows 安装的四个程序文件与公开资产逐字节相同. 最新正式版仍为 1.1.0.
 
 ## 2.0.0-beta.4 验证
 
