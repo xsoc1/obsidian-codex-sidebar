@@ -41,6 +41,8 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 
 - beta.5 的设置回归在成功和失败两条路径都可复现: 成功时目录被清空; 缺 Key 失败时连所选服务商和模型 ID 也被重置. 两条回归在修复前均失败.
 - 修复后用移动构建与受控请求验证: 缺 Key 或切换受阻时保留所选模型和已填表单, 原地重试成功, 选中模型可继续生成修改预览, 密钥不落盘. Windows 原生隔离探针实读 OpenCode Go 目录的 28 项, 以合成 Key 和受控激活结果验证失败、重试及成功提示; 360px 和 640px 容器无横向溢出. 未进行真实 Key 推理或 iPad 真机复验.
+- Windows「数学」库从 beta.5 升级到 beta.6 后, 在实际安装版设置中读取 Go 目录的 28 项并选择 `glm-5.3-flash`. 不填 Key 点击启用时显示错误, 目录、所选模型和原连接都保留. 原有 30 个会话、246 条消息、11 条修改记录、10 条写入计划、18 条发送操作与编辑器缓冲区一致; 本机 Codex 恢复连接, 独立桥未改动.
+- [Windows/Ubuntu CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41789674581) 和 [发布任务](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41789804944) 通过. [公开预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.6) 绑定 `47a2578af498ddb64d242012a5c14b6426a09aa3`. 匿名下载校验了 7 个公开资产及两个 ZIP 的白名单成员; Windows 的四个程序文件与公开资产逐字节相同. 最新正式版仍为 1.1.0.
 
 ## 2.0.0-beta.5 验证
 
