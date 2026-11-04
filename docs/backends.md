@@ -47,6 +47,8 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 
 - 构建与 314 项测试通过. 移动构建走通加载目录、选择模型、保存档次、按已保存档次发出受控请求、重连后校验过期档次、恢复服务商默认. 对 Chat Completions 和 Responses 的字段使用独立模拟请求校验; 未发起真实 Key 推理.
 - Windows 原生隔离探针使用 Go 的实时公开目录渲染实际侧栏控件. GLM-5.3-Flash 显示默认、low、high、max; DeepSeek V4 Pro 显示默认、high、max; 未接入的 Claude Haiku 5.5 只显示服务商默认. 未进行 iPad 真机验证.
+- Windows「数学」库已从 beta.6 升级. 已安装程序使用独立模型数据渲染并保留 `max` 选择; 实际设置读取 28 个 Go 模型, 缺 Key 时保留表单. 本机 Codex 恢复连接; 30 个会话、246 条消息、11 条修改记录、10 条写入计划、18 条发送操作和编辑器内容保持一致. 独立桥未改动.
+- [Windows/Ubuntu CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41792012156) 和 [发布任务](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41792184144) 通过. [公开预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.7) 对应 `be91c4e840a19e6d1e846661c6c16d311e031487`. 7 个公开资产、两个 ZIP 的成员及 Windows 四个安装文件均通过公开发布回读. 最新正式版仍为 1.1.0.
 
 ## 2.0.0-beta.6 验证
 
