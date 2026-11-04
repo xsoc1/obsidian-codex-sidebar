@@ -2,7 +2,7 @@
 
 在 Obsidian 中与 Codex 对话, 随时解释笔记、追问回答, 并通过差异预览审核笔记修改.
 
-在 2.0.0-beta.4 候选中, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
+从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -24,7 +24,7 @@
 
 电脑需安装完整的 Codex CLI 运行包, 并在 Codex 中启用 `math-writing` 技能. 插件每轮会显式加载该技能. CLI 路径留空时会查找 PATH 和 Windows 上的 Codex 应用缓存.
 
-在候选版的插件设置中点击 **启动本机 Codex** 即可连接电脑已有的登录. 本机 Codex 也可以用临时 OpenAI API Key 登录. 若要使用其他本机 Agent, 在 **Windows 本机 Agent** 中选择 Claude Code、Antigravity 或 DeepSeek Harness.
+在 beta.4 的插件设置中点击 **启动本机 Codex** 即可连接电脑已有的登录. 本机 Codex 也可以用临时 OpenAI API Key 登录. 若要使用其他本机 Agent, 在 **Windows 本机 Agent** 中选择 Claude Code、Antigravity 或 DeepSeek Harness.
 
 `math-writing` 目前是独立私有依赖, 本仓库不提供其下载包, 也不承诺它由 OpenAI 官方供应. 已取得技能的用户按 Codex 支持目录安装启用, 再在插件设置中运行“环境检查”. 获取边界与安装说明见 [开发与依赖](docs/development.md).
 
@@ -36,7 +36,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.2` 属于预发布版本, 在 BRAT 中需指定此版本. 独立桥应先升级, 同一配对的客户端随后一起升级; 迁移、旧版兼容和保留新记录的回退方式见 [升级说明](docs/migration.md).
+`2.0.0-beta.4` 属于预发布版本, 在 BRAT 中需指定此版本. 已在使用 beta.2 独立桥的用户可以保留原桥; 从旧版迁移协议 2 请参阅 [升级说明](docs/migration.md).
 
 
 ### iPad

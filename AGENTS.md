@@ -2,7 +2,7 @@
 
 ## Current scope
 
-- 2026-11-04: Local beta.4 candidate extends the beta.3 auth work with device-side API providers and Windows headless adapters. [Backend setup and validation](docs/backends.md) owns endpoint formats, platform prerequisites, permission limits, test results and rollback.
+- 2026-11-04: The user authorized installing and publishing beta.4 after the local candidate. Install the Windows client and publish a GitHub prerelease for BRAT. The existing beta.2 bridge can serve the new client. [Backend setup and validation](docs/backends.md) records endpoint formats, platform prerequisites, permissions, deployment evidence and rollback.
 
 - 2026-11-04: Local beta.3 candidate adds one-click Windows Codex startup and OpenAI API Key authentication for Windows and the paired iPad bridge, based on the installed beta.2 source line at `136f4bd`. The Windows app cache fallback is needed when Obsidian's PATH lacks Codex. See [iPad setup](docs/ipad-setup.md#用-openai-api-key-启动) for host configuration and rollback. The daily plugin and public release remain beta.2.
 
