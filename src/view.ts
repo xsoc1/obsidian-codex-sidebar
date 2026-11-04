@@ -10,6 +10,7 @@ import { selected_model, fast_tier, context_usage } from "./controls";
 import { structured_task, question_label } from "./edit/presentation";
 import { safe_math_markdown } from "./edit/safe-markdown";
 import { pdf_preview } from "./pdf/panel";
+import { pdf_plus_active } from "./pdf/plus";
 import { render_edit } from "./edit/panel";
 import { edit_scope } from "./edit/options";
 import { ComposerActions, type ComposeAction } from "./edit/composer";
@@ -53,6 +54,8 @@ export class CodexView extends ItemView
 	private NavigationSummary: HTMLElement | null = null;
 	private ComposePanel: SidebarPanel | null = null;
 	private ContextSummary: HTMLElement | null = null;
+	private ContextPanel: SidebarPanel | null = null;
+	private PdfLinkButton!: HTMLButtonElement;
 	private OptionsSummary: HTMLElement | null = null;
 	private StatusElement!: HTMLElement;
 	private ContextElement!: HTMLElement;
@@ -146,10 +149,13 @@ export class CodexView extends ItemView
 		this.StatusElement = Root.createDiv({ cls: "codex-status" });
 		this.SelectionPreview = new SelectionPreview(Root, () => this.Owner.clear_context());
 		const ContextPanel = Panel(Toolbar, "codex-context-tools", "上下文");
+		this.ContextPanel = ContextPanel;
 		this.ContextSummary = ContextPanel.Summary;
 		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
 		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
 		this.button(ContextBar, "选择 PDF 页", () => this.Owner.open_pdf());
+		this.PdfLinkButton = this.button(ContextBar, "导入 PDF++ 选区链接", () => this.Owner.open_pdf_link());
+		this.PdfLinkButton.hidden = !pdf_plus_active(this.app);
 		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
 		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
 		this.ContextElement = ContextPanel.Body.createDiv({ cls: "codex-context" });
@@ -544,6 +550,7 @@ export class CodexView extends ItemView
 		this.SessionsElement.value = Session.Id;
 		this.SessionsElement.disabled = this.input_blocked();
 		const Snapshot = this.Owner.Capture.Snapshot;
+		this.PdfLinkButton.hidden = !pdf_plus_active(this.app);
 		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
 		this.refresh_compose_summary();
 		this.ContextSummary?.setText(Snapshot ? `上下文 · ${Snapshot.Kind}${Snapshot.Truncated ? " (已截断)" : ""}` : "上下文");
@@ -567,8 +574,9 @@ export class CodexView extends ItemView
 				const Details = this.ContextElement.createEl("details");
 				Details.createEl("summary", { text: `${Snapshot.Path}${Snapshot.LineStart !== null ? `:${Snapshot.LineStart + 1}` : ""}` });
 				Details.createDiv({ text: Snapshot.Heading || "未定位标题", cls: "codex-context-heading" });
-				Details.createEl("pre", { text: Snapshot.Text });
+				if(Snapshot.Text) { Details.createEl("pre", { text: Snapshot.Text }); }
 				pdf_preview(Details, Snapshot, this.Owner.PdfImages);
+				if(Snapshot.PdfTarget?.Kind === "rect") { Details.open = true; }
 				if(Snapshot.Truncated)
 				{
 					Details.createDiv({ text: "内容已截断到上下文长度限制" });
@@ -596,6 +604,8 @@ export class CodexView extends ItemView
 		}
 		void this.Owner.NoteSessions?.flush();
 	}
+
+	reveal_pdf_context(): void { reveal_sidebar_panel(this.ContextPanel); }
 
 	forget_session(Id: string): void
 	{

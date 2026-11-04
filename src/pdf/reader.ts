@@ -2,6 +2,7 @@ import { loadPdfJs, type App, type FileView, type TFile, type View } from "obsid
 import { bound_text, type ContextSnapshot } from "../prompt";
 import { pdf_hash, validate_region, validate_pdf, type PdfCaptureRequest, type PdfRegion } from "./types";
 import type { PdfImages } from "./image-store";
+import { pdf_region, pdf_selected_text, validated_pdf_target, type PdfTarget } from "./target";
 
 export function is_pdf_view(ViewValue: View | null | undefined): ViewValue is FileView & { getViewType(): "pdf" }
 {
@@ -82,6 +83,41 @@ export class PdfReader
 	remember_page(File: TFile, Page: number): void { if(Number.isSafeInteger(Page) && Page > 0) { this.Positions.set(File.path, { Page, Stamp: File.stat.mtime, Size: File.stat.size }); } }
 	last_page(File: TFile): number | null { const Last = this.Positions.get(File.path); return Last && Last.Stamp === File.stat.mtime && Last.Size === File.stat.size ? Last.Page : null; }
 	async image_data(Id: string): Promise<string> { return this.Images.get(Id); }
+
+	async capture_target(File: TFile, Target: PdfTarget, OwnerDocument: Document, Signal?: AbortSignal, SelectedText?: string): Promise<ContextSnapshot>
+	{
+		Target = validated_pdf_target(Target);
+		const Path = File.path, Stamp = File.stat.mtime, Size = File.stat.size;
+		const Check = () =>
+		{
+			if(Signal?.aborted || this.Closed || File.path !== Path || File.stat.mtime !== Stamp || File.stat.size !== Size)
+			{
+				throw new Error("PDF 已变化或捕获已取消, 请重新选择");
+			}
+		};
+		Check();
+		const Loaded = await this.document(File);
+		if(Target.Page > Loaded.Document.numPages) { throw new Error("PDF 链接页码超出文件范围"); }
+		const Page = await Loaded.Document.getPage(Target.Page);
+		Check();
+		if(Target.Kind === "rect")
+		{
+			const Region = pdf_region(Target, Page.getViewport({ scale: 1 }));
+			const Snapshot = await this.capture(File, [{ Number: Target.Page, Kind: "region", Region, Version: Loaded.Version }], OwnerDocument, "选区", "", false, Signal);
+			Check();
+			return { ...Snapshot, PdfTarget: structuredClone(Target) };
+		}
+		const Content = await Page.getTextContent({ disableNormalization: true });
+		const Reconstructed = pdf_selected_text(Target, Content.items.filter((Item: { str?: unknown }) => typeof Item.str === "string"));
+		const Text = bound_text(SelectedText?.trim() || Reconstructed, 12000);
+		Check();
+		this.remember_page(File, Target.Page);
+		return {
+			Path, Mode: "阅读", Kind: "选区", Text: "", SelectedText: Text.Text, LineStart: null, LineEnd: null,
+			Heading: `PDF 第 ${Target.Page} 页选段`, Mapping: "PDF文本层", CapturedAt: new Date().toISOString(), Truncated: Text.Truncated,
+			Version: Loaded.Version, PdfTarget: structuredClone(Target)
+		};
+	}
 
 	async capture(File: TFile, Pages: (number | PdfCaptureRequest)[], OwnerDocument: Document, Kind: "选区" | "当前位置" = "当前位置", SelectedText = "", Truncated = false, Signal?: AbortSignal): Promise<ContextSnapshot>
 	{

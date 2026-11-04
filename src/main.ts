@@ -1,6 +1,6 @@
 import {
 	Plugin, ItemView, WorkspaceLeaf, PluginSettingTab, Setting, Notice,
-	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, parseYaml, type App
+	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, parseYaml, type App, type Menu, type EventRef
 } from "obsidian";
 import { ContextCapture } from "./context";
 import { build_prompt, derived_message_prompt, assert_quote_read_capability, DefaultInstructions, client_instructions, migrate_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
@@ -25,7 +25,9 @@ import { safe_math_markdown } from "./edit/safe-markdown";
 import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
 import { image_inputs, message_pdf_refs, history_pdf_refs } from "./pdf/inputs";
 import { pdf_reference, jpeg_info, type PdfImageRef } from "./pdf/types";
-import { PdfPageModal, pdf_preview, PdfInstructions } from "./pdf/panel";
+import { PdfLinkModal, PdfPageModal, pdf_preview, PdfInstructions } from "./pdf/panel";
+import { is_pdf_view, pdf_location } from "./pdf/reader";
+import { live_pdf_target, pdf_plus_active } from "./pdf/plus";
 import { ChatEdits } from "./edit/controller";
 import { open_edit_store } from "./edit/database";
 import { type EditRole, type EditScope } from "./edit/protocol";
@@ -560,6 +562,8 @@ export default class CodexSidebarPlugin extends Plugin
 			try { this.NoteSessions?.forget(File.path); } catch(ErrorValue) { this.NoteSessionError = error_text(ErrorValue); this.refresh(); }
 		}));
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.refresh()));
+		const PdfEvents = this.app.workspace as unknown as { on(Name: "pdf-menu", Callback: (MenuValue: Menu, Info?: { pageNumber?: number; selection?: string }) => void): EventRef };
+		this.registerEvent(PdfEvents.on("pdf-menu", (MenuValue, Info) => { if(Info?.selection?.trim()) { this.add_pdf_selection_action(MenuValue, Info.pageNumber); } }));
 		this.registerEvent(this.app.workspace.on("editor-menu", (MenuValue, Editor, Info) =>
 		{
 			if(!Editor.getSelection().trim())
@@ -1878,6 +1882,53 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			this.State.Settings.AttachContext = true; this.refresh(); await this.persist(); await this.open_sidebar();
 		}).open();
+	}
+
+	open_pdf_link(): void
+	{
+		if(!pdf_plus_active(this.app)) { return; }
+		if(this.CaptureTimer) { clearTimeout(this.CaptureTimer); this.CaptureTimer = null; }
+		new PdfLinkModal(this.app, this.Capture, () => this.attach_pdf_plus_context()).open();
+	}
+
+	private add_pdf_selection_action(MenuValue: Menu, Page: number | undefined): void
+	{
+		if(!pdf_plus_active(this.app) || typeof Page !== "number" || !Number.isSafeInteger(Page)) { return; }
+		const Matches = this.app.workspace.getLeavesOfType("pdf").flatMap(({ view: View }) =>
+		{
+			if(!is_pdf_view(View) || !View.file) { return []; }
+			const Root = View.containerEl;
+			let Location;
+			try { Location = pdf_location(Root, "选区"); } catch { return []; }
+			if(Location?.Pages.length !== 1 || Location.Pages[0] !== Page) { return []; }
+			return [{ File: View.file, Root, Selected: Location.SelectedText }];
+		});
+		if(Matches.length !== 1) { return; }
+		const { File, Root, Selected } = Matches[0], Target = live_pdf_target(this.app, Root, Page);
+		if(!Target) { return; }
+		const Path = File.path, { mtime: Stamp, size: Size } = File.stat;
+		MenuValue.addItem(Item => Item.setTitle("附带选区到 Codex").setIcon("bot").onClick(async () =>
+		{
+			try
+			{
+				if(this.Unloaded || !pdf_plus_active(this.app)) { return; }
+				if(File.path !== Path || File.stat.mtime !== Stamp || File.stat.size !== Size) { throw new Error("PDF 已变化, 请重新选择"); }
+				if(this.CaptureTimer) { clearTimeout(this.CaptureTimer); this.CaptureTimer = null; }
+				const Snapshot = await this.Capture.capture_pdf_target(File, Target, Root.ownerDocument, undefined, Selected);
+				if(Snapshot && !this.Unloaded) { await this.attach_pdf_plus_context(); }
+			}
+			catch(ErrorValue) { this.show_error(ErrorValue); }
+		}));
+	}
+
+	private async attach_pdf_plus_context(): Promise<void>
+	{
+		this.State.Settings.AttachContext = true;
+		this.refresh(); await this.persist(); await this.open_sidebar();
+		for(const { view: View } of this.app.workspace.getLeavesOfType(ViewType))
+		{
+			if(View instanceof CodexView) { View.reveal_pdf_context(); }
+		}
 	}
 
 	async clear_pdf_images(): Promise<void>

@@ -12,6 +12,9 @@ import { image_inputs, message_pdf_refs, history_pdf_refs } from "../src/pdf/inp
 import { branch_prefix, history_items } from "../src/history";
 import { build_prompt, type ContextSnapshot } from "../src/prompt";
 import { note_path, source_path } from "../src/edit/document";
+import { parse_pdf_link, pdf_target, pdf_selected_text, pdf_target_subpath, resolve_pdf_file } from "../src/pdf/target";
+import { live_pdf_target, pdf_plus_active } from "../src/pdf/plus";
+import { locate_source, source_reference, validate_source_reference } from "../src/sources";
 
 const Data = "data:image/jpeg;base64," + readFileSync("examples/pdf/scanned-page.jpg").toString("base64");
 const Id = createHash("sha256").update(Data).digest("hex");
@@ -77,18 +80,84 @@ function reader_fixture(Scanned = false)
 {
 	const Bundle = buildSync({ entryPoints: ["src/pdf/reader.ts"], bundle: true, write: false, platform: "browser", format: "cjs", external: ["obsidian"] }).outputFiles[0].text;
 	const Export = { exports: {} as any };
-	runInNewContext(Bundle, { module: Export, exports: Export.exports, crypto: webcrypto, TextEncoder, Uint8Array, atob, setTimeout, clearTimeout, require: () => ({ loadPdfJs: () => { throw new Error("supply fixture loader"); } }) });
+	runInNewContext(Bundle, { module: Export, exports: Export.exports, crypto: webcrypto, TextEncoder, Uint8Array, atob, structuredClone, setTimeout, clearTimeout, require: () => ({ loadPdfJs: () => { throw new Error("supply fixture loader"); } }) });
 	const File: any = { path: "original.pdf", extension: "pdf", stat: { mtime: 1, size: 100 } };
 	let Loads = 0, Renders = 0; const RenderOptions: any[] = [];
 	const Images: any = { put: async (_Data: any, Origin: any) => ({ ...Ref, Width: Canvas.width, Height: Canvas.height, ...(Origin ?? {}) }) };
 	const Reader = new Export.exports.PdfReader({ vault: { readBinary: async () => new ArrayBuffer(100) } }, Images, async () => ({ getDocument: (Params: any) =>
 	{
 		assert.equal(Params.isEvalSupported, false); assert.equal(Params.cMapPacked, true); assert.equal(Params.cMapUrl, "/lib/pdfjs/cmaps/"); Loads++;
-		return { promise: Promise.resolve({ numPages: 3, destroy: async () => {}, getPage: async () => ({ getTextContent: async () => ({ items: Scanned ? [] : [{ str: "[X,Y]=2Y", hasEOL: true }] }), getViewport: ({ scale }: any) => ({ width: 612 * scale, height: 792 * scale }), render: (Options: any) => { assert.equal(Options.intent, "print"); Renders++; RenderOptions.push(Options); return { promise: Promise.resolve(), cancel: () => {} }; } }) }) };
+		return { promise: Promise.resolve({ numPages: 3, destroy: async () => {}, getPage: async () => ({ getTextContent: async () => ({ items: Scanned ? [] : [{ str: "[X,Y]=2Y", hasEOL: true }] }), getViewport: ({ scale }: any) => ({ width: 612 * scale, height: 792 * scale, convertToViewportRectangle: ([A,B,C,D]: number[]) => [A * scale, (792 - B) * scale, C * scale, (792 - D) * scale] }), render: (Options: any) => { assert.equal(Options.intent, "print"); Renders++; RenderOptions.push(Options); return { promise: Promise.resolve(), cancel: () => {} }; } }) }) };
 	} }));
 	const Canvas: any = { width: 0, height: 0, getContext: () => ({}), toDataURL: () => Data };
 	return { Reader, File, Owner: { createElement: () => Canvas }, Canvas, RenderOptions, counts: () => ({ Loads, Renders }), location: Export.exports.pdf_location };
 }
+
+test("PDF++ imports vault-local selection links and refuses ambiguous files or unbounded targets", () =>
+{
+	const Text = parse_pdf_link("[[课本/李代数.pdf#page=2&selection=0,0,0,5|定理]]");
+	assert.equal(Text.Path, "课本/李代数.pdf");
+	assert.equal(pdf_target_subpath(Text.Target), "#page=2&selection=0,0,0,5");
+	assert.deepEqual(parse_pdf_link("![公式](<Course/Formula%20Book.pdf#page=3&rect=12,18,100,200&width=300>)"), { Path: "Course/Formula Book.pdf", Target: pdf_target(3, "rect", "12,18,100,200") });
+	for(const Link of ["[[A.pdf#page=1]]", "https://a.test/a.pdf#page=1&rect=1,2,3,4", "[[../a.pdf#page=1&rect=1,2,3,4]]", "[[a.pdf#page=1&selection=0,0,0,0]]", "[[a.pdf#page=1&rect=1,4,3,2]]", "[[a.pdf#page=1&page=2&rect=1,2,3,4]]", "[[a.pdf#page=1&rect=1,2,3,4&selection=0,0,0,1]]"]) { assert.throws(() => parse_pdf_link(Link)); }
+	const Files = ["A/a.pdf", "B/a.pdf", "A/b.pdf"].map(path => ({ path, extension: "pdf" }));
+	const App: any = { vault: { getFiles: () => Files } };
+	assert.throws(() => resolve_pdf_file(App, "a.pdf"), /多个同名/);
+	assert.equal(resolve_pdf_file(App, "A/a.pdf"), Files[0]);
+	assert.equal(resolve_pdf_file(App, "b.pdf"), Files[2]);
+	assert.throws(() => resolve_pdf_file(App, "c.pdf"), /找不到/);
+});
+
+test("PDF++ live viewer lookup is optional and never infers offsets for an unsupported viewer", () =>
+{
+	const PageEl = {}, Root: any = { querySelector: () => PageEl };
+	const Absent: any = {}, Unknown: any = { plugins: { getPlugin: () => ({}) } };
+	const Supported: any = { plugins: { getPlugin: (Id: string) => Id === "pdf-plus" ? { lib: { getPDFViewerChildAssociatedWithNode: (NodeValue: unknown) =>
+	{
+		assert.equal(NodeValue, PageEl);
+		return { getTextSelectionRangeStr: () => "0,1,0,5" };
+	} } } : null } };
+	assert.equal(pdf_plus_active(Absent), false); assert.equal(live_pdf_target(Absent, Root, 1), null);
+	assert.equal(pdf_plus_active(Unknown), true); assert.equal(live_pdf_target(Unknown, Root, 1), null);
+	assert.deepEqual(live_pdf_target(Supported, Root, 2), pdf_target(2, "text", "0,1,0,5"));
+	const Multi = pdf_target(2, "text", "0,1,2,2") as Extract<ReturnType<typeof pdf_target>, { Kind: "text" }>;
+	assert.equal(pdf_selected_text(Multi, [{ str: "abc", hasEOL: true }, { str: "def" }, { str: "ghi" }]), "bc\ndef gh");
+});
+
+test("PDF++ text works without images, scans crop only the requested area and versioned sources downgrade safely", async () =>
+{
+	const TextFixture = reader_fixture(), ScanFixture = reader_fixture(true);
+	try
+	{
+		const TextTarget = pdf_target(1, "text", "0,0,0,5"), RectTarget = pdf_target(2, "rect", "100,180,300,320");
+		const Text = await TextFixture.Reader.capture_target(TextFixture.File, TextTarget, TextFixture.Owner);
+		const Rect = await ScanFixture.Reader.capture_target(ScanFixture.File, RectTarget, ScanFixture.Owner);
+		assert.equal(Text.SelectedText, "[X,Y]"); assert.equal(Text.Pdf, undefined); assert.equal(TextFixture.counts().Renders, 0);
+		assert.match(build_prompt("解释", Text), /\[X,Y\]/);
+		const Msg: any = { Id: "q", Role: "user", Text: "解释", Context: Text, Prompt: build_prompt("解释", Text) };
+		assert.equal(message_pdf_refs(Msg).length, 0);
+		assert.equal(JSON.stringify(branch_prefix([Msg, { Id: "next", Role: "user" } as any], "next")[0].Context?.PdfTarget), JSON.stringify(TextTarget));
+		assert.equal(Rect.Pdf.Pages[0].Number, 2); assert.equal(Rect.Pdf.Pages[0].Kind, "region"); assert.equal(Rect.Pdf.Pages[0].TextLayer, false);
+		assert.equal(Rect.Pdf.Pages[0].Region.X, 100 / 612); assert.equal(Rect.Pdf.Pages[0].Region.Y, (792 - 320) / 792);
+		assert.equal(message_pdf_refs({ ...Msg, Context: Rect }).length, 1);
+		const [TextRef] = source_reference(Text), [RectRef] = source_reference(Rect);
+		assert.equal(validate_source_reference(TextRef).Kind, "pdf");
+		let Enabled = true, Changed = false;
+		const App: any = { plugins: { getPlugin: () => Enabled ? {} : null }, vault: { getFileByPath: () => TextFixture.File, readBinary: async () => new ArrayBuffer(Changed ? 101 : 100) } };
+		assert.equal((await locate_source(App, TextRef)).Subpath, "#page=1&selection=0,0,0,5");
+		assert.equal((await locate_source(App, RectRef)).Subpath, "#page=2&rect=100,180,300,320");
+		Enabled = false;
+		assert.equal((await locate_source(App, RectRef)).Subpath, undefined);
+		assert.equal((await locate_source(App, RectRef)).Page, 2);
+		assert.equal((await locate_source(App, TextRef)).Subpath, "#page=1&selection=0,0,0,5");
+		Changed = true;
+		assert.equal((await locate_source(App, TextRef)).Status, "changed");
+		assert.equal((await locate_source(App, RectRef)).Page, undefined);
+		await assert.rejects(TextFixture.Reader.capture_target(TextFixture.File, pdf_target(1, "text", "0,0,0,50"), TextFixture.Owner), /偏移/);
+		await assert.rejects(ScanFixture.Reader.capture_target(ScanFixture.File, pdf_target(1, "rect", "100,180,650,320"), ScanFixture.Owner), /超出页面/);
+	}
+	finally { TextFixture.Reader.close(); ScanFixture.Reader.close(); }
+});
 
 test("bounded PDF reader preserves text-layer and scan metadata, rejects stale files, invalid pages and oversized documents", async () =>
 {

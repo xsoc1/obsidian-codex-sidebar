@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-05: User requested the optional PDF++ integration and authorized Windows “数学” installation and GitHub publication. Candidate 2.0.0-beta.9 detects enabled PDF++ at runtime, captures single-page selection as text or imports an explicit text/rectangle link, and offers version-checked navigation. Without PDF++, the original capture stays in place; recorded rectangle links open at page level. No bridge protocol or PDF write change. See [PDF usage](docs/pdf-support.md) and the [upstream evidence](docs/pdf-plus-integration.md).
+
 - 2026-11-05: User requested DeepSeek and Google AI Studio per-model reasoning controls and authorized Windows “数学” installation and a GitHub prerelease. **2.0.0-beta.8** is installed and published. It uses authenticated DeepSeek catalog metadata and exact documented Gemini chat IDs; explicit options use the provider wire format and default remains unchanged. The bridge and local Codex paths stay unchanged. See [verification](docs/backends.md#200-beta8-验证).
 
 - 2026-11-04: User requested implementing Go API reasoning controls and authorized Windows “数学” installation and a GitHub prerelease. **2.0.0-beta.7** is installed and published. Read declared efforts for Go native Chat Completions and Responses models; persist selection in existing backend state and the original run snapshot. Never send unsupported or unverified explicit effort. Provider default omits the field and retains the existing route. The bridge and Codex controls are unchanged. See [beta.7 verification](docs/backends.md#200-beta7-验证).

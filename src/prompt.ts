@@ -94,6 +94,7 @@ export interface ContextSnapshot
 	Version?: string;
 	FocusLine?: number;
 	Pdf?: import("./pdf/types").PdfSnapshot;
+	PdfTarget?: import("./pdf/target").PdfTarget;
 	Selection?: { From: number; To: number };
 	Explanation?: import("./markdown-blocks").ContextWindow;
 }
@@ -128,7 +129,7 @@ export function build_prompt(Question: string, Context: ContextSnapshot | null, 
 	let Prompt = Question;
 	if(Context)
 	{
-		const Location = Context.Pdf ? `PDF 第 ${Context.Pdf.Pages.map(Page => Page.Number).join(", ")} 页 / 共 ${Context.Pdf.PageCount} 页` : Context.LineStart === null ? "源行未知" : `第 ${Context.LineStart + 1}-${(Context.LineEnd ?? Context.LineStart) + 1} 行`;
+		const Location = Context.Pdf ? `PDF 第 ${Context.Pdf.Pages.map(Page => Page.Number).join(", ")} 页 / 共 ${Context.Pdf.PageCount} 页` : Context.PdfTarget ? `PDF 第 ${Context.PdfTarget.Page} 页` : Context.LineStart === null ? "源行未知" : `第 ${Context.LineStart + 1}-${(Context.LineEnd ?? Context.LineStart) + 1} 行`;
 		Prompt = [
 			Question,
 			"",
@@ -140,6 +141,7 @@ export function build_prompt(Question: string, Context: ContextSnapshot | null, 
 			Context.Truncated ? "材料因长度限制已截断." : "",
 			Context.SelectedText ? `用户选中的渲染文本或精确源文本:\n${Context.SelectedText}` : "",
 			Context.Pdf ? "PDF 是只读参考来源. 文字层不是原始 LaTeX, 顺序与数学符号可能丢失; 整页图与局部图按下列元数据区分, 局部矩形不等于用户精确文本选区. 无文字层时依据页图识读, 不清楚的符号明确说明, 不编造全文或补充为原文. 引用实际 PDF 页码, 不把它冒充书内页码. 原图引用及裁切缩放元数据: " + JSON.stringify(Context.Pdf.Pages.map(Page => ({ page: Page.Number, image: Page.Image.Id, kind: Page.Kind ?? "page", ...(Page.Region ? { region: Page.Region } : {}) }))) : "",
+			Context.PdfTarget?.Kind === "text" ? "只读 PDF 文字选区, 本轮不附页图. 文字层不是原始 LaTeX, 不补造缺失的符号, 不冒称已读整页; 引用实际 PDF 页码." : "",
 			"<obsidian_source>",
 			Context.Text,
 			"</obsidian_source>",

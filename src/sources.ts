@@ -3,6 +3,8 @@ import type { ContextSnapshot, AnswerQuote } from "./prompt";
 import { version_of, block_ids } from "./edit/document";
 import { text_identity, markdown_blocks } from "./markdown-blocks";
 import { pdf_hash, validate_pdf, validate_image_origin } from "./pdf/types";
+import { parse_pdf_anchor, pdf_anchor, pdf_target_subpath, validated_pdf_target, type PdfTarget } from "./pdf/target";
+import { pdf_plus_active } from "./pdf/plus";
 
 export interface SourceReference
 {
@@ -68,8 +70,16 @@ export function source_reference(Context: ContextSnapshot, Host: SourceReference
 	if(Context.Pdf) { try { validate_pdf(Context.Pdf); } catch { return []; } }
 	const Anchor = (typeof Context.SelectedText === "string" && Context.SelectedText && Context.Mapping === "源文本" ? Context.SelectedText : Context.Text).slice(0, 512), BlockId = Context.Text.match(/(?:^|\n)\s*\^([a-zA-Z0-9-]+)\s*$/)?.[1];
 	const Base = { Path: Context.Path, PathExact: true, Version: Context.Version, CapturedAt: typeof Context.CapturedAt === "string" ? Context.CapturedAt : "", Heading: Context.Heading, Mapping: Context.Mapping, LineStart: Context.LineStart, LineEnd: Context.LineEnd, Host, Purpose: Context.Kind === "选区" ? "selection" as const : "capture" as const, Truncated: !!Context.Truncated, ...(Context.Selection ? { Range: { ...Context.Selection } } : {}), ...(Anchor ? { Anchor } : {}), ...(BlockId ? { BlockId } : {}) };
-	const Values: Omit<SourceReference, "Id">[] = Context.Pdf ? Context.Pdf.Pages.map(Page => ({ ...Base, Kind: "pdf", VersionKind: "pdf-bytes", Page: Page.Number, ImageKind: Page.Kind ?? "page", ...(Page.Region ? { Region: structuredClone(Page.Region) } : {}) })) : [{ ...Base, Kind: "markdown", VersionKind: "file-text" }];
-	if(Context.Explanation && !Context.Pdf)
+	// PDF anchors fit the existing source schema, so older clients can still open the page.
+	let Target: PdfTarget | undefined;
+	if(Context.PdfTarget) { try { Target = validated_pdf_target(Context.PdfTarget); } catch { return []; } }
+	const PdfAnchor = Target ? pdf_anchor(Target) : undefined;
+	const Values: Omit<SourceReference, "Id">[] = Context.Pdf ? Context.Pdf.Pages.map(Page => ({
+		...Base, Kind: "pdf", VersionKind: "pdf-bytes", Page: Page.Number, ImageKind: Page.Kind ?? "page",
+		...(Page.Region ? { Region: structuredClone(Page.Region) } : {}), ...(Target?.Kind === "rect" && Target.Page === Page.Number && Page.Kind === "region" ? { Anchor: PdfAnchor } : {})
+	})) : Target?.Kind === "text" ? [{ ...Base, Kind: "pdf", VersionKind: "pdf-bytes", Page: Target.Page, Anchor: PdfAnchor }]
+		: [{ ...Base, Kind: "markdown", VersionKind: "file-text" }];
+	if(Context.Explanation && !Context.Pdf && !Target)
 	{
 		const E = Context.Explanation;
 		if(typeof E.Text === "string" && Number.isSafeInteger(E.From) && Number.isSafeInteger(E.To) && E.From >= 0 && E.To >= E.From) { Values.push({ ...Base, Kind: "markdown", VersionKind: "file-text", Purpose: "explanation", Range: { From: E.From, To: E.To }, LineStart: E.LineStart, LineEnd: E.LineEnd, Truncated: E.Truncated, Anchor: E.Text.slice(0, 512) }); }
@@ -113,7 +123,7 @@ export function rename_sources(Refs: readonly SourceReference[], Old: string, Ne
 	return Refs.map(Ref => { const Path = Ref.CurrentPath ?? Ref.Path; return Path === Old || Path.startsWith(Old + "/") ? { ...structuredClone(Ref), CurrentPath: Next + Path.slice(Old.length) } : structuredClone(Ref); });
 }
 
-export interface SourceNavigation { Status: "exact" | "changed" | "unknown"; Path: string; Line?: number; Page?: number; Message: string; }
+export interface SourceNavigation { Status: "exact" | "changed" | "unknown"; Path: string; Line?: number; Page?: number; Subpath?: string; Message: string; }
 
 export async function locate_source(AppValue: App, Ref: SourceReference): Promise<SourceNavigation>
 {
@@ -125,7 +135,13 @@ export async function locate_source(AppValue: App, Ref: SourceReference): Promis
 		if(Ref.Version && Ref.VersionKind === "pdf-bytes" && File.stat.size <= 80 * 1024 * 1024)
 		{
 			const Same = await pdf_hash(await AppValue.vault.readBinary(File)) === Ref.Version;
-			return Same ? { Status: "exact", Path, Page: Ref.Page, Message: "PDF 版本一致, 打开原实际页码" } : { Status: "changed", Path, Message: "PDF 版本已变化, 仅打开准确文件; 未把旧页码当作当前同一内容" };
+			if(!Same) { return { Status: "changed", Path, Message: "PDF 版本已变化, 仅打开准确文件; 未把旧页码当作当前同一内容" }; }
+			const Anchor = parse_pdf_anchor(Ref.Anchor);
+			if(Anchor && Anchor.Page === Ref.Page && (Anchor.Kind === "text" || pdf_plus_active(AppValue)))
+			{
+				return { Status: "exact", Path, Page: Ref.Page, Subpath: pdf_target_subpath(Anchor), Message: Anchor.Kind === "text" ? "PDF 版本一致, 打开原文字选区" : "PDF 版本一致, 打开原矩形区域" };
+			}
+			return { Status: "exact", Path, Page: Ref.Page, Message: "PDF 版本一致, 打开原实际页码" };
 		}
 		return { Status: "unknown", Path, Page: Ref.Page, Message: "打开原 PDF 页码; 当时快照保留, 当前版本未知" };
 	}
@@ -155,7 +171,7 @@ export async function locate_source(AppValue: App, Ref: SourceReference): Promis
 export async function open_source(AppValue: App, Ref: SourceReference): Promise<SourceNavigation>
 {
 	const Target = await locate_source(AppValue, Ref), File = AppValue.vault.getFileByPath(Target.Path)!;
-	if(Target.Page) { await AppValue.workspace.openLinkText(`${Target.Path}#page=${Target.Page}`, "", true); }
+	if(Target.Page) { await AppValue.workspace.openLinkText(Target.Path + (Target.Subpath ?? `#page=${Target.Page}`), "", true); }
 	else
 	{
 		const Existing = AppValue.workspace.getLeavesOfType("markdown").find(Leaf => (Leaf.view as any).file?.path === Target.Path);

@@ -27,7 +27,7 @@ export class SelectionPreview
 		{
 			this.Element.open = true; this.Source.open = false; this.Preview.setText(Snapshot.SelectedText); this.Raw.setText(Snapshot.Text); this.Identity = Identity;
 		}
-		this.Source.hidden = Snapshot.Mapping === "源文本" && !!Snapshot.Selection;
+		this.Source.hidden = !Snapshot.Text || Snapshot.Mapping === "源文本" && !!Snapshot.Selection;
 		this.Caption.setText(`${Snapshot.Path} · ${Snapshot.Mapping} · ${Attached ? "将附带到提问" : "未附带到提问"}${Snapshot.Truncated ? " · 已截断" : ""} · ${Snapshot.CapturedAt}`);
 	}
 }

@@ -5,6 +5,8 @@ import { PdfReader, is_pdf_view, pdf_location } from "./pdf/reader";
 import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
 import { context_window, markdown_blocks, type ContextWindow } from "./markdown-blocks";
 import type { PdfCaptureRequest } from "./pdf/types";
+import { live_pdf_target } from "./pdf/plus";
+import { PdfTextRangeError, type PdfTarget } from "./pdf/target";
 
 export class ContextCapture
 {
@@ -59,6 +61,23 @@ export class ContextCapture
 		{
 			const Location = pdf_location(View.containerEl, Kind);
 			if(!Location) { return null; }
+			if(Kind === "选区" && Location.Pages.length === 1)
+			{
+				const Target = live_pdf_target(this.App, View.containerEl, Location.Pages[0]);
+				if(Target)
+				{
+					const File = View.file!, Owner = View.containerEl.ownerDocument, { mtime: Stamp, size: Size } = File.stat;
+					return this.pdf_capture(async () =>
+					{
+						try { return await this.Pdf.capture_target(File, Target, Owner, Signal, Location.SelectedText); }
+						catch(ErrorValue)
+						{
+							if(!(ErrorValue instanceof PdfTextRangeError) || File.path !== Path || File.stat.mtime !== Stamp || File.stat.size !== Size) { throw ErrorValue; }
+							return this.Pdf.capture(File, Location.Pages, Owner, Kind, Location.SelectedText, Location.Truncated, Signal);
+						}
+					}, Signal, true);
+				}
+			}
 			return this.capture_pdf(View.file!, Location.Pages, View.containerEl.ownerDocument, Kind, Location.SelectedText, Location.Truncated, Signal);
 		}
 		if(!(View instanceof MarkdownView)) { return null; }
@@ -193,20 +212,30 @@ export class ContextCapture
 
 	async capture_pdf(File: TFile, Pages: (number | PdfCaptureRequest)[], OwnerDocument: Document, Kind: "选区" | "当前位置" = "当前位置", SelectedText = "", Truncated = false, Signal?: AbortSignal): Promise<ContextSnapshot | null>
 	{
+		return this.pdf_capture(() => this.Pdf.capture(File, Pages, OwnerDocument, Kind, SelectedText, Truncated, Signal), Signal, true);
+	}
+
+	async capture_pdf_target(File: TFile, Target: PdfTarget, OwnerDocument: Document, Signal?: AbortSignal, SelectedText?: string): Promise<ContextSnapshot | null>
+	{
+		return this.pdf_capture(() => this.Pdf.capture_target(File, Target, OwnerDocument, Signal, SelectedText), Signal, false);
+	}
+
+	private async pdf_capture(Capture: () => Promise<ContextSnapshot>, Signal: AbortSignal | undefined, ClearOnFailure: boolean): Promise<ContextSnapshot | null>
+	{
 		if(Signal?.aborted) { return null; }
 		if(this.Suspended) { throw new Error("PDF 缓存正在清除, 请稍后重新捕获"); }
 		const Generation = ++this.Generation;
 		this.PdfPending++;
 		try
 		{
-			const Snapshot = await this.Pdf.capture(File, Pages, OwnerDocument, Kind, SelectedText, Truncated, Signal);
+			const Snapshot = await Capture();
 			if(Signal?.aborted || Generation !== this.Generation) { return null; }
 			this.Snapshot = Snapshot; return Snapshot;
 		}
 		catch(ErrorValue)
 		{
 			if(Generation !== this.Generation) { return null; }
-			this.Snapshot = null; throw ErrorValue;
+			if(ClearOnFailure) { this.Snapshot = null; } throw ErrorValue;
 		}
 		finally { this.PdfPending--; }
 	}

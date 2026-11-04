@@ -56,9 +56,9 @@ export function parse_edit(Text: string): EditOutput
 
 export async function bind_edit(Host: WriteHost, Snapshot: ContextSnapshot, Scope: EditScope, Role: EditRole = "auto"): Promise<{ Target: WriteTarget; Source: ContextSnapshot; Role: InputRole; Focus: { From: number; To: number } }>
 {
+	if(Snapshot.Pdf || Snapshot.PdfTarget || ["source-excerpt", "teacher-problem"].includes(Role)) { throw new Error("PDF、源书摘录与教师原题只读, 请明确选择可编辑的个人笔记"); }
 	note_path(Snapshot.Path);
 	if(!["ai", "captured", "note"].includes(Scope) || !["auto", "note", "problem", "complete-answer", "outline", "lecture", "source-excerpt", "teacher-problem"].includes(Role)) { throw new Error("未知修改范围或输入类型"); }
-	if(Snapshot.Pdf || ["source-excerpt", "teacher-problem"].includes(Role)) { throw new Error("PDF、源书摘录与教师原题只读, 请明确选择可编辑的个人笔记"); }
 	const Before = await Host.read_current(Snapshot.Path);
 	if(Before === null || Before.length > 500000) { throw new Error("目标不存在或超过 500000 字符, 请使用较小笔记"); }
 	const Version = await version_of(Before);
