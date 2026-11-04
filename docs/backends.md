@@ -2,7 +2,7 @@
 
 ## API 直连
 
-打开 Codex Sidebar 设置, 在 **API 直连** 选择服务商, 填写控制台中的模型 ID 和 **直连 API Key**, 点击 **启用 API 直连**. 用一个短问题确认模型权限. Windows、iPad 和其他可以安装插件的端使用相同入口, 设备需要能通过 HTTPS 访问所选服务商.
+打开 Codex Sidebar 设置, 在 **API 直连** 选择服务商, 填入 **直连 API Key**. beta.5 候选中, 点击 **加载模型**, 在 **上游模型** 选一个 ID, 再点 **启用 API 直连**. beta.4 或服务商没有提供列表时, 手动填写 **API 模型 ID**. 最后发一个短问题确认调用权限. Windows 和 iPad 使用同一入口, 设备需要能通过 HTTPS 访问所选服务商.
 
 | 预设 | 请求方式 |
 | --- | --- |
@@ -13,6 +13,8 @@
 | 自定义 OpenAI 兼容 | 填可信的 HTTPS 基础地址, 如服务商给出的 `https://example.com/v1` |
 
 OpenCode Go 的工作区、套餐、模型与客户端用量限制仍适用. 自定义服务需支持标准 Chat Completions 的文本请求和响应结构. 仅在模型明确支持图像时启用 **模型支持图片**. PDF 文本选区可以作为普通文本发送.
+
+**加载模型** 只发目录 GET, 不发问题、笔记或会话. [OpenCode Go](https://opencode.ai/v2/docs/console/go/#models) 使用独立公开目录, 不发送 Key, 因此可在填 Key 前加载; 目录不检查工作区权限. [OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list)、[DeepSeek](https://api-docs.deepseek.com/zh-cn/api/list-models/) 和 [Google AI Studio](https://aistudio.google.com/docs/openai#list-models) 用各自的模型列表接口. 自定义服务用所填基础地址下的 `GET /models` 和 `data[].id` 返回格式. 列出模型不代表它支持聊天或图片, 也不代表当前 Key 有权调用; 加载不会更改已填 ID 或激活连接.
 
 Key 保留在本次插件运行的内存中. 切换后端或重载后需重新输入. API 直连需要在客户端使用长期密钥, 适用于自己信任的设备和服务. 请求附带选区、来源快照和有限的对话历史, 服务商按其数据条款处理. 官方对密钥的安全建议见 [OpenAI API 认证](https://developers.openai.com/api/reference/overview#authentication).
 
@@ -32,6 +34,12 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 在任意客户端填写已有桥地址和配对密钥, 点击 **保存并连接**. 桥继续管理独立 Codex Agent, 见 [iPad 设置](ipad-setup.md). 新的直连和 Windows 本机 Agent 不要求升级桥. API 配置或本机 Agent 的会话按当前设备、服务商与端点或 Agent 入口隔离. 切回原连接会恢复对应历史. 同一端点更换 API Key 仍打开该端点的历史, 换账号时可先新建会话.
 
 升级保留已有客户端和桥状态文件. 回退插件程序后, 直连与非 Codex Agent 的独立记录保留在设备状态目录中, 再升回候选即可恢复. 普通 Codex 的桌面与远程记录沿用原存储和回退流程.
+
+## 2.0.0-beta.5 候选验证
+
+- Node 24 上运行 `npm run build` 和 `npm test`, 310 项通过. 目录测试覆盖五种预设、认证和错误映射. 移动构建在受控请求下走通目录读取、选模型、用选中 ID 发送和确认写入; 切换服务商或 Key 后忽略旧响应, 无目录时仍能手填.
+- Windows Obsidian 用一次性探针实际请求 OpenCode Go 的公开目录, 读到 28 个模型, 并用原生控件选择 `glm-5.3-flash`. 设置行在 360px 和 640px 容器下均无横向溢出. 该探针没有调用推理、替换日常安装或改动远程桥.
+- 其他服务商的真实 Key 目录与 iPad 真机未实测. 模型目录不写入状态; 已有直连配置和手填模型 ID 沿用 beta.4 的存储格式.
 
 ## 2.0.0-beta.4 验证
 

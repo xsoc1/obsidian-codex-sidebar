@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-04: User requested upstream model discovery for API direct connections. **2.0.0-beta.5** candidate adds an explicit directory fetch and picker; keep the manual ID for services without a catalog. Discovery must never start inference, submit note content, or override the configured ID. OpenCode Go uses its public catalog without sending a Key. Changing provider, custom base or authenticated Key invalidates outstanding results. See [setup and verification](docs/backends.md#200-beta5-候选验证). No daily install or release authorized for beta.5.
+
 - 2026-11-04: **2.0.0-beta.4** installed in Windows vault “数学” and published as a GitHub prerelease at `ca4304b`. BRAT users select the tag explicitly. The stable channel remains 1.1.0. [Backend setup and validation](docs/backends.md) records endpoint formats, prerequisites, verification and rollback.
 
 - 2026-11-04: The beta.3 candidate introduced one-click Windows Codex startup and temporary OpenAI API Key authentication. Beta.4 includes these changes. The Windows app cache fallback is needed when Obsidian's PATH lacks Codex. See [iPad setup](docs/ipad-setup.md#用-openai-api-key-启动) for optional host authentication and rollback.

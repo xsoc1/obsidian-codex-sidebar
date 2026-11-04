@@ -12,12 +12,29 @@ export type BackendProfile =
 	| { Kind: "api"; Provider: ApiProvider; Base: string; Model: string; Vision: boolean }
 	| { Kind: "agent"; Agent: LocalAgent; Path: string; Model: string };
 
+export function valid_backend_model_id(Value: unknown): Value is string
+{
+	return typeof Value === "string" && /^[a-z0-9][a-z0-9._/:+@-]{0,159}$/i.test(Value);
+}
+
+export function api_base(Provider: ApiProvider, CustomBase: string): string
+{
+	let Url: URL;
+	try { Url = new URL(Provider === "compatible" ? CustomBase.trim() : ApiProviders[Provider].Base); }
+	catch { throw new Error("请填写有效的 HTTPS API 基础地址"); }
+	if(Url.protocol !== "https:" || Url.username || Url.password || Url.search || Url.hash || /\/(responses|chat\/completions)\/?$/i.test(Url.pathname))
+	{
+		throw new Error("请填写 HTTPS 基础地址, 不带密钥、查询参数或请求末尾路径");
+	}
+	return Url.href.replace(/\/+$/, "");
+}
+
 export function backend_profile(Value: unknown): BackendProfile
 {
 	const Input = Value as Partial<{ Kind: "api" | "agent"; Provider: ApiProvider; Agent: LocalAgent; Base: string; Path: string; Model: string; Vision: boolean }>;
 	if(!Input || typeof Input.Model !== "string") { throw new Error("请填写模型 ID"); }
 	const Model = Input.Model.trim();
-	if(Model && !/^[a-z0-9][a-z0-9._/:+@-]{0,159}$/i.test(Model)) { throw new Error("模型 ID 格式无效"); }
+	if(Model && !valid_backend_model_id(Model)) { throw new Error("模型 ID 格式无效"); }
 	if(Input.Kind === "agent" && Input.Agent && Object.hasOwn(AgentNames, Input.Agent))
 	{
 		const Path = typeof Input.Path === "string" ? Input.Path.trim() : "";
@@ -26,14 +43,7 @@ export function backend_profile(Value: unknown): BackendProfile
 		return { Kind: "agent", Agent: Input.Agent, Path, Model };
 	}
 	if(Input.Kind !== "api" || !Input.Provider || !Object.hasOwn(ApiProviders, Input.Provider) || !Model) { throw new Error("请选择 API 服务商并填写模型 ID"); }
-	const Base = Input.Provider === "compatible" ? typeof Input.Base === "string" ? Input.Base.trim() : "" : ApiProviders[Input.Provider].Base;
-	let Url: URL;
-	try { Url = new URL(Base ?? ""); } catch { throw new Error("请填写有效的 HTTPS API 基础地址"); }
-	if(Url.protocol !== "https:" || Url.username || Url.password || Url.search || Url.hash || /\/(responses|chat\/completions)\/?$/i.test(Url.pathname))
-	{
-		throw new Error("请填写 HTTPS 基础地址, 不带密钥、查询参数或请求末尾路径");
-	}
-	return { Kind: "api", Provider: Input.Provider, Base: Url.href.replace(/\/+$/, ""), Model, Vision: Input.Vision === true };
+	return { Kind: "api", Provider: Input.Provider, Base: api_base(Input.Provider, typeof Input.Base === "string" ? Input.Base : ""), Model, Vision: Input.Vision === true };
 }
 
 export function backend_name(Profile: BackendProfile): string

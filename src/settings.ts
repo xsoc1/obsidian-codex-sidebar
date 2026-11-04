@@ -4,10 +4,13 @@ import { DefaultInstructions } from "./prompt";
 import { EditScopeOptions, edit_scope } from "./edit/options";
 import { export_edits } from "./edit/panel";
 import { error_text } from "./ui-helpers";
-import { AgentNames, ApiProviders, backend_name, type ApiProvider, type LocalAgent } from "./backend-profile";
+import { AgentNames, backend_name, type LocalAgent } from "./backend-profile";
+import { api_settings } from "./api-settings";
 
 export class CodexSettings extends PluginSettingTab
 {
+	private CloseApiSettings?: () => void;
+
 	constructor(AppValue: App, private Owner: SidebarOwner & Plugin)
 	{
 		super(AppValue, Owner);
@@ -24,28 +27,7 @@ export class CodexSettings extends PluginSettingTab
 		};
 		new Setting(this.containerEl).setName("当前连接").setDesc(Current ? backend_name(Current) + " · " + (Current.Model || "Agent 当前模型")
 			: this.Owner.Remote.Enabled ? "电脑上的独立远程桥" : "本机 Codex");
-		let Provider: ApiProvider = Current?.Kind === "api" ? Current.Provider : "openai";
-		let Model = Current?.Kind === "api" ? Current.Model : "", Base = Current?.Kind === "api" && Current.Provider === "compatible" ? Current.Base : "";
-		let Vision = Current?.Kind === "api" && Current.Vision, ApiInput: HTMLInputElement;
-		new Setting(this.containerEl).setName("API 直连").setDesc("Windows、iPad 等端可单独连接服务商. 每次插件重载后重新输入 Key, 发送时所附笔记内容交给所选服务商.")
-			.addDropdown(Dropdown =>
-			{
-				for(const [Id, Entry] of Object.entries(ApiProviders)) { Dropdown.addOption(Id, Entry.Label); }
-				Dropdown.setValue(Provider).onChange(Value => { Provider = Value as ApiProvider; ApiInput.value = ""; });
-			});
-		new Setting(this.containerEl).setName("API 模型 ID").setDesc("填写厂商控制台给出的模型标识. 实际权限由首轮回复确认.")
-			.addText(Text => Text.setValue(Model).onChange(Value => { Model = Value; }));
-		new Setting(this.containerEl).setName("自定义 HTTPS 基础地址").setDesc("仅自定义 OpenAI 兼容模式使用, 如 https://example.com/v1.")
-			.addText(Text => Text.setValue(Base).onChange(Value => { Base = Value; }));
-		new Setting(this.containerEl).setName("模型支持图片").setDesc("确认该模型支持图像后启用, 才可发送 PDF 页图.")
-			.addToggle(Toggle => Toggle.setValue(Vision).onChange(Value => { Vision = Value; }));
-		new Setting(this.containerEl).setName("直连 API Key").addText(Text => { ApiInput = Text.inputEl; ApiInput.type = "password"; ApiInput.autocomplete = "off"; ApiInput.spellcheck = false; })
-			.addButton(Button => Button.setButtonText("启用 API 直连").onClick(async () =>
-			{
-				const Key = ApiInput.value; ApiInput.value = ""; Button.setDisabled(true);
-				try { await Activate({ Kind: "api", Provider, Model, Base, Vision }, Key); }
-				finally { Button.setDisabled(false); }
-			}));
+		this.CloseApiSettings = api_settings(this.containerEl, Current, Activate);
 		if(!Platform.isWin || Platform.isMobileApp) { return; }
 		let Agent: LocalAgent = Current?.Kind === "agent" ? Current.Agent : "claude";
 		let Path = Current?.Kind === "agent" ? Current.Path : "", AgentModel = Current?.Kind === "agent" ? Current.Model : "";
@@ -70,8 +52,15 @@ export class CodexSettings extends PluginSettingTab
 			}));
 	}
 
+	hide(): void
+	{
+		this.CloseApiSettings?.();
+		this.CloseApiSettings = undefined;
+	}
+
 	display(): void
 	{
+		this.hide();
 		this.containerEl.empty();
 		this.containerEl.createEl("h2", { text: "Codex Sidebar" });
 		this.backend_settings();

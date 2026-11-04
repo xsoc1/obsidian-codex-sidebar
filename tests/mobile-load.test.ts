@@ -65,12 +65,20 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	class Setting
 	{
 		Name = ""; Desc = ""; Controls: any[] = [];
+		nameEl = { id: "" }; descEl = { setAttribute() {} };
 		constructor(_Root: any) { Settings.push(this); }
+		setClass(_Value: string) { return this; }
 		setName(Value: string) { this.Name = Value; return this; }
 		setDesc(Value: string) { this.Desc = Value; return this; }
 		control(Type: string, Build: (Value: any) => void)
 		{
-			const Value: any = { Type, inputEl: { style: {}, setAttribute() {}, addClass() {} }, Options: {}, setValue(Value: unknown) { this.Value = Value; return this; }, setDisabled(Value: boolean) { this.Disabled = Value; return this; }, setPlaceholder() { return this; }, setButtonText(Text: string) { this.Text = Text; return this; }, setCta() { return this; }, addOption(Key: string, Label: string) { this.Options[Key] = Label; return this; }, onChange(Handler: any) { this.Change = Handler; return this; }, onClick(Handler: any) { this.Click = Handler; return this; } };
+			const Value: any = {
+				Type, inputEl: { style: {}, setAttribute() {}, addClass() {}, addEventListener(_Name: string, Handler: any) { this.Input = Handler; } } as any,
+				selectEl: { setAttribute() {}, replaceChildren: () => { Value.Options = {}; } },
+				Options: {}, setValue(Value: unknown) { this.Value = Value; return this; }, setDisabled(Value: boolean) { this.Disabled = Value; return this; },
+				setPlaceholder() { return this; }, setButtonText(Text: string) { this.Text = Text; return this; }, setCta() { return this; },
+				addOption(Key: string, Label: string) { this.Options[Key] = Label; return this; }, onChange(Handler: any) { this.Change = Handler; return this; }, onClick(Handler: any) { this.Click = Handler; return this; }
+			};
 			this.Controls.push(Value); Build(Value); return this;
 		}
 		addToggle(Build: (Value: any) => void) { return this.control("toggle", Build); }
@@ -342,9 +350,16 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 	let F: Awaited<ReturnType<typeof mobile_fixture>>;
 	const Http = async (Params: any) =>
 	{
-		assert.equal(Params.url, "https://api.deepseek.com/chat/completions");
 		assert.equal(Params.headers.Authorization, "Bearer " + Key);
+		if(Params.method === "GET")
+		{
+			assert.equal(Params.url, "https://api.deepseek.com/models");
+			assert.equal(Params.body, undefined);
+			return { status: 200, json: { data: [{ id: "deepseek-v4-pro" }] } };
+		}
+		assert.equal(Params.url, "https://api.deepseek.com/chat/completions");
 		const Body = JSON.parse(Params.body); Requests.push(Body);
+		assert.equal(Body.model, "deepseek-v4-pro");
 		assert.ok(Body.messages.at(-1).content.includes(Old)); assert.ok(!Params.body.includes("unrelated note text"));
 		assert.ok(!Params.body.includes(Key)); assert.equal(Body.tools, undefined);
 		const State = [...F.Files.entries()].find(([Path]) => /backend-.*-state-v2\.json$/.test(Path))?.[1];
@@ -363,9 +378,14 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 	{
 		F.Tabs[0].display();
 		F.Settings.find(S => S.Name === "API 直连").Controls[0].Change("deepseek");
-		F.Settings.find(S => S.Name === "API 模型 ID").Controls[0].Change("deepseek-v4-pro");
-		const [Input, Button] = F.Settings.find(S => S.Name === "直连 API Key").Controls;
+		const [Input] = F.Settings.find(S => S.Name === "直连 API Key").Controls;
 		Input.inputEl.value = Key;
+		const [Picker, Load] = F.Settings.find(S => S.Name === "上游模型").Controls;
+		await Load.Click(); assert.equal(Picker.Options["deepseek-v4-pro"], "deepseek-v4-pro");
+		assert.equal(Picker.Value, "");
+		Picker.Change("deepseek-v4-pro");
+		assert.equal(F.Settings.find(S => S.Name === "API 模型 ID").Controls[0].Value, "deepseek-v4-pro");
+		const Button = F.Settings.flatMap(S => S.Controls).find(Control => Control.Text === "启用 API 直连");
 		await Button.Click();
 		assert.equal(Input.inputEl.value, ""); assert.equal(P.Remote.Enabled, false); assert.equal(P.State.Settings.Completion, false);
 		Id = P.Session.Id; assert.notEqual(Id, Remote); assert.equal(Requests.length, 0);
@@ -390,6 +410,55 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 		await assert.rejects(Restart.Instance.ensure_connection(), /API Key/); assert.equal(Requests.length, 1);
 	}
 	finally { Restart.Instance.onunload(); }
+});
+
+test("model picker drops late catalogs on provider or key changes and still accepts a manual ID if discovery fails", async () =>
+{
+	let CompleteGo!: (Result: any) => void, CompleteCustom!: (Result: any) => void;
+	const F = await mobile_fixture(async Params =>
+	{
+		assert.equal(Params.method, "GET");
+		if(Params.url === "https://opencode.ai/inference/go/v1/models")
+		{
+			assert.equal(Params.headers.Authorization, undefined);
+			return new Promise(Resolve => { CompleteGo = Resolve; });
+		}
+		assert.equal(Params.url, "https://proxy.example/v1/models");
+		return new Promise(Resolve => { CompleteCustom = Resolve; });
+	});
+	const Row = (Name: string) => F.Settings.find(S => S.Name === Name);
+	try
+	{
+		F.Tabs[0].display();
+		const [Provider] = Row("API 直连").Controls, [Key] = Row("直连 API Key").Controls;
+		const Catalog = Row("上游模型"), [Picker, Load] = Catalog.Controls;
+		Provider.Change("opencode");
+		const Go = Load.Click();
+		assert.equal(Load.Disabled, true);
+		Provider.Change("compatible");
+		assert.equal(Load.Disabled, false);
+		Row("自定义 HTTPS 基础地址").Controls[0].Change("https://proxy.example/v1");
+		Key.inputEl.value = "fixture-catalog-key"; Key.inputEl.Input();
+		const Custom = Load.Click();
+		CompleteGo({ status: 200, json: { data: [{ id: "wrong-provider" }] } });
+		await Go;
+		assert.equal(Picker.Options["wrong-provider"], undefined);
+		assert.equal(Load.Disabled, true);
+		CompleteCustom({ status: 404, json: {} });
+		await Custom;
+		assert.match(Catalog.Desc, /HTTP 404.*手动/);
+		assert.equal(Picker.Disabled, true);
+		Row("API 模型 ID").Controls[0].Change("manual-model");
+		const Obsolete = Load.Click();
+		Key.inputEl.value = "different-fixture-key"; Key.inputEl.Input();
+		CompleteCustom({ status: 200, json: { data: [{ id: "wrong-key" }] } });
+		await Obsolete;
+		assert.equal(Picker.Options["wrong-key"], undefined);
+		await F.Settings.flatMap(S => S.Controls).find(Control => Control.Text === "启用 API 直连").Click();
+		assert.equal(F.Instance.Backend.Model, "manual-model");
+		assert.ok([...F.Local.values(), ...F.Files.values(), ...F.Notices].every(Value => !Value.includes("different-fixture-key")));
+	}
+	finally { F.Instance.onunload(); }
 });
 
 test("an API transport failure retains an unknown result and allows switching without retrying", async () =>
