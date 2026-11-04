@@ -326,18 +326,20 @@ export class CodexView extends ItemView
 			ModelOptions.push({ Value: "", Label: "加载模型..." });
 		}
 		this.set_options(this.ModelElement, ModelOptions, Settings.Model);
+		const Alternate = !!this.Owner.Backend;
 		const EffortOptions = (Selected?.supportedReasoningEfforts ?? []).map(Value => ({ Value: Value.reasoningEffort, Label: Value.reasoningEffort }));
+		if(Alternate) { EffortOptions.unshift({ Value: "", Label: "使用服务商默认" }); }
 		if(Settings.Effort && !EffortOptions.some(Value => Value.Value === Settings.Effort))
 		{
 			EffortOptions.push({ Value: Settings.Effort, Label: `${Settings.Effort} (请重新选择)` });
 		}
 		if(!EffortOptions.length)
 		{
-			EffortOptions.push({ Value: "", Label: "加载思考档次..." });
+			EffortOptions.push({ Value: "", Label: Selected ? "当前模型未提供档次" : "加载思考档次..." });
 		}
 		this.set_options(this.EffortElement, EffortOptions, Settings.Effort);
-		this.ModelElement.disabled = this.input_blocked() || !this.Owner.Models.length;
-		this.EffortElement.disabled = this.input_blocked() || !Selected;
+		this.ModelElement.disabled = this.input_blocked() || Alternate || !this.Owner.Models.length;
+		this.EffortElement.disabled = this.input_blocked() || !Selected || (!Selected.supportedReasoningEfforts.length && !(Alternate && Settings.Effort));
 		this.FastElement.disabled = this.input_blocked() || (!fast_tier(Selected) && !Settings.Fast);
 		this.FastElement.checked = Settings.Fast;
 		this.UsageToggle.checked = Settings.ShowUsage;

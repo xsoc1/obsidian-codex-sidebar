@@ -1,29 +1,30 @@
 import { Setting, requestUrl, type ButtonComponent, type DropdownComponent, type TextComponent } from "obsidian";
-import { ApiProviders, type ApiProvider, type BackendProfile } from "./backend-profile";
+import { ApiProviders, type ApiCatalogModel, type ApiProvider, type BackendProfile } from "./backend-profile";
 import { list_api_models } from "./api-models";
 import { error_text } from "./ui-helpers";
 
-export function api_settings(Root: HTMLElement, Current: BackendProfile | null, Activate: (Profile: unknown, Key: string) => Promise<void>): () => void
+export function api_settings(Root: HTMLElement, Current: BackendProfile | null, Activate: (Profile: unknown, Key: string, Catalog?: ApiCatalogModel[]) => Promise<void>): () => void
 {
 	const Active = Current?.Kind === "api" ? Current : null;
 	let Provider: ApiProvider = Active?.Provider ?? "openai";
 	let Model = Active?.Model ?? "", Base = Active?.Provider === "compatible" ? Active.Base : "", Vision = Active?.Vision ?? false;
 	let ApiInput: HTMLInputElement, Picker: DropdownComponent, Manual: TextComponent, Load: ButtonComponent;
-	let Models: string[] = [], Revision = 0, Closed = false;
+	let Models: ApiCatalogModel[] = [], GoCatalog: ApiCatalogModel[] | undefined, Revision = 0, Closed = false;
 	const Initial = "读取服务商目录后选择. 可用权限以实际请求为准.";
-	const Select = () => { Picker.setValue(Models.includes(Model) ? Model : ""); };
-	const Options = (Items: string[]) =>
+	const Select = () => { Picker.setValue(Models.some(Item => Item.Id === Model) ? Model : ""); };
+	const Options = (Items: ApiCatalogModel[]) =>
 	{
 		Models = Items;
 		Picker.selectEl.replaceChildren();
 		Picker.addOption("", Items.length ? "选择模型" : "暂无模型列表");
-		for(const Id of Items) { Picker.addOption(Id, Id); }
+		for(const { Id } of Items) { Picker.addOption(Id, Id); }
 		Picker.setDisabled(!Items.length);
 		Select();
 	};
 	const Invalidate = () =>
 	{
 		Revision++;
+		GoCatalog = undefined;
 		Options([]);
 		Catalog.setDesc(Initial);
 		Load.setDisabled(false).setButtonText("加载模型");
@@ -52,7 +53,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		Picker.selectEl.setAttribute("aria-labelledby", Catalog.nameEl.id);
 		Picker.onChange(Value =>
 		{
-			if(Models.includes(Value)) { Model = Value; Manual.setValue(Value); }
+			if(Models.some(Item => Item.Id === Value)) { Model = Value; Manual.setValue(Value); }
 		});
 		Options([]);
 	}).addButton(Button =>
@@ -61,6 +62,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		Button.setButtonText("加载模型").onClick(async () =>
 		{
 			const Request = ++Revision, Key = ApiInput.value;
+			GoCatalog = undefined;
 			Options([]);
 			Button.setDisabled(true).setButtonText("加载中…");
 			Catalog.setDesc("正在读取模型列表…");
@@ -68,6 +70,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 			{
 				const Items = await list_api_models(Provider, Base, Key, Value => requestUrl({ ...Value, throw: false }));
 				if(Request !== Revision) { return; }
+				if(Provider === "opencode") { GoCatalog = Items; }
 				Options(Items);
 				Catalog.setDesc(Items.length ? `已读取 ${Items.length} 个模型. ${Provider === "opencode" ? "公开目录不代表 Go 工作区权限." : "可用权限以实际请求为准."}`
 					: "服务商没有返回可选模型. 可以手动填写模型 ID.");
@@ -101,7 +104,7 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		Setup.setDesc("正在启用直连…");
 		try
 		{
-			await Activate(Profile, Key);
+			await Activate(Profile, Key, GoCatalog);
 			if(Closed) { return; }
 			if(Provider === Profile.Provider && Base === Profile.Base && ApiInput.value === Key) { ApiInput.value = ""; }
 			Setup.setDesc(`已启用 ${ApiProviders[Profile.Provider].Label} · ${Profile.Model.trim()}. 回侧栏发一条短问题验证权限.`);

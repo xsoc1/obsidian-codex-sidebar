@@ -33,9 +33,9 @@ export class CodexSettings extends PluginSettingTab
 				: this.Owner.Remote.Enabled ? "电脑上的独立远程桥" : "本机 Codex");
 		};
 		UpdateConnection();
-		this.CloseApiSettings = api_settings(this.containerEl, Current, async (Profile, Key) =>
+		this.CloseApiSettings = api_settings(this.containerEl, Current, async (Profile, Key, Catalog) =>
 		{
-			try { await this.Owner.start_backend(Profile, Key); }
+			try { await this.Owner.start_backend(Profile, Key, Catalog); }
 			finally { UpdateConnection(); }
 		});
 		if(!Platform.isWin || Platform.isMobileApp) { return; }

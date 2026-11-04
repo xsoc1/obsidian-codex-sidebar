@@ -14,7 +14,7 @@ import { observe_sidebar_footer } from "./sidebar-footer";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcMessage } from "./rpc";
 import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } from "./remote";
-import { browser_http } from "./browser-http";
+import { browser_http, type BrowserRequest } from "./browser-http";
 import { native_http } from "./native-http";
 import { math_writing_skill, skill_input, type SkillInput } from "./skills";
 import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo } from "./controls";
@@ -58,7 +58,8 @@ import { MessageIndex } from "./runtime/message-index";
 import { prepare_conflict_resolution, pending_conflicts, preserve_durable_resolved_messages } from "./sync/conflicts";
 import { authenticate_api_key, openai_api_key } from "./api-auth";
 import { BackendConnection } from "./backend";
-import { backend_profile, backend_name, backend_identity, backend_model, type BackendProfile } from "./backend-profile";
+import { backend_profile, backend_name, backend_identity, backend_model, type ApiCatalogModel, type BackendProfile } from "./backend-profile";
+import { list_api_models } from "./api-models";
 import { direct_api, direct_api_key } from "./direct-api";
 import { snapshot_instructions } from "./prompt";
 import { MathCompletionInstructions, completion_prompt, parse_completion } from "./completion-prompt";
@@ -1008,7 +1009,9 @@ export default class CodexSidebarPlugin extends Plugin
 	private configure_backend_state(): void
 	{
 		if(!this.Backend) { return; }
-		Object.assign(this.State.Settings, { Model: backend_model(this.Backend), Effort: "", Fast: false });
+		const Model = backend_model(this.Backend), Current = this.State.Settings;
+		const Effort = this.Backend.Kind === "api" && this.Backend.Provider === "opencode" && Current.Model === Model ? Current.Effort : "";
+		Object.assign(Current, { Model, Effort, Fast: false });
 		for(const Operation of this.State.Sync?.Operations ?? [])
 		{
 			if(Operation.Status === "running") { update_operation(this.State.Sync!, Operation.Id, "submission-unknown", { ...this.local_operation_version(Operation), Error: "此前的直连或本机进程已关闭, 不自动重发" }); }
@@ -1064,7 +1067,7 @@ export default class CodexSidebarPlugin extends Plugin
 		await this.persist();
 	}
 
-	async start_backend(Input: unknown, Key = ""): Promise<void>
+	async start_backend(Input: unknown, Key = "", Catalog?: ApiCatalogModel[]): Promise<void>
 	{
 		const Profile = backend_profile(Input);
 		if(Profile.Kind === "agent" && Platform.isMobileApp) { throw new Error("本机 Agent 需要 Windows"); }
@@ -1076,7 +1079,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			await this.switch_remote_mode(false, Profile);
 			this.BackendKey = Secret;
-			await this.ensure_connection();
+			await this.ensure_connection(Catalog);
 		}
 		finally { this.ChatPreparing = false; this.refresh(); }
 	}
@@ -1129,11 +1132,19 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async update_run_settings(Model: string, Effort: string, Fast: boolean): Promise<void>
 	{
-		if(this.Backend || this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting)
+		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting)
 		{
 			return;
 		}
 		const Settings = this.State.Settings;
+		if(this.Backend)
+		{
+			if(this.Backend.Kind !== "api" || Model !== Settings.Model || Effort && !selected_model(Settings, this.Models)?.supportedReasoningEfforts.some(Value => Value.reasoningEffort === Effort)) { return; }
+			Settings.Effort = Effort;
+			this.refresh();
+			await this.persist();
+			return;
+		}
 		const ModelChanged = Settings.Model !== Model;
 		Settings.Model = Model;
 		const Selected = selected_model(Settings, this.Models);
@@ -1150,7 +1161,7 @@ export default class CodexSidebarPlugin extends Plugin
 		new Notice(`Codex: ${this.Status}`, 7000);
 	}
 
-	async ensure_connection(): Promise<void>
+	async ensure_connection(Catalog?: ApiCatalogModel[]): Promise<void>
 	{
 		if(this.Connecting)
 		{
@@ -1169,7 +1180,14 @@ export default class CodexSidebarPlugin extends Plugin
 			const Backend = this.Backend;
 			const ApiKey = this.Remote.Enabled || Backend ? undefined : this.LocalApiKey;
 			const CliPath = this.Remote.Enabled || Backend ? "" : this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
-			const Driver = Backend?.Kind === "api" ? direct_api(Backend, this.BackendKey, Value => requestUrl({ ...Value, throw: false }))
+			const Send = (Value: BrowserRequest) => requestUrl({ ...Value, throw: false });
+			let Reasoning: ApiCatalogModel["Reasoning"], ReasoningError = "";
+			if(Backend?.Kind === "api" && Backend.Provider === "opencode" && this.BackendKey)
+			{
+				try { Reasoning = (Catalog ?? await list_api_models("opencode", "", "", Send, 6000)).find(Item => Item.Id === Backend.Model)?.Reasoning; }
+				catch { ReasoningError = "OpenCode Go 思考档次目录暂不可用. 可使用服务商默认, 或重连后再查."; }
+			}
+			const Driver = Backend?.Kind === "api" ? direct_api(Backend, this.BackendKey, Send, Reasoning)
 				: Backend?.Kind === "agent" ? await (await import("./headless-agents")).headless_agent(Backend, this.BackendKey) : null;
 			if(Generation !== this.Generation || this.Unloaded)
 			{
@@ -1207,7 +1225,7 @@ export default class CodexSidebarPlugin extends Plugin
 						this.persist_background();
 					}
 				};
-			const Connection: RpcConnection = Backend && Driver ? new BackendConnection(Backend, Driver, OnMessage) : this.Remote.Enabled
+			const Connection: RpcConnection = Backend && Driver ? new BackendConnection(Backend, Driver, OnMessage, Reasoning?.Efforts) : this.Remote.Enabled
 				? new RemoteConnection((Path, Method, Body) => this.remote_http(Path, Method, Body), this.Remote, OnMessage, OnClosed, () => this.save_remote_config())
 				: new this.Desktop!.CodexConnection(CliPath, this.host_cwd(), OnMessage, OnClosed, ApiKey);
 			this.Connection = Connection;
@@ -1270,7 +1288,7 @@ export default class CodexSidebarPlugin extends Plugin
 			}
 			await this.persist(false);
 			this.Models = [];
-			this.CatalogError = "";
+			this.CatalogError = ReasoningError;
 			try
 			{
 				let Cursor: string | null = null;
@@ -1280,7 +1298,7 @@ export default class CodexSidebarPlugin extends Plugin
 					this.Models.push(...Page.data);
 					Cursor = Page.nextCursor ?? null;
 				} while(Cursor);
-				Object.assign(this.State.Settings, initial_selection(this.State.Settings, this.Models));
+				if(!Backend) { Object.assign(this.State.Settings, initial_selection(this.State.Settings, this.Models)); }
 				this.refresh();
 				await this.persist(false);
 			}
@@ -1576,13 +1594,18 @@ export default class CodexSidebarPlugin extends Plugin
 			this.Runtime.check(Ticket); this.Activity = "保存提问与待同步操作"; this.refresh(); await preparation_step(this.save_target(Target, true), Ticket, this.Runtime);
 			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId);
 			if(!Operation || Operation.Conflicts?.length) { throw new Error("原发送操作缺失或有冲突, 不自动提交"); }
-			const Chosen = ((Operation.Input as any)?.Run ?? this.State.Settings), Settings = { ...this.State.Settings, Model: Chosen.Model || this.State.Settings.Model, Effort: Chosen.Effort || this.State.Settings.Effort, Fast: Chosen.Fast ?? this.State.Settings.Fast };
+			const Chosen = ((Operation.Input as any)?.Run ?? this.State.Settings), Settings = { ...this.State.Settings, Model: Chosen.Model || this.State.Settings.Model,
+				Effort: this.Backend ? Chosen.Effort ?? this.State.Settings.Effort : Chosen.Effort || this.State.Settings.Effort, Fast: Chosen.Fast ?? this.State.Settings.Fast };
 			const BodyVersions = !this.Backend && (!Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1);
 			assert_quote_read_capability(Message.Quote, BodyVersions);
 			const DerivedPrompt = derived_message_prompt(Message);
 			if(Target.Remote && !BodyVersions && DerivedPrompt !== Message.Prompt) { throw new Error("当前桥不支持已保存引用的派生输入校验, 请升级桥; 原 Prompt 和来源保留"); }
-			const Options = this.Backend ? { model: Settings.Model, serviceTier: "default", effort: undefined } : run_options(Settings, this.Models);
 			if(this.Backend && Settings.Model !== backend_model(this.Backend)) { throw new Error("已保存操作使用另一模型, 请恢复原模型或明确建立重发分支"); }
+			if(this.Backend && Settings.Effort && !selected_model(Settings, this.Models)?.supportedReasoningEfforts.some(Value => Value.reasoningEffort === Settings.Effort))
+			{
+				throw new Error("当前目录无法确认本轮的思考档次. 请重连核对, 或用可用档次明确重发.");
+			}
+			const Options = this.Backend ? { model: Settings.Model, serviceTier: "default", effort: Settings.Effort || undefined } : run_options(Settings, this.Models);
 			const Params = { threadId: CurrentSession.ThreadId, input: [...(Skill ? skill_input(DerivedPrompt, Skill) : [{ type: "text", text: DerivedPrompt }]), ...Images], ...Options };
 			let Result: any;
 			const BeforePost = async () =>

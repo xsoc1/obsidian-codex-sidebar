@@ -1,8 +1,19 @@
-import { api_base, valid_backend_model_id, type ApiProvider } from "./backend-profile";
+import { api_base, valid_backend_model_id, type ApiCatalogModel, type ApiProvider, type ApiReasoning } from "./backend-profile";
 import { direct_api_key } from "./direct-api";
 import { native_http } from "./native-http";
 
-export async function list_api_models(Provider: ApiProvider, CustomBase: string, Key: string, Send: Parameters<typeof native_http>[1]): Promise<string[]>
+const GoEffortNames = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function go_reasoning(Item: { capabilities?: { reasoning?: { supported?: unknown; effort?: unknown } }; api?: Record<string, unknown> }): ApiReasoning | undefined
+{
+	const Reasoning = Item.capabilities?.reasoning;
+	if(Reasoning?.supported !== true || !Array.isArray(Reasoning.effort)) { return; }
+	const Format = Item.api?.["chat-completions"] ? "chat" : Item.api?.responses ? "responses" : null;
+	const Efforts = [...new Set(Reasoning.effort.filter((Value): Value is string => typeof Value === "string" && GoEffortNames.has(Value)))];
+	if(Format && Efforts.length) { return { Format, Efforts }; }
+}
+
+export async function list_api_models(Provider: ApiProvider, CustomBase: string, Key: string, Send: Parameters<typeof native_http>[1], Timeout?: number): Promise<ApiCatalogModel[]>
 {
 	const Base = api_base(Provider, CustomBase);
 	const Public = Provider === "opencode";
@@ -13,7 +24,7 @@ export async function list_api_models(Provider: ApiProvider, CustomBase: string,
 	{
 		Result = await native_http({ url: Url, method: "GET", headers: {
 			Accept: "application/json", ...(Secret ? { Authorization: `Bearer ${Secret}` } : {})
-		} }, Send);
+		} }, Send, Timeout);
 	}
 	catch { throw new Error("读取模型列表时网络失败或超时"); }
 	if(Result.status < 200 || Result.status >= 300)
@@ -27,7 +38,13 @@ export async function list_api_models(Provider: ApiProvider, CustomBase: string,
 	try { Data = Result.json?.data; }
 	catch { throw new Error("服务商未返回有效的 JSON 模型列表"); }
 	if(!Array.isArray(Data)) { throw new Error("服务商未返回兼容的模型列表"); }
-	const Models = Data.map((Item: { id?: unknown } | null) => Item?.id)
-		.filter((Id): Id is string => valid_backend_model_id(Id) && (!Secret || !Id.includes(Secret)));
-	return [...new Set(Models)].sort();
+	const Models = new Map<string, ApiCatalogModel>();
+	for(const Item of Data)
+	{
+		const Id = Item?.id;
+		if(!valid_backend_model_id(Id) || Secret && Id.includes(Secret) || Models.has(Id)) { continue; }
+		const Reasoning = Public ? go_reasoning(Item) : undefined;
+		Models.set(Id, Reasoning ? { Id, Reasoning } : { Id });
+	}
+	return [...Models.values()].sort((A, B) => A.Id < B.Id ? -1 : 1);
 }

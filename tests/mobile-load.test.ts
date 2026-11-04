@@ -533,6 +533,58 @@ test("an API transport failure retains an unknown result and allows switching wi
 	finally { P.onunload(); }
 });
 
+test("Go effort flows from the catalog through sidebar settings and the saved run to the actual request", async () =>
+{
+	const Model = "glm-5.3-flash", Key = "fixture-go-effort-key", Requests: any[] = [];
+	let Available = ["low", "high", "max"], Reads = 0;
+	const F = await mobile_fixture(async Params =>
+	{
+		if(Params.method === "GET")
+		{
+			assert.equal(Params.url, "https://opencode.ai/inference/go/v1/models"); assert.equal(Params.headers.Authorization, undefined);
+			Reads++;
+			return { status: 200, json: { data: [{ id: Model, api: { "chat-completions": {} }, capabilities: { reasoning: { supported: true, effort: Available } } }] } };
+		}
+		assert.equal(Params.url, "https://opencode.ai/inference/go/openai/v1/chat/completions"); assert.equal(Params.headers.Authorization, "Bearer " + Key);
+		Requests.push(JSON.parse(Params.body));
+		return { status: 200, json: { choices: [{ finish_reason: "stop", message: { content: "fixture response" } }] } };
+	});
+	const P = F.Instance, Tab = F.Tabs[0];
+	const Finish = async () =>
+	{
+		for(let I = 0; I < 40 && P.Busy; I++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
+		assert.equal(P.Busy, false);
+	};
+	try
+	{
+		Tab.display();
+		F.Settings.find(S => S.Name === "API 直连").Controls[0].Change("opencode");
+		const [Picker, Load] = F.Settings.find(S => S.Name === "上游模型").Controls;
+		await Load.Click(); Picker.Change(Model);
+		F.Settings.find(S => S.Name === "直连 API Key").Controls[0].inputEl.value = Key;
+		await F.Settings.flatMap(S => S.Controls).find(C => C.Text === "启用 API 直连").Click();
+		assert.equal(Reads, 1, "activation reuses the catalog fetched in settings");
+		assert.deepEqual(Array.from(P.Models[0].supportedReasoningEfforts, (X: any) => X.reasoningEffort), ["low", "high", "max"]);
+		assert.equal(P.State.Settings.Effort, "");
+		await P.update_run_settings(Model, "max", true);
+		assert.equal(P.State.Settings.Effort, "max"); assert.equal(P.State.Settings.Fast, false);
+		assert.equal(await P.send_message("original exercise", null), true); await Finish();
+		assert.equal(Requests[0].reasoning_effort, "max"); assert.equal(P.State.Sync.Operations.at(-1).Input.Run.Effort, "max");
+		await P.start_backend({ Kind: "api", Provider: "opencode", Model }, Key);
+		assert.equal(P.State.Settings.Effort, "max");
+		Available = ["low", "high"];
+		await P.reconnect();
+		assert.equal(P.State.Settings.Effort, "max", "an unavailable saved value is not silently replaced");
+		assert.equal(await P.send_message("unavailable effort", null), false);
+		assert.equal(Requests.length, 1);
+		assert.match(P.Status, /无法确认.*思考档次/);
+		await P.update_run_settings(Model, "", false);
+		assert.equal(await P.send_message("use provider default", null), true); await Finish();
+		assert.equal(Requests.length, 2); assert.equal(Requests[1].reasoning_effort, undefined);
+	}
+	finally { P.onunload(); }
+});
+
 function source_view(Fixture: Awaited<ReturnType<typeof mobile_fixture>>, Path: string, Text: string)
 {
 	const View = new Fixture.MarkdownView() as any;

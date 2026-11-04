@@ -8,6 +8,12 @@ export const ApiProviders = {
 export const AgentNames = { claude: "Claude Code", antigravity: "Antigravity", dsh: "DeepSeek Harness" } as const;
 export type ApiProvider = keyof typeof ApiProviders;
 export type LocalAgent = keyof typeof AgentNames;
+export interface ApiReasoning
+{
+	Format: "chat" | "responses";
+	Efforts: string[];
+}
+export interface ApiCatalogModel { Id: string; Reasoning?: ApiReasoning; }
 export type BackendProfile =
 	| { Kind: "api"; Provider: ApiProvider; Base: string; Model: string; Vision: boolean }
 	| { Kind: "agent"; Agent: LocalAgent; Path: string; Model: string };

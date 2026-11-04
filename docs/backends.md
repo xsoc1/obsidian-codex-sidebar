@@ -20,7 +20,13 @@ OpenCode Go 的工作区、套餐、模型与客户端用量限制仍适用. 自
 
 Key 保留在本次插件运行的内存中. 切换后端或重载后需重新输入. API 直连需要在客户端使用长期密钥, 适用于自己信任的设备和服务. 请求附带选区、来源快照和有限的对话历史, 服务商按其数据条款处理. 官方对密钥的安全建议见 [OpenAI API 认证](https://developers.openai.com/api/reference/overview#authentication).
 
-直接请求在收到完整响应后显示正文. 停止按钮停止客户端等待, 底层请求可能已抵达服务端. 没有收到可确认的结果时保留原问题与状态, 由用户决定是否另行重发. API 模式使用设置中的模型 ID, 首版不映射各厂商的 Fast 或思考档次. 自动行内补全在新后端默认关闭, 可以在设置中开启.
+直接请求在收到完整响应后显示正文. 停止按钮停止客户端等待, 底层请求可能已抵达服务端. 没有收到可确认的结果时保留原问题与状态, 由用户决定是否另行重发. 自动行内补全在新后端默认关闭, 可以在设置中开启.
+
+### OpenCode Go 思考档次
+
+启用 Go 直连后, 在侧栏展开 **模型与选项** 并选择 **思考档次**. beta.7 从 [Go 模型目录](https://opencode.ai/v2/docs/console/go/#models) 读取当前模型的档次. Chat Completions 模型发送 `reasoning_effort`, Responses 模型发送 `reasoning.effort`; 使用 [OpenCode Chat](https://github.com/anomalyco/opencode/blob/59e95cc5394b7714451608099ef4db7bffc904b6/packages/ai/src/protocols/openai-chat.ts) 和 [Responses](https://github.com/anomalyco/opencode/blob/59e95cc5394b7714451608099ef4db7bffc904b6/packages/ai/src/protocols/openai-responses.ts) 的请求字段.
+
+**使用服务商默认** 不发档次参数, 沿用原接口. 未接入的原生格式和其他直连预设显示默认, 不套用 Codex 的档次或 Fast. 重新连接会核对目录; 如果原档次已不再提供, 重新选择可用档次或默认后再发. 重新打开插件需要再次输入 Key, 已保存档次不因重输 Key 丢失.
 
 ## Windows 本机 Agent
 
@@ -36,6 +42,11 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 在任意客户端填写已有桥地址和配对密钥, 点击 **保存并连接**. 桥继续管理独立 Codex Agent, 见 [iPad 设置](ipad-setup.md). 新的直连和 Windows 本机 Agent 不要求升级桥. API 配置或本机 Agent 的会话按当前设备、服务商与端点或 Agent 入口隔离. 切回原连接会恢复对应历史. 同一端点更换 API Key 仍打开该端点的历史, 换账号时可先新建会话.
 
 升级保留已有客户端和桥状态文件. 回退插件程序后, 直连与非 Codex Agent 的独立记录保留在设备状态目录中, 再升回候选即可恢复. 普通 Codex 的桌面与远程记录沿用原存储和回退流程.
+
+## 2.0.0-beta.7 验证
+
+- 构建与 314 项测试通过. 移动构建走通加载目录、选择模型、保存档次、按已保存档次发出受控请求、重连后校验过期档次、恢复服务商默认. 对 Chat Completions 和 Responses 的字段使用独立模拟请求校验; 未发起真实 Key 推理.
+- Windows 原生隔离探针使用 Go 的实时公开目录渲染实际侧栏控件. GLM-5.3-Flash 显示默认、low、high、max; DeepSeek V4 Pro 显示默认、high、max; 未接入的 Claude Haiku 5.5 只显示服务商默认. 未进行 iPad 真机验证.
 
 ## 2.0.0-beta.6 验证
 

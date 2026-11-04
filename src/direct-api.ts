@@ -1,4 +1,4 @@
-import { ApiProviders, type BackendProfile } from "./backend-profile";
+import { ApiProviders, type ApiReasoning, type BackendProfile } from "./backend-profile";
 import { BackendResultUnknown, type BackendDriver, type BackendMessage } from "./backend";
 import { native_http } from "./native-http";
 import type { BrowserRequest } from "./browser-http";
@@ -29,20 +29,21 @@ function chat_message(Message: BackendMessage)
 	] : Message.Text };
 }
 
-export function direct_api(Profile: Profile, Key: string, Send: NativeRequest): BackendDriver
+export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, Reasoning?: ApiReasoning): BackendDriver
 {
 	Key = direct_api_key(Key);
-	const Responses = ApiProviders[Profile.Provider].Format === "responses";
-	return async ({ Session, Messages }, Signal) =>
+	return async ({ Session, Messages, Effort }, Signal) =>
 	{
 		Signal.throwIfAborted();
+		if(Effort && (Profile.Provider !== "opencode" || !Reasoning?.Efforts.includes(Effort))) { throw new Error("当前模型不支持所选思考档次"); }
+		const Responses = (Effort ? Reasoning!.Format : ApiProviders[Profile.Provider].Format) === "responses";
 		if(!Profile.Vision && Messages.some(M => M.Images?.length)) { throw new Error("当前 API 模型未启用图像输入"); }
 		const Request = Responses
-			? { model: Profile.Model, store: false, input: Messages.map(M => ({
+			? { model: Profile.Model, store: false, ...(Effort ? { reasoning: { effort: Effort } } : {}), input: Messages.map(M => ({
 				role: M.Role === "system" ? "developer" : M.Role,
 				content: M.Images?.length ? [{ type: "input_text", text: M.Text }, ...M.Images.map(image_url => ({ type: "input_image", image_url, detail: "auto" }))] : M.Text
 			})) }
-			: { model: Profile.Model, messages: Messages.map(chat_message), stream: false };
+			: { model: Profile.Model, messages: Messages.map(chat_message), stream: false, ...(Effort ? { reasoning_effort: Effort } : {}) };
 		const Body = JSON.stringify(Request);
 		if(Body.length > 12 * 1024 * 1024) { throw new Error("当前 API 输入过长, 请缩小选区或开启新会话"); }
 		const Headers = { Authorization: `Bearer ${Key}`, "Content-Type": "application/json",

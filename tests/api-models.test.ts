@@ -23,11 +23,30 @@ test("API catalogs use the provider's documented GET endpoint, with no credentia
 			Calls.push(Request);
 			return { status: 200, json: { data: [{ id: "model-b" }, { id: "model-a" }, { id: "model-b" }, { id: "bad id" }, {}, null] } };
 		});
-		assert.deepEqual(Models, ["model-a", "model-b"]);
+		assert.deepEqual(Models, [{ Id: "model-a" }, { Id: "model-b" }]);
 		assert.deepEqual(Calls, [{ url: Url, method: "GET", headers: Provider === "opencode" ? { Accept: "application/json" } : {
 			Accept: "application/json", Authorization: "Bearer " + Key
 		} }]);
 	}
+});
+
+test("Go advertises only allowlisted effort values on an implemented native wire format", async () =>
+{
+	const Reasoning = { reasoning: { supported: true, effort: ["max", "low", "max", "unexpected", 3] } };
+	const Data = [
+		{ id: "chat", api: { "chat-completions": {} }, capabilities: Reasoning },
+		{ id: "responses", api: { responses: {} }, capabilities: Reasoning },
+		{ id: "messages", api: { messages: {} }, capabilities: Reasoning },
+		{ id: "no-levels", api: { "chat-completions": {} }, capabilities: { reasoning: { supported: true } } }
+	];
+	const Send = async () => ({ status: 200, json: { data: Data } });
+	assert.deepEqual(await list_api_models("opencode", "", "", Send), [
+		{ Id: "chat", Reasoning: { Format: "chat", Efforts: ["max", "low"] } },
+		{ Id: "messages" },
+		{ Id: "no-levels" },
+		{ Id: "responses", Reasoning: { Format: "responses", Efforts: ["max", "low"] } }
+	]);
+	assert.ok((await list_api_models("deepseek", "", Key, Send)).every(Model => !Model.Reasoning));
 });
 
 test("API catalog rejects invalid config before networking and exposes only safe, actionable failures", async () =>

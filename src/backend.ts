@@ -8,7 +8,7 @@ export interface BackendMessage
 	Text: string;
 	Images?: string[];
 }
-export interface BackendInput { Session: string; Messages: BackendMessage[]; }
+export interface BackendInput { Session: string; Messages: BackendMessage[]; Effort?: string; }
 export type BackendDriver = (Input: BackendInput, Signal: AbortSignal) => Promise<string>;
 export class BackendResultUnknown extends Error {}
 interface Thread { Session: string; Instructions: string; History: BackendMessage[]; }
@@ -52,7 +52,7 @@ export class BackendConnection implements RpcConnection
 	private Threads = new Map<string, Thread>();
 	private Turns = new Map<string, PendingTurn>();
 	private Closed = false;
-	constructor(private Profile: BackendProfile, private Driver: BackendDriver | null, private Emit: (Value: RpcMessage) => void) {}
+	constructor(private Profile: BackendProfile, private Driver: BackendDriver | null, private Emit: (Value: RpcMessage) => void, private Efforts: readonly string[] = []) {}
 
 	async request(Method: string, Params: any): Promise<any>
 	{
@@ -61,7 +61,8 @@ export class BackendConnection implements RpcConnection
 		if(Method === "initialize") { return {}; }
 		if(Method === "account/read") { return { account: { type: "configured" } }; }
 		if(Method === "model/list") { return { nextCursor: null, data: [{
-			model: Model, displayName: this.Profile.Model || "Agent 当前模型", isDefault: true, supportedReasoningEfforts: [], defaultReasoningEffort: "",
+			model: Model, displayName: this.Profile.Model || "Agent 当前模型", isDefault: true,
+			supportedReasoningEfforts: this.Efforts.map(reasoningEffort => ({ reasoningEffort, description: "" })), defaultReasoningEffort: "",
 			inputModalities: this.Profile.Kind === "api" && this.Profile.Vision ? ["text", "image"] : ["text"]
 		}] }; }
 		if(Method === "thread/start")
@@ -96,7 +97,9 @@ export class BackendConnection implements RpcConnection
 			if(this.Turns.size) { throw new Error("请等待当前回复完成"); }
 			const Id = crypto.randomUUID(), User = backend_message("user", Params.input);
 			const System: BackendMessage = { Role: "system", Text: [Thread.Instructions, ...Thread.History.filter(M => M.Role === "system").map(M => M.Text)].filter(Boolean).join("\n\n") };
-			this.Turns.set(Id, { ThreadId: Params.threadId, Input: { Session: Thread.Session, Messages: [System, ...Thread.History.filter(M => M.Role !== "system"), User] }, Controller: new AbortController(), Started: false });
+			this.Turns.set(Id, { ThreadId: Params.threadId, Input: {
+				Session: Thread.Session, Messages: [System, ...Thread.History.filter(M => M.Role !== "system"), User], ...(Params.effort ? { Effort: Params.effort } : {})
+			}, Controller: new AbortController(), Started: false });
 			return { turn: { id: Id, status: "inProgress" } };
 		}
 		throw new Error("当前后端不支持此操作");
