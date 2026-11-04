@@ -2,7 +2,7 @@
 
 在 Obsidian 中与 Codex 对话, 随时解释笔记、追问回答, 并通过差异预览审核笔记修改.
 
-使用电脑已有的 Codex 登录. Windows 本地运行隐藏的 Codex CLI, iPad 可连接电脑上的独立远程服务.
+Windows 本地运行隐藏的 Codex CLI, iPad 可连接电脑上的独立远程服务. 2.0.0-beta.3 候选加入本机一键启动与 OpenAI API Key 模式.
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -22,7 +22,9 @@
 
 ### Windows
 
-电脑需已安装并登录完整的 Codex CLI 运行包, 并在 Codex 中启用 `math-writing` 技能. 插件每轮会显式加载该技能; 安装包不包含技能文件. 对已失效的 Codex 应用缓存路径, 插件会在同一缓存目录中寻找完整运行包; 不更换登录或修改全局配置.
+电脑需安装完整的 Codex CLI 运行包, 并在 Codex 中启用 `math-writing` 技能. 插件每轮会显式加载该技能. CLI 路径留空时会查找 PATH 和 Windows 上的 Codex 应用缓存.
+
+在 2.0.0-beta.3 候选的插件设置中点击 **启动本机 Codex** 即可连接电脑已有的登录. 使用 OpenAI Platform 计费时, 在同一页输入 **OpenAI API Key** 并点击 **使用 API Key**. 密钥只保留在插件运行期间, 重载或切回现有登录后需重新输入. 连接状态显示当前认证方式, 模型权限以实际请求为准.
 
 `math-writing` 目前是独立私有依赖, 本仓库不提供其下载包, 也不承诺它由 OpenAI 官方供应. 已取得技能的用户按 Codex 支持目录安装启用, 再在插件设置中运行“环境检查”. 获取边界与安装说明见 [开发与依赖](docs/development.md).
 
@@ -39,7 +41,7 @@
 
 ### iPad
 
-iPad 通过私有 HTTPS 连接 Windows 电脑上的独立 Codex 服务, 电脑需要保持开机和联网. 插件安装后, 在设置中填写远程地址和配对密钥, 点击“保存并连接”.
+iPad 通过私有 HTTPS 连接 Windows 电脑上的独立 Codex 服务, 电脑需要保持开机和联网. 插件安装后, 在设置中填写远程地址和配对密钥, 点击“保存并连接”. 要用 API Key 计费, 在电脑上运行新版远程桥的 `start-bridge.ps1 -PromptApiKey`, 再用原配对信息连接.
 
 完整步骤见 [iPad 与 Windows 远程服务指南](docs/ipad-setup.md). iPad 的基础远程问答已有设备验证; 新版外观、分屏及软键盘布局仍需真机确认.
 

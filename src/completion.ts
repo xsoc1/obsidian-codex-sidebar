@@ -2,6 +2,7 @@ import { CodexConnection, type RpcMessage } from "./rpc";
 import { EditingRules } from "./prompt";
 import { skill_input, type SkillInput } from "./skills";
 import { CompletionExposition } from "./exposition/rules";
+import { authenticate_api_key } from "./api-auth";
 
 export interface CompletionInput
 {
@@ -44,7 +45,7 @@ export class CompletionService
 		this.Cancellations.clear();
 	}
 
-	async complete(Cli: string, Cwd: string, Input: CompletionInput, Options: { model?: string; effort?: string; serviceTier: string }, Signal: AbortSignal, Skill: SkillInput): Promise<string>
+	async complete(Cli: string, Cwd: string, Input: CompletionInput, Options: { model?: string; effort?: string; serviceTier: string }, Signal: AbortSignal, Skill: SkillInput, ApiKey?: string): Promise<string>
 	{
 		if(Signal.aborted)
 		{
@@ -88,7 +89,7 @@ export class CompletionService
 					Reject(new Error(Params.turn.error?.message ?? "补全未完成"));
 				}
 			}
-		}, Reject);
+		}, Reject, ApiKey);
 		this.Workers.add(Worker);
 		const Cancel = () =>
 		{
@@ -102,6 +103,7 @@ export class CompletionService
 		{
 			await Worker.request("initialize", { clientInfo: { name: "obsidian_codex_completion", version: "0.6.0" }, capabilities: { experimentalApi: true } });
 			Worker.send({ method: "initialized", params: {} });
+			if(ApiKey) { await authenticate_api_key(Worker, Cwd, ApiKey); }
 			const Result = await Worker.request("thread/start", { cwd: Cwd, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", developerInstructions: MathCompletionInstructions, model: Options.model, serviceTier: Options.serviceTier, config: { model_reasoning_effort: Options.effort ?? "low" } });
 			ThreadId = Result.thread.id;
 			if(Result.thread.ephemeral !== true || Result.thread.path)

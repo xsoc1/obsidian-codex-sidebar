@@ -16,11 +16,11 @@ iPad 运行侧栏, Windows 保持开机并运行独立隐藏 CLI. 同一配对�
 
 地址和密钥保存在此设备的 Obsidian localStorage, 不写入共享桌面 `data.json`. 这不是操作系统钥匙串. 各设备应使用不同的配对密钥; 使用同一个密钥的客户端会连接同一远程 Agent. 清除应用存储后需重新填写连接信息.
 
-远程记录由 Windows 桥保存; 此设备另用独立随机名称缓存文本. 桌面本地聊天不进入远程记录, 远程模式也不覆盖桌面聊天. 每个配对设备拥有单独的隐藏 app-server 进程、临时线程和记录文件, 共用电脑当前用户已有的 Codex 登录. 会话不会登记为 Codex GUI 聊天.
+远程记录由 Windows 桥保存; 此设备另用独立随机名称缓存文本. 桌面本地聊天不进入远程记录, 远程模式也不覆盖桌面聊天. 每个配对设备拥有单独的隐藏 app-server 进程、临时线程和记录文件, 共用电脑已有的 Codex 登录或桥启动时提供的 API Key. 会话不会登记为 Codex GUI 聊天.
 
 ## Windows 服务
 
-源码构建会生成 `bridge.cjs`. 单独的 Windows 桥包包含此文件和 `scripts/start-bridge.ps1`, `scripts/stop-bridge.ps1`. 电脑需有 Node.js 24、已登录的 Codex CLI、已安装启用的 math-writing. 使用 Obsidian 只读查询工具时, Windows Obsidian 也需打开对应 vault 并启用 CLI.
+源码构建会生成 `bridge.cjs`. 单独的 Windows 桥包包含此文件和 `scripts/start-bridge.ps1`, `scripts/stop-bridge.ps1`. 电脑需有 Node.js 24、Codex CLI 和已安装启用的 math-writing. 默认使用电脑已有的 Codex 登录. 使用 Obsidian 只读查询工具时, Windows Obsidian 也需打开对应 vault 并启用 CLI.
 
 首次初始化 (将示例路径替换为本机路径):
 
@@ -39,6 +39,21 @@ node .\bridge.cjs --init --config "$env:LOCALAPPDATA\CodexObsidianRemote\config.
 ```
 
 脚本默认使用上述私有配置和其上一级的 `bridge.cjs`, 可通过 `-Config` 与 `-Bridge` 显式指定路径. 当前不会自动注册开机任务; 重启 Windows 后需要运行启动脚本. 启动失败查看私有目录中的 `service-error.log`.
+
+### 用 OpenAI API Key 启动
+
+2.0.0-beta.3 候选支持在 Windows 主机设置 API Key. 同时更新 `bridge.cjs` 和启动脚本. 等待远程回复结束后停止原桥, 再启动 API Key 模式.
+
+```powershell
+.\scripts\stop-bridge.ps1
+.\scripts\start-bridge.ps1 -PromptApiKey
+```
+
+在电脑的隐藏输入提示中输入 OpenAI Platform 密钥. iPad 沿用原地址和配对密钥, 点击“保存并连接”. 新版设置应显示“独立远程已连接 (API Key)”. 同一桥的所有已配对设备共用该 API Key 计费, 进程和会话记录仍按设备隔离. 发一条简短问题可验证该 API 项目的模型权限.
+
+自动化启动可以向桥进程提供 `CODEX_SIDEBAR_API_KEY` 环境变量. 桥接收后从进程环境移除该变量, 仅通过本机 stdio 向临时认证的 Codex 子进程传递密钥. CLI 需支持 `ephemeral` 认证存储. API Key 保留在运行中的桥, iPad 只持有配对密钥. 回到电脑已有登录时, 停止桥后在未设置该环境变量的终端正常启动. 两种模式可沿用同一配对配置和状态目录.
+
+API Key 使用 OpenAI Platform 计费. 参见 [Codex 官方认证说明](https://developers.openai.com/codex/auth).
 
 ## 私有 HTTPS 入口
 

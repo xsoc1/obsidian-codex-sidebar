@@ -12,6 +12,10 @@ import { version_of } from "../src/edit/document";
 import { IDBFactory } from "fake-indexeddb";
 import { open_edit_store } from "../src/edit/database";
 import { session_stamp } from "../src/sessions";
+import { EventEmitter } from "node:events";
+import * as PathApi from "node:path";
+import * as DecoderApi from "node:string_decoder";
+import { ApiKeyEndpoint } from "../src/api-auth";
 
 test("message tombstones survive stale snapshots, late stream frames and restart without deleting the same ID in another branch", async () =>
 {
@@ -44,7 +48,7 @@ async function wait_for_edit(Instance: any): Promise<void>
 	for(let Index = 0; Index < 400 && !Instance.Edits.Store.Data.Writes.length; Index++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
 }
 
-async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Files?: Map<string, string>; Local?: Map<string, string> })
+async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Files?: Map<string, string>; Local?: Map<string, string> }, Desktop?: { spawn(Cli: string, Args: string[], Options: any): unknown })
 {
 	const Required: string[] = []; const Files = Saved?.Files ?? new Map<string, string>(); const Local = Saved?.Local ?? new Map<string, string>();
 	if(!Databases.has(Local)) { Databases.set(Local, new IDBFactory()); }
@@ -77,18 +81,19 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	}
 	class SettingTab extends Component { containerEl = { empty: () => { Settings.length = 0; }, createEl: () => ({}) }; }
 	class Notice { constructor(Text: string) { Notices.push(Text); } }
+	class FileSystemAdapter { getBasePath() { return "/vault"; } }
 	class Plugin
 	{
 		manifest = { id: "codex-sidebar", dir: ".obsidian/plugins/codex-sidebar" };
 		app = {
 			vault: {
 				on: () => {},
-				getName: () => "test", adapter: {
+				getName: () => "test", adapter: Object.assign(new FileSystemAdapter(), {
 					exists: async (Path: string) => Files.has(Path), read: async (Path: string) => Files.get(Path), write: async (Path: string, Text: string) =>
 					{
 						Files.set(Path, Text);
 					}
-				}
+				})
 			},
 			workspace: {
 				activeLeaf: null as any,
@@ -144,6 +149,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	let BrowserRequests = 0;
 	runInNewContext(readFileSync(process.env.CODEX_SIDEBAR_TEST_BUNDLE ?? "main.js", "utf8"), {
 		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, indexedDB: Databases.get(Local), DOMException, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, atob, btoa, setTimeout, clearTimeout, setInterval, clearInterval,
+		...(Desktop ? { process: { execPath: "C:/fixture/Obsidian.exe", env: { OPENAI_API_KEY: "inherited-fixture", CODEX_ACCESS_TOKEN: "inherited-fixture", SystemRoot: "C:/Windows" } } } : {}),
 		fetch: async (Url: string, Params: any) =>
 		{
 			BrowserRequests++;
@@ -156,7 +162,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 			Required.push(Name);
 			if(Name === "obsidian")
 			{
-				return { Plugin, ItemView: Component, PluginSettingTab: SettingTab, Setting, Modal: TestModal, MarkdownView: Component, Notice, Platform: { isMobileApp: true }, requestUrl: Http };
+				return { Plugin, ItemView: Component, PluginSettingTab: SettingTab, Setting, Modal: TestModal, MarkdownView: Component, Notice, FileSystemAdapter, Platform: { isMobileApp: !Desktop }, requestUrl: Http };
 			}
 			if(Name === "@codemirror/state")
 			{
@@ -165,6 +171,13 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 			if(Name === "@codemirror/view")
 			{
 				return { WidgetType: Component, keymap: { of: Define }, ViewPlugin: { fromClass: Define } };
+			}
+			if(Desktop)
+			{
+				if(Name === "node:path") { return PathApi; }
+				if(Name === "node:string_decoder") { return DecoderApi; }
+				if(Name === "node:fs") { return { existsSync: () => true, readFileSync: () => "---\nversion: 0.3.0\n---" }; }
+				if(Name === "node:child_process") { return { spawn: Desktop.spawn, execFile: (_Cli: string, _Args: string[], _Options: unknown, Callback: Function) => Callback(null, "C:/fixture/codex.exe") }; }
 			}
 			throw new Error("mobile loaded forbidden module: " + Name);
 		}
@@ -228,6 +241,98 @@ async function wait_until(Check: () => boolean, Description: string): Promise<vo
 	for(let I = 0; I < 300 && !Check(); I++) { await new Promise(R => setTimeout(R, 5)); }
 	assert.ok(Check(), Description);
 }
+
+test("Windows settings start hidden Codex, switch API auth for chat and completion, and return to the existing login", async () =>
+{
+	const Key = "sk-synthetic-desktop-credential";
+	const Processes: { Args: string[]; Calls: any[]; Killed: boolean }[] = [];
+	const F = await mobile_fixture(undefined, undefined, { spawn(Cli, Args, Options)
+	{
+		assert.equal(Cli, "C:/fixture/codex.exe");
+		assert.equal(Options.windowsHide, true);
+		assert.equal(Options.shell, false);
+		const Api = Args.includes('cli_auth_credentials_store="ephemeral"');
+		if(Api) { assert.deepEqual({ ...Options.env }, { SystemRoot: "C:/Windows" }); }
+		assert.ok(!Args.some(Arg => Arg.includes(Key)));
+		const P = { Args, Calls: [] as any[], Killed: false }; Processes.push(P);
+		const Stdout = new EventEmitter();
+		const Stdin = Object.assign(new EventEmitter(), { end() {}, write(Text: string)
+		{
+			const Call = JSON.parse(Text); P.Calls.push(Call);
+			let Result: any = {};
+			if(Call.method === "config/read") { Result = { config: { cli_auth_credentials_store: "ephemeral", model_provider: "openai", openai_base_url: ApiKeyEndpoint } }; }
+			if(Call.method === "configRequirements/read") { Result = { requirements: null }; }
+			if(Call.method === "account/login/start") { assert.equal(Call.params.apiKey, Key); Result = { type: "apiKey" }; }
+			if(Call.method === "account/read") { Result = { account: { type: Api ? "apiKey" : "chatgpt" } }; }
+			if(Call.method === "model/list") { Result = { data: [{ model: "fixture", displayName: "Fixture", isDefault: true, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], nextCursor: null }; }
+			if(Call.method === "skills/list") { Result = { data: [{ cwd: "/vault", skills: [{ name: "math-writing", path: "/skills/SKILL.md", enabled: true }] }] }; }
+			if(Call.method === "thread/start") { Result = { thread: { id: "completion", ephemeral: true, path: null } }; }
+			const Emit = (Value: unknown) => Stdout.emit("data", Buffer.from(JSON.stringify(Value) + "\n"));
+			if(Call.id) { queueMicrotask(() => Emit({ id: Call.id, result: Result })); }
+			if(Call.method === "turn/start") { queueMicrotask(() =>
+			{
+				Emit({ method: "item/completed", params: { threadId: "completion", item: { type: "agentMessage", id: "answer", text: '{"completion":"continued"}' } } });
+				Emit({ method: "turn/completed", params: { threadId: "completion", turn: { status: "completed" } } });
+			}); }
+			return true;
+		} });
+		return Object.assign(new EventEmitter(), { stdout: Stdout, stdin: Stdin, stderr: new EventEmitter(), kill() { P.Killed = true; } });
+	} });
+	const P = F.Instance;
+	try
+	{
+		F.Tabs[0].display();
+		const Local = F.Settings.find(S => S.Name === "本机 Codex").Controls[0];
+		assert.equal(Local.Text, "启动本机 Codex");
+		await Local.Click();
+		assert.match(P.Status, /ChatGPT 登录/);
+		assert.deepEqual(Processes[0].Calls.map(C => C.method), ["initialize", "initialized", "account/read", "model/list", "skills/list"]);
+		const Session = P.Session.Id;
+		const [Input, Connect] = F.Settings.find(S => S.Name === "OpenAI API Key").Controls;
+		assert.equal(Input.inputEl.type, "password");
+		Input.inputEl.value = Key;
+		await Connect.Click();
+		assert.equal(Input.inputEl.value, "");
+		assert.match(P.Status, /API Key/);
+		assert.equal(Processes[0].Killed, true);
+		assert.equal(Processes[1].Calls.filter(C => C.method === "account/login/start").length, 1);
+		await assert.rejects(P.start_local_codex("invalid-key"), /有效格式/);
+		assert.equal(Processes[1].Killed, false);
+		assert.equal(await P.request_completion({ Path: "scratch.md", Before: "", After: "" }, new AbortController().signal), "continued");
+		assert.equal(Processes[2].Calls.find(C => C.method === "turn/start").params.input[1].name, "math-writing");
+		assert.equal(Processes[2].Calls.filter(C => C.method === "account/login/start").length, 1);
+		await Local.Click();
+		assert.match(P.Status, /ChatGPT 登录/);
+		assert.equal(P.Session.Id, Session);
+		assert.ok([...F.Files.values(), ...F.Local.values(), ...F.Notices].every(Value => !Value.includes(Key)));
+	}
+	finally { P.onunload(); }
+});
+
+test("mobile settings use the paired bridge's API mode and never send an API login request", async () =>
+{
+	const Calls: string[] = [];
+	const Base = bootstrap_http();
+	const F = await mobile_fixture(async Params =>
+	{
+		const Method = Params.body ? JSON.parse(Params.body).method : "";
+		if(Method) { Calls.push(Method); }
+		return Method === "account/read" ? { status: 200, json: { account: { type: "apiKey" } } } : Base(Params);
+	});
+	try
+	{
+		F.Tabs[0].display();
+		assert.ok(!F.Settings.some(S => S.Name === "本机 Codex" || S.Name === "OpenAI API Key"));
+		F.Settings.find(S => S.Name === "远程服务地址").Controls[0].Change("https://bridge.example");
+		F.Settings.find(S => S.Name === "配对密钥").Controls[0].Change("fixture-pairing-token");
+		await F.Settings.find(S => S.Name === "连接电脑上的独立 Codex").Controls[0].Click();
+		assert.match(F.Settings.find(S => S.Name === "连接电脑上的独立 Codex").Desc, /已连接 \(API Key\)/);
+		assert.ok(Calls.includes("account/read") && Calls.includes("thread/start"));
+		assert.ok(!Calls.some(Method => Method.startsWith("account/login")));
+		assert.ok(F.Required.every(Name => !Name.startsWith("node:")));
+	}
+	finally { F.Instance.onunload(); }
+});
 
 function source_view(Fixture: Awaited<ReturnType<typeof mobile_fixture>>, Path: string, Text: string)
 {

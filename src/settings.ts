@@ -16,6 +16,40 @@ export class CodexSettings extends PluginSettingTab
 	{
 		this.containerEl.empty();
 		this.containerEl.createEl("h2", { text: "Codex Sidebar" });
+		if(!Platform.isMobileApp)
+		{
+			const StartLocal = async (Key?: string) =>
+			{
+				try { await this.Owner.start_local_codex(Key); }
+				catch(ErrorValue)
+				{
+					this.Owner.Status = error_text(ErrorValue);
+					this.Owner.refresh();
+				}
+				new Notice(this.Owner.Status);
+				this.display();
+			};
+			new Setting(this.containerEl).setName("本机 Codex")
+				.setDesc("使用电脑已有的 Codex 登录, 后台启动并连接 CLI.")
+				.addButton(Button => Button.setButtonText("启动本机 Codex").onClick(async () =>
+				{
+					Button.setDisabled(true);
+					try { await StartLocal(); }
+					finally { Button.setDisabled(false); }
+				}));
+			let KeyInput: HTMLInputElement;
+			new Setting(this.containerEl).setName("OpenAI API Key")
+				.setDesc("使用 OpenAI Platform 按量计费. 密钥仅在当前插件运行期间保留, 不写入设置.")
+				.addText(Text => { KeyInput = Text.inputEl; KeyInput.type = "password"; KeyInput.autocomplete = "off"; KeyInput.spellcheck = false; })
+				.addButton(Button => Button.setButtonText("使用 API Key").onClick(async () =>
+				{
+					const Key = KeyInput.value;
+					KeyInput.value = "";
+					Button.setDisabled(true);
+					try { await StartLocal(Key); }
+					finally { Button.setDisabled(false); }
+				}));
+		}
 		new Setting(this.containerEl).setName("环境检查").setDesc("检查完整运行包、登录、模型目录、math-writing、Obsidian 当前库与远程能力, 不自动发起推理或修改配置.").addButton(Button => Button.setButtonText("开始检查").onClick(async () =>
 		{
 			Button.setDisabled(true); try { await this.Owner.diagnose_environment(); } finally { Button.setDisabled(false); }
@@ -82,7 +116,9 @@ export class CodexSettings extends PluginSettingTab
 		{
 			new Setting(this.containerEl).setName("移动网络传输").setDesc("浏览器请求超时时可手动切换原生请求, 绕过网页 CORS 预检. 两种方式都不自动重发; 原生请求超时后可能仍在服务端进行.").addDropdown(Value => Value.addOption("browser", "浏览器 Fetch").addOption("native", "Obsidian 原生请求").setValue(RemoteTransport).onChange(Text => { RemoteTransport = Text as "browser" | "native"; }));
 		}
-		new Setting(this.containerEl).setName("连接独立远程 Agent").addButton(Button => Button.setButtonText("保存并连接").onClick(async () =>
+		new Setting(this.containerEl).setName("连接电脑上的独立 Codex")
+			.setDesc(`远程 API Key 由电脑上的桥配置. ${this.Owner.Remote.Enabled ? this.Owner.Status : ""}`.trim())
+			.addButton(Button => Button.setButtonText("保存并连接").onClick(async () =>
 		{
 			Button.setDisabled(true).setButtonText("连接中...");
 			try
@@ -160,7 +196,7 @@ export class CodexSettings extends PluginSettingTab
 				this.Owner.State.Settings.ObsidianCliPath = Value.trim();
 				await this.Owner.persist();
 			}));
-			new Setting(this.containerEl).setName("Codex 可执行文件").setDesc("留空时从 PATH 查找 codex.exe. 使用本机 Codex 登录.").addText(TextValue => TextValue
+			new Setting(this.containerEl).setName("Codex 可执行文件").setDesc("留空时从 PATH 或 Codex 应用缓存查找完整运行包.").addText(TextValue => TextValue
 				.setValue(this.Owner.State.Settings.CliPath).setPlaceholder("C:\\...\\codex.exe").onChange(async Value =>
 				{
 					this.Owner.State.Settings.CliPath = Value.trim();

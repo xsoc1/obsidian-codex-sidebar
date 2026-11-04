@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
-import { resolve_codex_executable } from "./launch";
+import { discover_app_codex, resolve_codex_executable } from "./launch";
 export { CodexConnection } from "./rpc";
 export { CompletionService } from "./completion";
 export { existsSync };
@@ -24,10 +24,11 @@ export function discover_cli(): Promise<string>
 {
 	return new Promise((Resolve, Reject) =>
 	{
-		execFile("where.exe", ["codex.exe"], { windowsHide: true, timeout: 5000 }, (ErrorValue, Output) =>
+		const Where = join(process.env.SystemRoot ?? "C:/Windows", "System32", "where.exe");
+		execFile(Where, ["$PATH:codex.exe"], { windowsHide: true, timeout: 5000 }, (ErrorValue, Output) =>
 		{
-			const Path = Output?.trim().split(/\r?\n/).find(Value => existsSync(Value));
-			if(ErrorValue || !Path)
+			const Path = (!ErrorValue && Output?.trim().split(/\r?\n/).find(Value => existsSync(Value))) || discover_app_codex(process.env.LOCALAPPDATA);
+			if(!Path)
 			{
 				Reject(new Error("未找到 codex.exe. 请在插件设置中填写本机 Codex 可执行文件路径"));
 			}

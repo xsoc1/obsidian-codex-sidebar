@@ -20,7 +20,9 @@ async function main(): Promise<void>
 		process.stdout.write("已生成私有配置与 connection-private.json. 配对密钥不打印到日志.\n");
 		return;
 	}
-	const Bridge = new RemoteBridge(JSON.parse(readFileSync(File, "utf8")) as BridgeConfig);
+	const ApiKey = process.env.CODEX_SIDEBAR_API_KEY;
+	delete process.env.CODEX_SIDEBAR_API_KEY;
+	const Bridge = new RemoteBridge(JSON.parse(readFileSync(File, "utf8")) as BridgeConfig, undefined, ApiKey);
 	const Port = await Bridge.listen();
 	process.stdout.write(`Independent iPad bridge listening on loopback:${Port}\n`);
 	for(const Event of ["SIGINT", "SIGTERM"] as const)

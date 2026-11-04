@@ -103,7 +103,7 @@ test("private bridge isolates devices, clamps permissions, replaces skill paths,
 		assert.equal(Resumed.body.thread.turns[0].status, "inProgress");
 		assert.ok(!Peers[0].calls.some(Value => Value.Method === "thread/read"));
 		assert.equal((await Rpc(0, "turn/start", { ...Params, effort: "high" }, Id)).status, 400);
-		for(const Method of ["config/write", "command/exec", "thread/list", "thread/resume", "thread/archive"])
+		for(const Method of ["account/login/start", "account/logout", "config/read", "configRequirements/read", "config/write", "command/exec", "thread/list", "thread/resume", "thread/archive"])
 		{
 			assert.equal((await Rpc(0, Method, {})).status, 400);
 		}

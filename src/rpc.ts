@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { resolve_codex_executable } from "./launch";
+import { ApiKeyEndpoint, openai_api_key } from "./api-auth";
 
 export interface RpcMessage
 {
@@ -29,7 +30,8 @@ export class JsonRpcPeer
 	constructor(
 		private Write: (Data: string) => void,
 		private OnMessage: (Message: RpcMessage) => void,
-		private OnProtocolError: (Error: Error) => void
+		private OnProtocolError: (Error: Error) => void,
+		private Secret?: string
 	)
 	{
 	}
@@ -95,7 +97,7 @@ export class JsonRpcPeer
 			let Message: RpcMessage;
 			try
 			{
-				Message = JSON.parse(Line);
+				Message = JSON.parse(this.Secret ? Line.replaceAll(this.Secret, "[redacted]") : Line);
 				if(!Message || typeof Message !== "object" || Array.isArray(Message))
 				{
 					throw new Error("Invalid envelope");
@@ -134,6 +136,7 @@ export class JsonRpcPeer
 	{
 		this.Closed = true;
 		this.Buffer = "";
+		this.Secret = undefined;
 		for(const Pending of this.Pending.values())
 		{
 			clearTimeout(Pending.Timer);
@@ -149,11 +152,21 @@ export class CodexConnection
 	private Peer: JsonRpcPeer;
 	private Closed = false;
 
-	constructor(CliPath: string, Cwd: string, OnMessage: (Message: RpcMessage) => void, OnClosed: (Error: Error) => void)
+	constructor(CliPath: string, Cwd: string, OnMessage: (Message: RpcMessage) => void, OnClosed: (Error: Error) => void, ApiKey?: string)
 	{
-		this.Process = spawn(resolve_codex_executable(CliPath), ["app-server", "--listen", "stdio://"],
+		const Args = ["app-server", "--listen", "stdio://"];
+		let Env: NodeJS.ProcessEnv | undefined;
+		if(ApiKey !== undefined)
+		{
+			ApiKey = openai_api_key(ApiKey);
+			Args.push("-c", 'cli_auth_credentials_store="ephemeral"', "-c", 'model_provider="openai"', "-c", `openai_base_url=${JSON.stringify(ApiKeyEndpoint)}`);
+			Env = Object.fromEntries(Object.entries(process.env).filter(([Name]) =>
+				!/^(OPENAI_API_KEY|CODEX_API_KEY|CODEX_ACCESS_TOKEN|CODEX_SIDEBAR_API_KEY|OPENAI_BASE_URL)$/i.test(Name)));
+		}
+		this.Process = spawn(resolve_codex_executable(CliPath), Args,
 		{
 			cwd: Cwd,
+			env: Env,
 			windowsHide: true,
 			shell: false,
 			stdio: "pipe"
@@ -161,7 +174,8 @@ export class CodexConnection
 		this.Peer = new JsonRpcPeer(
 			Data => this.Process.stdin.write(Data),
 			OnMessage,
-			ErrorValue => this.fail(ErrorValue, OnClosed)
+			ErrorValue => this.fail(ErrorValue, OnClosed),
+			ApiKey
 		);
 		this.Process.stdout.on("data", Chunk => this.Peer.feed(Chunk));
 		// Drain stderr without persisting credentials or private diagnostics.

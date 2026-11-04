@@ -18,6 +18,7 @@ import { restore_sessions } from "./sessions";
 import { HistoryReadTool, read_history_page } from "./history-budget";
 import { tool_read_reference, type SourceReference } from "./sources";
 import { StreamCheckpoints } from "./runtime/checkpoints";
+import { authenticate_api_key, openai_api_key } from "./api-auth";
 
 export interface BridgeConfig
 {
@@ -30,7 +31,7 @@ export interface BridgeConfig
 	Clients: { Id: string; Hash: string }[];
 }
 
-type Factory = (Cli: string, Cwd: string, Message: (Value: RpcMessage) => void, Closed: (ErrorValue: Error) => void) => RpcConnection;
+type Factory = (Cli: string, Cwd: string, Message: (Value: RpcMessage) => void, Closed: (ErrorValue: Error) => void, ApiKey?: string) => RpcConnection;
 export const token_hash = (Token: string): string => createHash("sha256").update(Token).digest("hex");
 const bounded_string = (Value: unknown, Limit: number): string =>
 {
@@ -74,7 +75,7 @@ class DeviceAgent
 	private SnapshotCursors = new Map<number, number>();
 	private AgentInstance = randomUUID();
 
-	constructor(private Config: BridgeConfig, readonly Id: string, private Create: Factory)
+	constructor(private Config: BridgeConfig, readonly Id: string, private Create: Factory, private ApiKey?: string)
 	{
 		if(!/^[a-z0-9_-]{8,80}$/i.test(Id))
 		{
@@ -116,9 +117,10 @@ class DeviceAgent
 				for(const O of this.Store.Data.Operations.filter(O => ["received", "running"].includes(O.Status))) { this.Store.put_operation({ ...O, Status: "submission-unknown", Error: "独立 CLI 已断开, 保留接收凭证与回合身份待核对, 不自动重发" }); }
 				this.Connection = null; this.Ready = null; this.Threads.clear();
 				this.event({ method: "bridge/disconnected", params: { message: ErrorValue.message } });
-			});
+			}, this.ApiKey);
 			await this.Connection.request("initialize", { clientInfo: { name: "obsidian_ipad_isolated", version: ProductVersion }, capabilities: { experimentalApi: true } });
 			this.Connection.send({ method: "initialized", params: {} });
+			if(this.ApiKey) { await authenticate_api_key(this.Connection, this.Config.Cwd, this.ApiKey); }
 			let Cursor: string | null = null;
 			this.Models = [];
 			do
@@ -448,7 +450,7 @@ class DeviceAgent
 			const Controller = new AbortController(); this.Jobs.set(Job, Controller);
 			try
 			{
-				return { text: await this.Completion.complete(this.Config.Cli, this.Config.Cwd, Input, Options, Controller.signal, await this.skill()) };
+				return { text: await this.Completion.complete(this.Config.Cli, this.Config.Cwd, Input, Options, Controller.signal, await this.skill(), this.ApiKey) };
 			}
 			finally
 			{
@@ -668,12 +670,13 @@ export class RemoteBridge
 	readonly ServerId = randomUUID();
 	private Agents = new Map<string, DeviceAgent>();
 	readonly Http;
-	constructor(private Config: BridgeConfig, private Create: Factory = (Cli, Cwd, Message, Closed) => new CodexConnection(Cli, Cwd, Message, Closed))
+	constructor(private Config: BridgeConfig, private Create: Factory = (Cli, Cwd, Message, Closed, Key) => new CodexConnection(Cli, Cwd, Message, Closed, Key), private ApiKey?: string)
 	{
 		if(!Number.isInteger(Config.Port) || Config.Port < 0 || Config.Port > 65535 || Config.Clients.length < 1 || Config.Clients.length > 8 || Config.Clients.some(Client => !/^[0-9a-f]{64}$/.test(Client.Hash)))
 		{
 			throw new Error("桥配置无效");
 		}
+		if(ApiKey !== undefined) { this.ApiKey = openai_api_key(ApiKey); }
 		this.Http = createServer((Request, Response) => void this.serve(Request, Response));
 	}
 
@@ -703,7 +706,7 @@ export class RemoteBridge
 			let Agent = this.Agents.get(Client.Id);
 			if(!Agent)
 			{
-				Agent = new DeviceAgent(this.Config, Client.Id, this.Create); this.Agents.set(Client.Id, Agent);
+				Agent = new DeviceAgent(this.Config, Client.Id, this.Create, this.ApiKey); this.Agents.set(Client.Id, Agent);
 			}
 			const Url = new URL(Request.url ?? "/", "http://127.0.0.1");
 			let Body: any = {};

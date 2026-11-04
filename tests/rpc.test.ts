@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JsonRpcPeer, type RpcMessage } from "../src/rpc";
+import { ApiKeyEndpoint, authenticate_api_key, openai_api_key } from "../src/api-auth";
 
 test("JSONL preserves split UTF-8, coalesced events, and server request IDs", async () =>
 {
@@ -69,5 +70,42 @@ test("timeout does not automatically resend a potentially accepted turn", async 
 	const Peer = new JsonRpcPeer(Data => Output.push(Data), () => {}, () => {});
 	await assert.rejects(Peer.request("turn/start", {}, 10), /结果可能未知/);
 	assert.equal(Output.length, 1);
+	Peer.close();
+});
+
+test("API credentials are sent only after verifying temporary storage, managed requirements, and the provider", async () =>
+{
+	const Key = "sk-synthetic-policy-fixture";
+	const SafeConfig = { cli_auth_credentials_store: "ephemeral", model_provider: "openai", openai_base_url: ApiKeyEndpoint };
+	assert.equal(openai_api_key(" " + Key + "\n"), Key);
+	assert.throws(() => openai_api_key("fake\nkey"), /有效格式/);
+	for(const [Config, Requirements] of [
+		[{ ...SafeConfig, cli_auth_credentials_store: "file" }, null],
+		[{ ...SafeConfig, openai_base_url: "https://elsewhere.example/v1" }, null],
+		[SafeConfig, { cliAuthCredentialsStore: "keyring" }],
+		[SafeConfig, { allowedLoginMethods: ["chatgpt"] }]
+	])
+	{
+		const Calls: string[] = [];
+		await assert.rejects(authenticate_api_key({ async request(Method)
+		{
+			Calls.push(Method);
+			return Method === "config/read" ? { config: Config } : { requirements: Requirements };
+		} }, "/vault", Key), /临时 API Key 模式|不允许 API Key/);
+		assert.deepEqual(Calls, ["config/read", "configRequirements/read"]);
+	}
+});
+
+test("API credentials echoed in notifications and errors are removed before reaching consumers", async () =>
+{
+	const Key = "sk-synthetic-redaction-fixture";
+	const Events: RpcMessage[] = [];
+	const Peer = new JsonRpcPeer(() => {}, Event => Events.push(Event), ErrorValue => { throw ErrorValue; }, Key);
+	const Request = Peer.request("account/login/start", {});
+	const Error = assert.rejects(Request, { message: "failed: [redacted]" });
+	Peer.feed(Buffer.from(JSON.stringify({ method: "warning", params: { message: Key } }) + "\n"));
+	Peer.feed(Buffer.from(JSON.stringify({ id: 1, error: { code: -1, message: "failed: " + Key } }) + "\n"));
+	await Error;
+	assert.equal(Events[0].params.message, "[redacted]");
 	Peer.close();
 });

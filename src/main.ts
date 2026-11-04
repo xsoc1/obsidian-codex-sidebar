@@ -56,6 +56,7 @@ import { SnapshotQueue, StreamCheckpoints } from "./runtime/checkpoints";
 import { OperationViewIndex } from "./runtime/operation-view";
 import { MessageIndex } from "./runtime/message-index";
 import { prepare_conflict_resolution, pending_conflicts, preserve_durable_resolved_messages } from "./sync/conflicts";
+import { authenticate_api_key, openai_api_key } from "./api-auth";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -352,6 +353,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private RemoteKey = "";
 	private RemoteStatePath = "";
 	private Desktop: typeof import("./desktop") | null = null;
+	private LocalApiKey: string | undefined;
 	private HostInfo: { cwd: string; vault: string; cli: string; client: string; mathWritingVersion?: string; pdfPageImages?: number } | null = null;
 	private Connecting: Promise<void> | null = null;
 	private LoadingSkill: Promise<SkillInput> | null = null;
@@ -692,8 +694,10 @@ export default class CodexSidebarPlugin extends Plugin
 				Signal.removeEventListener("abort", Cancel);
 			}
 		}
+		const Generation = this.Generation;
 		const Cli = this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
-		return this.CompletionWorker!.complete(Cli, this.host_cwd(), Input, Options, Signal, Skill);
+		if(Signal.aborted || Generation !== this.Generation) { throw new Error("补全已取消"); }
+		return this.CompletionWorker!.complete(Cli, this.host_cwd(), Input, Options, Signal, Skill, this.LocalApiKey);
 	}
 
 	async ensure_math_skill(): Promise<SkillInput>
@@ -936,16 +940,28 @@ export default class CodexSidebarPlugin extends Plugin
 
 	async set_remote_mode(Enabled: boolean): Promise<void>
 	{
-		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting || this.NoteSessions?.Switching)
+		this.check_connection_change();
+		await this.switch_remote_mode(Enabled);
+	}
+
+	private check_connection_change(): void
+	{
+		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting || this.NoteSessions?.Switching || this.Connecting)
 		{
-			throw new Error("请先停止当前回复再切换连接");
+			throw new Error("请等待当前操作完成或停止回复后再切换连接");
 		}
+	}
+
+	private async switch_remote_mode(Enabled: boolean): Promise<void>
+	{
 		await this.persist(false);
 		this.Generation++;
 		this.close_connection();
+		this.Inline.clear();
 		this.CompletionWorker?.close();
 		this.Connecting = null;
 		this.Remote.Enabled = Enabled || Platform.isMobileApp;
+		if(this.Remote.Enabled) { this.LocalApiKey = undefined; }
 		this.RemoteStatePath = this.state_path(true);
 		this.save_remote_config();
 		const LegacyStatePath = `${this.manifest.dir}/${this.Remote.Enabled ? "remote-" + this.Remote.CacheId + "-state.json" : "data.json"}`;
@@ -970,14 +986,40 @@ export default class CodexSidebarPlugin extends Plugin
 		await this.persist();
 	}
 
+	async start_local_codex(Key?: string): Promise<void>
+	{
+		if(Platform.isMobileApp) { throw new Error("移动版请连接电脑上的独立 Codex 服务"); }
+		const ApiKey = Key === undefined ? undefined : openai_api_key(Key);
+		this.check_connection_change();
+		this.ChatPreparing = true;
+		this.StartedAt = Date.now();
+		this.Activity = "准备本机连接";
+		this.refresh();
+		try
+		{
+			this.Inline.clear();
+			if(this.Remote.Enabled) { await this.switch_remote_mode(false); }
+			this.Generation++;
+			this.close_connection();
+			this.CompletionWorker?.close();
+			this.Models = [];
+			this.CatalogError = "";
+			this.LocalApiKey = ApiKey;
+			await this.ensure_connection();
+		}
+		finally
+		{
+			this.ChatPreparing = false;
+			this.Activity = "";
+			this.refresh();
+		}
+	}
+
 	async configure_remote(Url: string, Token: string, Transport = this.Remote.Transport ?? "browser"): Promise<void>
 	{
 		if(Transport !== "browser" && Transport !== "native") { throw new Error("未知网络传输方式"); }
 		remote_url(Url);
-		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting)
-		{
-			throw new Error("请先停止当前回复再更换远程连接");
-		}
+		this.check_connection_change();
 		await this.persist(false);
 		this.close_connection();
 		if(this.Remote.Url !== Url || this.Remote.Token !== Token)
@@ -1035,6 +1077,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.refresh();
 		const Work = (async () =>
 		{
+			const ApiKey = this.Remote.Enabled ? undefined : this.LocalApiKey;
 			const CliPath = this.Remote.Enabled ? "" : this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
 			if(Generation !== this.Generation || this.Unloaded)
 			{
@@ -1074,7 +1117,7 @@ export default class CodexSidebarPlugin extends Plugin
 				};
 			const Connection: RpcConnection = this.Remote.Enabled
 				? new RemoteConnection((Path, Method, Body) => this.remote_http(Path, Method, Body), this.Remote, OnMessage, OnClosed, () => this.save_remote_config())
-				: new this.Desktop!.CodexConnection(CliPath, this.host_cwd(), OnMessage, OnClosed);
+				: new this.Desktop!.CodexConnection(CliPath, this.host_cwd(), OnMessage, OnClosed, ApiKey);
 			this.Connection = Connection;
 			if(Connection instanceof RemoteConnection)
 			{
@@ -1093,7 +1136,8 @@ export default class CodexSidebarPlugin extends Plugin
 			}
 			await Connection.request("initialize", { clientInfo: { name: "obsidian_codex_sidebar", title: "Obsidian Codex Sidebar", version: this.manifest.version }, capabilities: { experimentalApi: true } });
 			Connection.send({ method: "initialized", params: {} });
-			const Account = await Connection.request("account/read", { refreshToken: false });
+			if(ApiKey) { await authenticate_api_key(Connection, this.host_cwd(), ApiKey); }
+			const Account = ApiKey ? { account: { type: "apiKey" } } : await Connection.request("account/read", { refreshToken: false });
 			if(Generation !== this.Generation || this.Unloaded)
 			{
 				throw new Error("连接已取消");
@@ -1102,7 +1146,7 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				throw new Error("本机 Codex 尚未登录. 请先在 Codex 应用或 CLI 中登录");
 			}
-			const Legacy = this.State.Sessions.filter(Value => Value.LegacyThreadId);
+			const Legacy = ApiKey ? [] : this.State.Sessions.filter(Value => Value.LegacyThreadId);
 			const Archived = new Set<string>();
 			if(Legacy.length)
 			{
@@ -1157,7 +1201,8 @@ export default class CodexSidebarPlugin extends Plugin
 			{
 				throw new Error("连接已取消");
 			}
-			this.Status = `${this.Remote.Enabled ? "独立远程已连接" : "已连接"} (${Account.account.type === "chatgpt" ? "ChatGPT 登录" : Account.account.type})`;
+			const Auth = Account.account.type === "chatgpt" ? "ChatGPT 登录" : Account.account.type === "apiKey" ? "API Key" : Account.account.type;
+			this.Status = `${this.Remote.Enabled ? "独立远程已连接" : "本机 Codex 已连接"} (${Auth})`;
 			await this.ensure_math_skill().catch(() => {});
 			this.refresh();
 			if(Connection instanceof RemoteConnection)
@@ -1932,6 +1977,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Checkpoints.flush(); this.Checkpoints.close();
 		this.Runtime.close();
 		this.Unloaded = true;
+		this.LocalApiKey = undefined;
 		void this.Edits?.Store.close();
 		this.NoteSessions?.dispose();
 		this.Generation++;
