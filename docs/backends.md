@@ -49,7 +49,9 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 
 ## 2.0.0-beta.8 验证
 
-- 使用受控目录与响应验证 DeepSeek 按模型读取档次并在修改预览请求发送 `max`, Gemini 的确切档次进入保存的会话操作与发出的请求. 单测验证关闭、默认、未知模型、无效档次及旧 Go 路径. 未使用真实 API Key 请求推理, 未在 iPad 真机测试.
+- `npm run build` 和 318 项测试通过. 使用受控目录与响应验证 DeepSeek 按模型读取档次并在修改预览请求发送 `max`, Gemini 的确切档次进入保存的会话操作与发出的请求. 单测验证关闭、默认、未知模型、无效档次及旧 Go 路径. 未使用真实 API Key 请求推理, 未在 iPad 真机测试.
+- GitHub Actions 部分故障期间, Windows「数学」库先安装由 `55cabc38dd211b2321242a46d8f7671ca1ce40f3` 构建的本地校验包. 已安装版原生选择框使用隔离数据核对 DeepSeek、Gemini 和未知别名; 本机 Codex 恢复连接. 31 个会话、250 条消息、11 条修改记录、10 条写入计划、19 条发送操作及编辑器内容保持一致. 独立桥未改动.
+- [Windows/Ubuntu CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41865681786) 和 [发布任务](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41866742028) 均通过. [公开预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.8) 回读核对 7 个资产与两个 ZIP, 四个 Windows 安装程序文件与公开资产逐字节一致. 最新正式版仍为 1.1.0.
 
 ## 2.0.0-beta.7 验证
 
