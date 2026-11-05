@@ -44,3 +44,9 @@ PDF 文字、页图和公式区域进入现有聊天、回答追问及审核后 
 本轮原生 PDF.js/canvas 检查同页整图 1236×1600、局部 1600×1179, 总两张、版本一致, 局部渲染像素倍率约 3.01. 已查看原创上下标、负号、分式和积分界; 不当作 OCR 或任意数学识别认证. 远程图像传输、能力缺失、缺图和重发有自动化回归. **本候选没有 iPad PDF 真机验收**; 细分证据见 [当前记录](reliability-suite.md).
 
 采用宿主内置 `loadPdfJs`, 前端不静态引入 Node/Electron. API 参考为 [PDF.js 公共 API](https://mozilla.github.io/pdf.js/api/draft/module-pdfjsLib.html) 与 [官方 app-server](https://learn.chatgpt.com/docs/app-server); 实际支持仍以本机接口和能力校验为准.
+
+### 2.0.0-beta.10 直接框选验证
+
+- 本地构建和 323 项测试通过; [Windows/Ubuntu CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41958530698) 通过. `node scripts/check-pdf-box.mjs` 使用 `CODEX_LAYOUT_BROWSER` 指定 Chromium, 可复验鼠标、320 px 触控布局、取消、跨页拒绝、拖动中页面滚动失效和退出后普通指针事件.
+- Windows 原生宿主核对实际 PDF 页对象和视口结构; 在隔离 DOM 中用安装版入口、真实 PDF.js 5.3.34 和原创扫描 PDF 获得 90° 的 1600×1142 JPEG, 只附一张图并揭示侧栏, 没有连接或提交请求. 日常插件重载后, 焦点留在侧栏也能识别已经打开的 PDF. iPad 真机未测.
+- `92d7da1` 已装入 Windows「数学」并通过 [GitHub 发布流程](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41958676431) 发布为 [beta.10](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.10). 已读回公开的 7 个资产, 安装的四个程序文件与发布版一致, 会话、笔记关联和编辑器内容保留. 独立桥未改, 正式版通道仍为 1.1.0.
