@@ -2,7 +2,7 @@
 
 ## Current scope
 
-- 2026-11-05: User reported that expanding Context displaced the other controls and authorized completing, installing and releasing the redesign. beta.11 uses a temporary panel over the transcript, with a fixed trigger, outside/Escape dismissal and PDF preview reopening. Preserve composer, conversation scroll, capture, and attachment state. The independent bridge is unchanged.
+- 2026-11-05: User reported that expanding Context displaced other controls and authorized installing and releasing the redesign. **2.0.0-beta.11 is installed in Windows “数学” and published for BRAT.** Context is a temporary panel over the transcript, with a fixed trigger, outside/Escape dismissal and PDF preview reopening. Drafts, conversation scroll and attachment survive dismissal. The bridge is unchanged. See [validation](docs/releases/2.0.0-beta.11.md#验证).
 
 - 2026-11-05: User authorized implementing, installing and publishing the independent **框选到 Codex** entry. **2.0.0-beta.10 is installed in Windows “数学” and published for BRAT.** Releasing the rectangle opens a local, unsent crop in the same orientation; existing PDF/PDF++ paths and the bridge are unchanged. See [usage and validation](docs/pdf-support.md#200-beta10-直接框选验证).
 
