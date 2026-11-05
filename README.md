@@ -4,7 +4,7 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
-**开发候选：2.0.0-beta.13，尚未安装或发布。** 新增统一图文/引用材料、真实 API 流式与部分结果续写、命名连接切换、可靠保存与因果冲突裁定。操作、逐项验收、性能、迁移和剩余真机检查见 [本轮交付记录](docs/reliability-t01-t12.md)。日常 Windows 插件读回仍为 beta.12，独立远程桥未改动。
+**2.0.0-beta.13 已安装到 Windows「数学」库，独立远程桥已升级；GitHub 预发布进行中。** 新增统一图文/引用材料、API 流式与部分结果续写、命名连接切换、可靠保存与因果冲突裁定。操作、逐项验收、性能、迁移和剩余真机检查见 [本轮交付记录](docs/reliability-t01-t12.md)。
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -38,7 +38,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.12` 属于预发布版本, 在 BRAT 中需指定此版本. 已在使用 beta.2 独立桥的用户可以保留原桥; 从旧版迁移协议 2 请参阅 [升级说明](docs/migration.md).
+`2.0.0-beta.13` 属于预发布版本, 在 BRAT 中需指定此版本. 使用本版因果冲突裁定须先升级独立桥, 再升级同配对的客户端; 私有 HTTPS 地址与配对密钥不变. 从旧版迁移及代码回退请参阅 [升级说明](docs/migration.md).
 
 
 ### iPad
