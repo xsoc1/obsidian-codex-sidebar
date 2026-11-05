@@ -5,6 +5,7 @@ import { answer_quote, answer_status, bind_answer_blocks, quote_blocks } from ".
 import { followup_summary } from "./followup";
 import type { ChatMessage } from "./history";
 import { sidebar_panel, reveal_sidebar_panel, type SidebarPanel } from "./sidebar-layout";
+import { SidebarContextPanel } from "./sidebar-context-panel";
 import { observe_sidebar_footer } from "./sidebar-footer";
 import { selected_model, fast_tier, context_usage } from "./controls";
 import { structured_task, question_label } from "./edit/presentation";
@@ -53,8 +54,7 @@ export class CodexView extends ItemView
 	private DraftStatusKey = "";
 	private NavigationSummary: HTMLElement | null = null;
 	private ComposePanel: SidebarPanel | null = null;
-	private ContextSummary: HTMLElement | null = null;
-	private ContextPanel: SidebarPanel | null = null;
+	private ContextPanel: SidebarContextPanel | null = null;
 	private PdfBoxButton!: HTMLButtonElement;
 	private PdfLinkButton!: HTMLButtonElement;
 	private OptionsSummary: HTMLElement | null = null;
@@ -121,6 +121,7 @@ export class CodexView extends ItemView
 		this.DraftStore = null; this.DraftRevision = 0; this.DraftStatusKey = "";
 		this.Opened = true;
 		const Root = this.contentEl;
+		this.ContextPanel?.hide();
 		Root.empty();
 		this.ConflictsKey = "";
 		this.SessionOptionsSource = undefined; this.ContextValue = undefined; this.QuoteValue = undefined;
@@ -149,21 +150,23 @@ export class CodexView extends ItemView
 		this.ConflictsElement = Navigation.Body.createDiv({ cls: "codex-sync-conflicts" });
 		this.StatusElement = Root.createDiv({ cls: "codex-status" });
 		this.SelectionPreview = new SelectionPreview(Root, () => this.Owner.clear_context());
-		const ContextPanel = Panel(Toolbar, "codex-context-tools", "上下文");
+		this.CompletionElement = Root.createDiv({ cls: "codex-completion-proposal" });
+		const Reading = Root.createDiv({ cls: "codex-reading-area" });
+		const ContextPanel = new SidebarContextPanel(Toolbar, Reading);
 		this.ContextPanel = ContextPanel;
-		this.ContextSummary = ContextPanel.Summary;
+		this.ContextElement = ContextPanel.Body.createDiv({ cls: "codex-context" });
 		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
 		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
-		this.button(ContextBar, "选择 PDF 页", () => this.Owner.open_pdf());
-		this.PdfBoxButton = this.button(ContextBar, "框选到 Codex", () => this.Owner.open_pdf_box());
+		const Leave = (Action: () => void) => () => { ContextPanel.hide(true); Action(); };
+		this.button(ContextBar, "选择 PDF 页", Leave(() => this.Owner.open_pdf()));
+		this.PdfBoxButton = this.button(ContextBar, "框选到 Codex", Leave(() => this.Owner.open_pdf_box()));
 		this.PdfBoxButton.hidden = !this.Owner.can_capture_pdf_box();
-		this.PdfLinkButton = this.button(ContextBar, "导入 PDF++ 选区链接", () => this.Owner.open_pdf_link());
+		this.PdfLinkButton = this.button(ContextBar, "导入 PDF++ 选区链接", Leave(() => this.Owner.open_pdf_link()));
 		this.PdfLinkButton.hidden = !pdf_plus_active(this.app);
-		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
-		this.button(ContextBar, "检查证明", () => void this.Owner.ask_selection(ProofPrompt));
-		this.ContextElement = ContextPanel.Body.createDiv({ cls: "codex-context" });
-		this.CompletionElement = Root.createDiv({ cls: "codex-completion-proposal" });
-		this.MessagesElement = Root.createDiv({ cls: "codex-messages", attr: { role: "log" } });
+		const Questions = ContextPanel.Body.createDiv({ cls: "codex-context-actions codex-context-questions" });
+		this.button(Questions, "解释选区", Leave(() => void this.Owner.ask_selection(ExplainPrompt)));
+		this.button(Questions, "检查证明", Leave(() => void this.Owner.ask_selection(ProofPrompt)));
+		this.MessagesElement = Reading.createDiv({ cls: "codex-messages", attr: { role: "log" } });
 		accessible_name(this.MessagesElement, "Codex 对话");
 		this.ActivityElement = Root.createDiv({ cls: "codex-activity", attr: { role: "status", "aria-live": "polite" } });
 		this.ActivityElement.createSpan({ cls: "codex-spinner", attr: { "aria-hidden": "true" } });
@@ -557,7 +560,7 @@ export class CodexView extends ItemView
 		this.PdfLinkButton.hidden = !pdf_plus_active(this.app);
 		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
 		this.refresh_compose_summary();
-		this.ContextSummary?.setText(Snapshot ? `上下文 · ${Snapshot.Kind}${Snapshot.Truncated ? " (已截断)" : ""}` : "上下文");
+		this.describe_context();
 		const ContextKey = this.ContextValue === Snapshot ? this.ContextKey : JSON.stringify(Snapshot);
 		this.ContextValue = Snapshot;
 		if(ContextKey !== this.ContextKey)
@@ -565,19 +568,23 @@ export class CodexView extends ItemView
 			this.ContextKey = ContextKey; this.ContextElement.empty();
 			if(Snapshot)
 			{
-				const Label = this.ContextElement.createEl("label", { cls: "codex-context-label" });
+				const Attachment = this.ContextElement.createDiv({ cls: "codex-context-attachment" });
+				const Label = Attachment.createEl("label", { cls: "codex-context-label" });
 				const Checkbox = Label.createEl("input", { type: "checkbox" });
 				Checkbox.checked = this.Owner.State.Settings.AttachContext;
 				Checkbox.addEventListener("change", () =>
 				{
 					this.Owner.State.Settings.AttachContext = Checkbox.checked;
 					this.SelectionPreview.update(this.Owner.Capture.Snapshot, Checkbox.checked);
+					this.describe_context();
 					void this.Owner.persist();
 				});
-				Label.createSpan({ text: `附带 ${Snapshot.Kind} (${Snapshot.Mode}, ${Snapshot.Mapping})` });
+				Label.createSpan({ text: "附带到提问" });
+				this.button(Attachment, "清除上下文", () => this.Owner.clear_context());
 				const Details = this.ContextElement.createEl("details");
 				Details.createEl("summary", { text: `${Snapshot.Path}${Snapshot.LineStart !== null ? `:${Snapshot.LineStart + 1}` : ""}` });
 				Details.createDiv({ text: Snapshot.Heading || "未定位标题", cls: "codex-context-heading" });
+				Details.createDiv({ text: `${Snapshot.Kind} · ${Snapshot.Mode} · ${Snapshot.Mapping}` });
 				if(Snapshot.Text) { Details.createEl("pre", { text: Snapshot.Text }); }
 				pdf_preview(Details, Snapshot, this.Owner.PdfImages);
 				if(Snapshot.PdfTarget?.Kind === "rect") { Details.open = true; }
@@ -585,14 +592,10 @@ export class CodexView extends ItemView
 				{
 					Details.createDiv({ text: "内容已截断到上下文长度限制" });
 				}
-				this.button(this.ContextElement, "清除上下文", () =>
-				{
-					this.Owner.clear_context();
-				});
 			}
 			else
 			{
-				this.ContextElement.setText("在笔记中选中文字, 或捕获当前阅读位置");
+				this.ContextElement.setText("尚未捕获上下文");
 			}
 		}
 		const ContextCheckbox = this.ContextElement.querySelector<HTMLInputElement>(".codex-context-label input");
@@ -609,7 +612,13 @@ export class CodexView extends ItemView
 		void this.Owner.NoteSessions?.flush();
 	}
 
-	reveal_pdf_context(): void { reveal_sidebar_panel(this.ContextPanel); }
+	private describe_context(): void
+	{
+		const Snapshot = this.Owner.Capture.Snapshot;
+		this.ContextPanel?.describe(Snapshot && this.Owner.State.Settings.AttachContext ? `${Snapshot.Kind}${Snapshot.Truncated ? " · 已截断" : ""}` : "未附带");
+	}
+
+	reveal_pdf_context(): void { this.ContextPanel?.show(true); }
 
 	forget_session(Id: string): void
 	{
@@ -890,6 +899,7 @@ export class CodexView extends ItemView
 	async onClose(): Promise<void>
 	{
 		this.save_draft();
+		this.ContextPanel?.hide(); this.ContextPanel = null;
 		this.ReleaseFooter?.(); this.ReleaseFooter = null;
 		this.Opened = false;
 		this.Version++;

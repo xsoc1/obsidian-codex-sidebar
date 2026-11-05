@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-05: User reported that expanding Context displaced the other controls and authorized completing, installing and releasing the redesign. beta.11 uses a temporary panel over the transcript, with a fixed trigger, outside/Escape dismissal and PDF preview reopening. Preserve composer, conversation scroll, capture, and attachment state. The independent bridge is unchanged.
+
 - 2026-11-05: User authorized implementing, installing and publishing the independent **框选到 Codex** entry. **2.0.0-beta.10 is installed in Windows “数学” and published for BRAT.** Releasing the rectangle opens a local, unsent crop in the same orientation; existing PDF/PDF++ paths and the bridge are unchanged. See [usage and validation](docs/pdf-support.md#200-beta10-直接框选验证).
 
 - 2026-11-05: User requested the optional PDF++ integration and authorized Windows “数学” installation and GitHub publication. **2.0.0-beta.9 is installed and published.** It detects enabled PDF++ at runtime, captures single-page selection as text or imports an explicit text/rectangle link, and offers version-checked navigation. Without PDF++, the original capture stays in place; recorded rectangle links open at page level. The independent bridge stays unchanged. See [PDF usage](docs/pdf-support.md) and [validation](docs/pdf-plus-integration.md#200-beta9-实施与发布).

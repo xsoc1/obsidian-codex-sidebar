@@ -7,6 +7,7 @@ import { EditStore } from "../src/edit/store";
 import { render_edit } from "../src/edit/panel";
 import { SelectionPreview } from "../src/selection-preview";
 import { sidebar_panel } from "../src/sidebar-layout";
+import { SidebarContextPanel } from "../src/sidebar-context-panel";
 
 function check(Value: unknown, Message: string): asserts Value
 {
@@ -35,10 +36,13 @@ export default class EditProbe extends Plugin
 			check(!Selection.Element.hidden && Selection.Element.open && Selection.Element.querySelector("pre")?.textContent === Paragraph, "Native selected source did not display");
 			Selection.update({ ...Source, Mapping: "源块", SelectedText: "渲染后的矩阵", Truncated: true }, false);
 			check(Selection.Element.textContent?.includes(Paragraph) && Selection.Element.textContent.includes("未附带") && Selection.Element.textContent.includes("已截断"), "Reading formula/raw selection lost");
-			for(const Name of ["codex-navigation", "codex-context-tools", "codex-options", "codex-send-tools"])
+			for(const Name of ["codex-navigation", "codex-options", "codex-send-tools"])
 			{
 				const Panel = sidebar_panel(Root, Name, Name, false); check(Panel.Details && Panel.Details.open === (Name === "codex-send-tools"), "Desktop folding default failed"); Panel.Details.open = !Panel.Details.open;
 			}
+			const ContextPanel = new SidebarContextPanel(Root, Root);
+			check(ContextPanel.Trigger.getAttribute("aria-expanded") === "false", "Context panel opens by default");
+			ContextPanel.show(); check(ContextPanel.Trigger.getAttribute("aria-expanded") === "true", "Context panel did not open"); ContextPanel.hide();
 			check(Selection.Element.parentElement === Root, "Selection hidden in collapsed controls");
 			Root.empty();
 			const Host = new ObsidianWriteHost(this.app), Local = new Map<string, string>();

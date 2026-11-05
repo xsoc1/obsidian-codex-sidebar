@@ -50,13 +50,14 @@ try
 	for(const Width of [320, 420, 540])
 	{
 		await call("Emulation.setDeviceMetricsOverride", { width: Width, height: 720, deviceScaleFactor: 1, mobile: false });
-		const Result = await call("Runtime.evaluate", { expression: `document.body.className='theme-dark';run_simplified_sidebar_case(true,${Width})`, awaitPromise: true, returnByValue: true });
+		const Result = await call("Runtime.evaluate", { expression: `document.body.className='${Width === 320 ? "is-mobile is-tablet theme-light" : "theme-dark"}';run_simplified_sidebar_case(true,${Width})`, awaitPromise: true, returnByValue: true });
 		assert.ok(!Result.exceptionDetails, JSON.stringify(Result.exceptionDetails));
+		assert.ok(Result.result.value.contextInteraction, JSON.stringify(Result.result.value));
 		if(Width === 420)
 		{
 			await call("Runtime.evaluate", { expression: `(()=>{
 				const root=document.getElementById('simplified-sidebar-fixture');
-				for(const cls of ['codex-navigation','codex-context-tools'])root.querySelector('.'+cls).open=false;
+				root.querySelector('.codex-navigation').open=false;
 				root.querySelector('.codex-options>summary').textContent='模型与选项 · gpt-6.1-sol / xhigh';
 				root.querySelector('textarea').value='可以再解释一下这一步吗？';
 				const body=root.querySelector('.codex-message-body');body.replaceChildren();
@@ -71,6 +72,9 @@ try
 		const Shot = await call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: Width, height: 720, scale: 1 } });
 		writeFileSync(join(Directory, `simplified-sidebar-${Width}.png`), Buffer.from(Shot.data, "base64"));
 		if(Width === 420) { writeFileSync(join(Directory, "sidebar-glass.png"), Buffer.from(Shot.data, "base64")); }
+		await call("Runtime.evaluate", { expression: "document.querySelector('#simplified-sidebar-fixture .codex-navigation').open=false;document.querySelector('#simplified-sidebar-fixture .codex-context-trigger').dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}))" });
+		const ContextShot = await call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: Width, height: 720, scale: 1 } });
+		writeFileSync(join(Directory, `context-open-${Width}.png`), Buffer.from(ContextShot.data, "base64"));
 		await call("Runtime.evaluate", { expression: "document.getElementById('simplified-sidebar-fixture').remove()" });
 	}
 }

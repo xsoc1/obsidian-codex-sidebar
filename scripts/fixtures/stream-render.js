@@ -15,7 +15,7 @@ window.require = Name =>
 };
 HTMLElement.prototype.createEl = function(Tag, Options = {})
 {
-	const Element = document.createElement(Tag); if(Options.cls) { Element.className = Options.cls; } if(Options.text) { Element.textContent = Options.text; } if(Options.value !== undefined) { Element.value = Options.value; }
+	const Element = document.createElement(Tag); if(Options.cls) { Element.className = Options.cls; } if(Options.text) { Element.textContent = Options.text; } if(Options.value !== undefined) { Element.value = Options.value; } if(Options.type) { Element.type = Options.type; }
 	Object.entries(Options.attr || {}).forEach(([Name, Value]) => Element.setAttribute(Name, Value)); this.appendChild(Element); return Element;
 };
 HTMLElement.prototype.createDiv = function(Options) { return this.createEl("div", Options); };
@@ -24,6 +24,56 @@ HTMLElement.prototype.setText = function(Text) { this.textContent = Text; };
 HTMLElement.prototype.empty = function() { this.replaceChildren(); };
 HTMLElement.prototype.addClass = function(Name) { this.classList.add(Name); };
 
+async function exercise_context_panel(View, Root, Owner)
+{
+	const Snapshot = {Path:'原创讲义/矩阵交换子.md',Kind:'当前位置',Mode:'阅读',Mapping:'源块',CapturedAt:'fixture-time',LineStart:3,LineEnd:6,Heading:'交换子的线性',Text:'固定矩阵 X 后，考察 [X,Y] 对 Y 的线性。',SelectedText:'',Truncated:false};
+	Owner.Capture.Snapshot = Snapshot; View.refresh();
+	const Trigger = Root.querySelector('.codex-context-trigger'), Panel = document.getElementById(Trigger.getAttribute('aria-controls'));
+	const Body = Panel.querySelector('.codex-context-popover-body'), Close = Panel.querySelector('button');
+	const Input = View.Input, Draft = Input.value = '尚未发送的中文草稿', Messages = Root.querySelector('.codex-messages');
+	const GetBounds = () => ['.codex-context-trigger','.codex-navigation>summary','.codex-options>summary','.codex-messages','.codex-composer'].map(S => {const R=Root.querySelector(S).getBoundingClientRect(); return [R.x,R.y,R.width,R.height];});
+	const Scroll = Messages.scrollTop, Before = JSON.stringify(GetBounds()), InitiallyClosed = Panel.hidden;
+	const MouseToggle = () => Trigger.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+	MouseToggle();
+	const Bounds = Panel.getBoundingClientRect(), MessageBounds = Messages.getBoundingClientRect(), ComposerBounds = Root.querySelector('.codex-composer').getBoundingClientRect();
+	const StableOpen = JSON.stringify(GetBounds()) === Before && Messages.scrollTop === Scroll && !Panel.hidden;
+	const Bounded = Bounds.top >= MessageBounds.top - 1 && Bounds.bottom <= ComposerBounds.top + 1 && Bounds.width <= MessageBounds.width + 1;
+	const NativeDetails = Panel.querySelector('details'); NativeDetails.open = true;
+	const Checkbox = Panel.querySelector('input[type=checkbox]'); Checkbox.checked = false;
+	Checkbox.dispatchEvent(new Event('change',{bubbles:true}));
+	const StatusUpdates = Trigger.textContent.includes('未附带') && !Owner.State.Settings.AttachContext && !Panel.hidden;
+	Checkbox.checked = true; Checkbox.dispatchEvent(new Event('change',{bubbles:true}));
+	MouseToggle();
+	const StableClose = Panel.hidden && JSON.stringify(GetBounds()) === Before && NativeDetails.open;
+	Trigger.focus(); Trigger.click();
+	const KeyboardOpens = document.activeElement === Close && Trigger.getAttribute('aria-expanded') === 'true';
+	const Ime = new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true,isComposing:true});Close.dispatchEvent(Ime);
+	const ImePreserved = !Ime.defaultPrevented && !Panel.hidden;
+	Close.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+	const EscapeRestoresFocus = Panel.hidden && document.activeElement === Trigger;
+	MouseToggle();
+	const Pointer = new PointerEvent('pointerdown',{bubbles:true,cancelable:true}); Input.dispatchEvent(Pointer); Input.focus();
+	const OutsideKeepsDraft = Panel.hidden && !Pointer.defaultPrevented && document.activeElement === Input && Input.value === Draft;
+	View.reveal_pdf_context();
+	const Programmatic = !Panel.hidden && document.activeElement === Input && Body.scrollTop === 0;
+	let Captures = 0;
+	Owner.can_capture_pdf_box = () => true; Owner.open_pdf_box = () => { Captures++; };
+	View.refresh();
+	[...Panel.querySelectorAll('button')].find(B => B.textContent === '框选到 Codex').click();
+	const CaptureEntry = Captures === 1 && Panel.hidden;
+	const ImageUri = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+	Owner.PdfImages = {get:async()=>ImageUri};
+	Owner.Capture.Snapshot = {...Snapshot, Path:'原创扫描.pdf',Kind:'选区',LineStart:null,LineEnd:null,Mapping:'PDF页图',PdfTarget:{Kind:'rect',Page:1,Values:[1,2,3,4]},
+		Pdf:{PageCount:1,Pages:[{Number:1,Kind:'region',TextLayer:false,Image:{Id:'fixture-image'}}]}};
+	View.refresh(); View.reveal_pdf_context();
+	const Crop = Panel.querySelector('details details');
+	Crop.dispatchEvent(new Event('toggle'));
+	await Promise.resolve();
+	const CropPreview = !Panel.hidden && Crop.open && Crop.querySelector('img')?.getAttribute('src') === ImageUri && JSON.stringify(GetBounds()) === Before;
+	MouseToggle(); Owner.can_capture_pdf_box = () => false; Owner.Capture.Snapshot = Snapshot; Input.value = ''; View.refresh();
+	return {InitiallyClosed,StableOpen,Bounded,StatusUpdates,StableClose,KeyboardOpens,ImePreserved,EscapeRestoresFocus,OutsideKeepsDraft,Programmatic,CaptureEntry,CropPreview};
+}
+
 window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
 {
 	const Root = document.body.createDiv(); Root.style.cssText = `width:${Width}px;height:720px`; Root.id = 'simplified-sidebar-fixture';
@@ -31,6 +81,7 @@ window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
 	Owner.State.Sessions = [Owner.Session]; Owner.can_capture_pdf_box = () => false;
 	const OriginalSession = Owner.Session, OriginalScope = 'draft-fixture-' + crypto.randomUUID(); let Scope = OriginalScope;
 	Owner.draft_scope = () => Scope;
+	Owner.persist = async () => {};
 	let Deletions = 0; Owner.open_delete_session = () => { Deletions++; };
 	const View = new Sidebar.CodexView({}, Owner); View.contentEl = Root; View.app = { vault: { getName: () => "disposable-sidebar-fixture" } };
 	try
@@ -78,9 +129,10 @@ window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
 		View.capture_answer_selection(); const OrdinaryAnswerQuoted = !!View.SelectedAnswer;
 		Body.dataset.editStructured = 'true'; View.capture_answer_selection(); const EditUiExcluded = View.SelectedAnswer === null;
 		delete Body.dataset.editStructured; Selection.removeAllRanges(); View.capture_answer_selection();
+		const ContextInteraction = await exercise_context_panel(View,Root,Owner);
 		if(Keep)
 		{
-			for(const Selector of ['.codex-navigation','.codex-context-tools','.codex-send-tools']) { Root.querySelector(Selector).open = true; }
+			for(const Selector of ['.codex-navigation','.codex-send-tools']) { Root.querySelector(Selector).open = true; }
 			View.Input.value = "请解释这一步的推导。";
 			await View.render_messages();
 		}
@@ -90,7 +142,7 @@ window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
 		View.SelectedAnswer = { SessionId: 'deleted-context' }; View.EditingSession = 'deleted-context'; View.EditingId = 'old-edit'; View.EditText = 'cancelled-edit';
 		View.forget_session('deleted-context');
 		const DeletedReferencesCleared = !View.SelectedAnswer && !View.EditingSession && !View.EditingId && !View.EditText;
-		return { retiredAbsent: RetiredAbsent, glassScoped: GlassScoped, deleteDelegated: DeleteDelegated, deleteGuarded: DeleteGuarded, sessionControlsFit: SessionControlsFit, deletedReferencesCleared: DeletedReferencesCleared, latestDraftPreserved: LatestDraftPreserved, cancelledDraftPreserved: CancelledDraftPreserved, draftRestarted:DraftRestarted,draftSourceExplicit:DraftSourceExplicit,draftSessionIsolated:DraftSessionIsolated,draftConnectionIsolated:DraftConnectionIsolated,lateScopeReceiptPreserved:LateScopeReceiptPreserved,draftSessionRestored:DraftSessionRestored, preparationStopReady: PreparationStopReady, actionsRetained: Actions.join('|') === '提问|生成修改预览|停止', questionAndPreviewKeepSavedScope: Calls.length === 2 && Calls[0][3].Scope === 'captured' && Calls[1][3].Scope === 'note' && Calls.every(Value => Value[3].Mode === 'edit' && Value[3].Role === 'auto'), ordinaryAnswerQuoted: OrdinaryAnswerQuoted, editUiExcluded: EditUiExcluded, noOwnHover: Root.querySelectorAll('[title],[aria-label]').length === 0 };
+		return { retiredAbsent: RetiredAbsent, glassScoped: GlassScoped, deleteDelegated: DeleteDelegated, deleteGuarded: DeleteGuarded, sessionControlsFit: SessionControlsFit, deletedReferencesCleared: DeletedReferencesCleared, latestDraftPreserved: LatestDraftPreserved, cancelledDraftPreserved: CancelledDraftPreserved, draftRestarted:DraftRestarted,draftSourceExplicit:DraftSourceExplicit,draftSessionIsolated:DraftSessionIsolated,draftConnectionIsolated:DraftConnectionIsolated,lateScopeReceiptPreserved:LateScopeReceiptPreserved,draftSessionRestored:DraftSessionRestored, preparationStopReady: PreparationStopReady, actionsRetained: Actions.join('|') === '提问|生成修改预览|停止', questionAndPreviewKeepSavedScope: Calls.length === 2 && Calls[0][3].Scope === 'captured' && Calls[1][3].Scope === 'note' && Calls.every(Value => Value[3].Mode === 'edit' && Value[3].Role === 'auto'), ordinaryAnswerQuoted: OrdinaryAnswerQuoted, editUiExcluded: EditUiExcluded, noOwnHover: Root.querySelectorAll('[title],[aria-label]').length === 0, contextInteraction: Object.values(ContextInteraction).every(Boolean), ...ContextInteraction };
 	}
 	finally { await View.onClose(); for(const K of Object.keys(localStorage)) { if(K.startsWith('codex-sidebar-composer:v1:' + encodeURIComponent(OriginalScope)))localStorage.removeItem(K); } if(!Keep) { Root.remove(); } }
 };

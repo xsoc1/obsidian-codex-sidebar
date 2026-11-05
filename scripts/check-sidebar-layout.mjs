@@ -11,12 +11,13 @@ const Browser = process.env.CODEX_LAYOUT_BROWSER;
 const AppCss = process.env.CODEX_LAYOUT_APP_CSS;
 if(!Browser || !AppCss) { throw new Error("Set CODEX_LAYOUT_BROWSER and CODEX_LAYOUT_APP_CSS (public Obsidian app.css)"); }
 const Directory = mkdtempSync(join(tmpdir(), "codex-sidebar-layout-"));
-await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { observe_sidebar_footer } from "./src/sidebar-footer"; export { ComposerActions } from "./src/edit/composer"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
+await build({ stdin: { contents: 'export * from "./src/sidebar-layout"; export { SidebarContextPanel } from "./src/sidebar-context-panel"; export { observe_sidebar_footer } from "./src/sidebar-footer"; export { ComposerActions } from "./src/edit/composer"; export { SelectionPreview } from "./src/selection-preview";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "browser", format: "iife", globalName: "Layout", outfile: join(Directory, "layout.js") });
 const Baseline = execFileSync("git", ["show", "665d76f:styles.css"], { encoding: "utf8" });
 // Keep the original folding comparison above; UI polish compares the same current DOM.
 const PolishBaseline = execFileSync("git", ["show", "9d80263:styles.css"], { encoding: "utf8" });
 const Styles = readFileSync("styles.css", "utf8");
-writeFileSync(join(Directory, "fixture.html"), `<!doctype html><html><meta charset="utf-8"><style>${readFileSync(AppCss, "utf8")}</style><style id="plugin"></style><body class="is-mobile is-tablet theme-dark"><div id="root" class="codex-sidebar" style="position:fixed;top:0;left:0;width:450px;height:519px"></div><script src="layout.js"></script><script>
+// Give historical CSS the same structural reading wrapper so the polish comparison measures the styles, not a missing flex parent.
+writeFileSync(join(Directory, "fixture.html"), `<!doctype html><html><meta charset="utf-8"><style>${readFileSync(AppCss, "utf8")}</style><style>:where(.codex-reading-area){display:flex;flex:1;min-height:0;min-width:0}:where(.codex-reading-area > .codex-messages){min-width:0}</style><style id="plugin"></style><body class="is-mobile is-tablet theme-dark"><div id="root" class="codex-sidebar" style="position:fixed;top:0;left:0;width:450px;height:519px"></div><script src="layout.js"></script><script>
 function el(parent,tag,cls,text){const e=document.createElement(tag);e.className=cls||'';if(text)e.textContent=text;parent.appendChild(e);return e;}
 HTMLElement.prototype.createEl=function(tag,o={}){const e=el(this,tag,o.cls,o.text);if(o.value!==undefined)e.value=o.value;Object.entries(o.attr||{}).forEach(([k,v])=>e.setAttribute(k,v));return e;};
 HTMLElement.prototype.createDiv=function(o){return this.createEl('div',o);};HTMLElement.prototype.createSpan=function(o){return this.createEl('span',o);};HTMLElement.prototype.setText=function(t){this.textContent=t;};
@@ -24,6 +25,7 @@ function render(folded,css,height,width,mobile=true,currentComposer=css===styles
 {
 	document.getElementById('plugin').textContent=css;
 	const r=document.getElementById('root');
+	window.fixtureContext?.hide?.();
 	r.replaceChildren();r.style.height=height+'px';r.style.width=width+'px';
 	const toolbar=currentComposer&&folded?el(r,'div','codex-toolbar'):r;
 	const nav=folded?Layout.sidebar_panel(toolbar,'codex-navigation','会话与连接 · 微型李代数讲义',mobile):{Body:r};
@@ -32,11 +34,12 @@ function render(folded,css,height,width,mobile=true,currentComposer=css===styles
 	el(el(nav.Body,'select','codex-sessions'),'option','','微型李代数讲义');
 	el(r,'div','codex-status','回复完成 | math-writing 就绪');
 	window.selectionCard=new Layout.SelectionPreview(r,()=>selectionCard.update(null,true));
-	const c=Layout.sidebar_panel(toolbar,'codex-context-tools','上下文',true);
+	const reading=currentComposer&&folded?el(r,'div','codex-reading-area'):r;
+	const c=window.fixtureContext=currentComposer&&folded?new Layout.SidebarContextPanel(toolbar,reading):Layout.sidebar_panel(toolbar,'codex-context-tools','上下文',true);
 	const a=el(c.Body,'div','codex-context-actions');
 	['捕获当前位置','选择 PDF 页','解释选区','检查证明'].forEach(t=>el(a,'button','',t));
 	el(c.Body,'div','codex-context','选区: 交换子的定义');
-	const m=el(r,'div','codex-messages');
+	const m=el(reading,'div','codex-messages');
 	for(let i=0;i<4;i++)
 	{
 		const card=el(m,'div','codex-message codex-assistant');
@@ -56,6 +59,7 @@ function render(folded,css,height,width,mobile=true,currentComposer=css===styles
 	window.submissions=[];if(currentComposer)window.composerActions=new Layout.ComposerActions(actions,input,mode=>submissions.push(mode),()=>{});else{el(actions,'button','','发送');el(actions,'button','','停止');}
 	return {messageHeight:m.getBoundingClientRect().height,rootHeight:r.clientHeight,scrollHeight:r.scrollHeight,composerHeight:p.getBoundingClientRect().height};
 }
+function context_open(){return fixtureContext.Trigger?fixtureContext.Trigger.getAttribute('aria-expanded')==='true':fixtureContext.Details.open;}
 function render_polish(css,height,width,mobile)
 {
 	render(true,css,height,width,mobile,true);
@@ -160,7 +164,7 @@ try
 			root.scrollTop=root.scrollHeight;
 			const send=[...root.querySelectorAll('button')].find(e=>e.textContent==='生成修改预览');
 			const rect=send.getBoundingClientRect(),bounds=root.getBoundingClientRect();
-			return {theme:'${Theme}',width:${Width},height:${Height},before,after,defaultFolded,initiallyHidden,draftPreserved,retiredControlsAbsent,actionsPreserved,focusRestored,sendReachable:rect.bottom<=bounds.bottom&&rect.top>=bounds.top,preserved:select.value==='gpt-6.1-sol'&&session.value===selectedSession,contextClosed:!root.querySelector('.codex-context-tools').open,optionsClosed:!options.open,navigationClosed:!navigation.open,overflow:root.scrollWidth>root.clientWidth,hover:root.querySelectorAll('[title],[aria-label]').length};
+			return {theme:'${Theme}',width:${Width},height:${Height},before,after,defaultFolded,initiallyHidden,draftPreserved,retiredControlsAbsent,actionsPreserved,focusRestored,sendReachable:rect.bottom<=bounds.bottom&&rect.top>=bounds.top,preserved:select.value==='gpt-6.1-sol'&&session.value===selectedSession,contextClosed:!context_open(),optionsClosed:!options.open,navigationClosed:!navigation.open,overflow:root.scrollWidth>root.clientWidth,hover:root.querySelectorAll('[title],[aria-label]').length};
 		})()`, returnByValue: true });
 		assert.ok(!Result.exceptionDetails, "Fixture evaluation failed");
 		const Row = Result.result.value; Rows.push(Row);
@@ -172,13 +176,13 @@ try
 	{
 		const Result = await call("Runtime.evaluate", { expression: `(()=>{
 			document.body.className='${Theme}';render(true,styles,${Height},${Width},false);
-			const root=document.getElementById('root'), nav=root.querySelector('.codex-navigation'), context=root.querySelector('.codex-context-tools'), options=root.querySelector('.codex-options'), compose=root.querySelector('.codex-send-tools');
-			const defaults=!nav.open&&!context.open&&!options.open&&compose.open;
+			const root=document.getElementById('root'), nav=root.querySelector('.codex-navigation'), options=root.querySelector('.codex-options'), compose=root.querySelector('.codex-send-tools');
+			const defaults=!nav.open&&!context_open()&&!options.open&&compose.open;
 			const input=compose.querySelector('textarea');input.value='中文草稿, 不因折叠丢失';input.setSelectionRange(2,4);
 			compose.open=false;Layout.reveal_sidebar_panel({Details:compose});input.focus();
 			const preserved=input.value==='中文草稿, 不因折叠丢失'&&input.selectionStart===2&&document.activeElement===input;
 			const sample={Path:'Original.md',Kind:'选区',Mapping:'源块',SelectedText:'x+y=1',Text:'$$ x+y=1 $$',CapturedAt:'original-time',Truncated:true};selectionCard.update(sample,true);
-			const card=root.querySelector('.codex-note-selection');const selectionVisible=card.checkVisibility()&&card.open&&!context.open&&card.parentElement===root;
+			const card=root.querySelector('.codex-note-selection');const selectionVisible=card.checkVisibility()&&card.open&&!context_open()&&card.parentElement===root;
 			const rawPreserved=card.querySelectorAll('pre')[1].textContent.includes('$$');
 			const before=card.open;card.open=false;selectionCard.update(sample,true);const foldPreserved=!card.open;card.open=before;
 			nav.open=true;nav.open=false;options.open=true;options.open=false;
@@ -228,6 +232,7 @@ try
 			const localOverflow=stress.map(item=>({tag:item.tagName,className:item.className,width:item.clientWidth,scrollWidth:item.scrollWidth,parentWidth:item.parentElement.clientWidth,overflow:getComputedStyle(item).overflowX}));
 			const stressContained=root.scrollWidth<=root.clientWidth+1&&localOverflow.every(item=>item.width<=item.parentWidth+1&&item.scrollWidth>item.width&&['auto','scroll'].includes(item.overflow));
 			for(const panel of root.querySelectorAll('details'))panel.open=true;
+			fixtureContext.show();
 			composerActions.refresh(false,false,false);
 			const buttons=[...root.querySelectorAll('.codex-header button,.codex-context-actions button,.codex-compose-actions button')].map(complete_button);
 			const actions=[composerActions.Question,composerActions.Preview,composerActions.Stop];
@@ -238,6 +243,7 @@ try
 			const actionsReachable=actions.every(reachable_button);
 			const unreachableButtons=[...root.querySelectorAll('.codex-header button,.codex-context-actions button,.codex-compose-actions button')].filter(button=>!reachable_button(button)).map(button=>button.textContent);
 			const allButtonsReachable=unreachableButtons.length===0;
+			fixtureContext.hide();
 			const controls=root.querySelector('.codex-controls');const labels=[...controls.querySelectorAll('label')];
 			const modelSingleColumn=labels[1].getBoundingClientRect().top>labels[0].getBoundingClientRect().top+1;
 			window.submissions=[];
