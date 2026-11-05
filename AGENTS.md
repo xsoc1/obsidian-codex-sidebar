@@ -2,7 +2,7 @@
 
 ## Current scope
 
-- 2026-11-05: User chose a distinct **Codex 框选** button in the native PDF toolbar and requested removing the Sidebar's PDF++ integration, pinning Context when Session & Connection expands, and unifying disclosure arrows. beta.12 keeps independent capture and saved PDF evidence. Leave the separate PDF++ plugin, PDF files, and notes untouched. User authorized Windows “数学” installation and GitHub publication.
+- 2026-11-05: User chose a distinct **Codex 框选** button in the native PDF toolbar and requested removing the Sidebar's PDF++ integration, pinning Context when Session & Connection expands, and unifying disclosure arrows. **2.0.0-beta.12 is installed in Windows “数学” and published for BRAT.** Independent capture and saved PDF evidence remain; the separate PDF++ plugin and bridge are unchanged. See [validation](docs/releases/2.0.0-beta.12.md#验证).
 
 - 2026-11-05: User reported that expanding Context displaced other controls and authorized installing and releasing the redesign. **2.0.0-beta.11 is installed in Windows “数学” and published for BRAT.** Context is a temporary panel over the transcript, with a fixed trigger, outside/Escape dismissal and PDF preview reopening. Drafts, conversation scroll and attachment survive dismissal. The bridge is unchanged. See [validation](docs/releases/2.0.0-beta.11.md#验证).
 
