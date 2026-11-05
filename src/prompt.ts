@@ -91,6 +91,8 @@ export interface ContextSnapshot
 	Mapping: "源文本" | "源块" | "渲染文本" | "PDF文本层" | "PDF页图";
 	CapturedAt: string;
 	Truncated: boolean;
+	SelectedTruncated?: boolean;
+	ContextTruncated?: boolean;
 	Version?: string;
 	FocusLine?: number;
 	Pdf?: import("./pdf/types").PdfSnapshot;
@@ -117,6 +119,7 @@ export interface AnswerQuote
 	RootMessageId?: string;
 	ParentMessageId?: string;
 	SourceReferences?: import("./sources").SourceReference[];
+	SelectedBlocks?: import("./quote-location").SelectedAnswerBlocks;
 }
 
 export function bound_text(Text: string, Limit = 24000): { Text: string; Truncated: boolean }
@@ -138,10 +141,11 @@ export function build_prompt(Question: string, Context: ContextSnapshot | null, 
 			`模式: ${Context.Mode}; 范围: ${Context.Kind}; 映射: ${Context.Mapping}; ${Location}`,
 			`标题: ${Context.Heading || "未定位"}; 捕获时间: ${Context.CapturedAt}`,
 			`捕获版本: ${Context.Version ?? "未知"}. 这是客户端当时快照, 远程工具可能读取 Windows 的不同同步副本.`,
-			Context.Truncated ? "材料因长度限制已截断." : "",
+			Context.SelectedTruncated === true ? "选区因长度限制已截断." : Context.SelectedTruncated === false ? "选区完整." : Context.Truncated ? "旧快照已截断，未分别记录选区和背景完整性." : "",
+			Context.ContextTruncated === true ? "捕获的来源片段已截断." : "",
 			Context.SelectedText ? `用户选中的渲染文本或精确源文本:\n${Context.SelectedText}` : "",
 			Context.Pdf ? "PDF 是只读参考来源. 文字层不是原始 LaTeX, 顺序与数学符号可能丢失; 整页图与局部图按下列元数据区分, 局部矩形不等于用户精确文本选区. 无文字层时依据页图识读, 不清楚的符号明确说明, 不编造全文或补充为原文. 引用实际 PDF 页码, 不把它冒充书内页码. 原图引用及裁切缩放元数据: " + JSON.stringify(Context.Pdf.Pages.map(Page => ({ page: Page.Number, image: Page.Image.Id, kind: Page.Kind ?? "page", ...(Page.Region ? { region: Page.Region } : {}) }))) : "",
-			Context.PdfTarget?.Kind === "text" ? "只读 PDF 文字选区, 本轮不附页图. 文字层不是原始 LaTeX, 不补造缺失的符号, 不冒称已读整页; 引用实际 PDF 页码." : "",
+			Context.PdfTarget?.Kind === "text" ? `只读 PDF 精确文字选区${Context.Pdf ? "及用户另行补充的同页图像；图片不替代文字定位" : "，本轮不附页图"}. 文字层不是原始 LaTeX，不补造缺失符号，不冒称已读整页；引用实际 PDF 页码.` : "",
 			"<obsidian_source>",
 			Context.Text,
 			"</obsidian_source>",

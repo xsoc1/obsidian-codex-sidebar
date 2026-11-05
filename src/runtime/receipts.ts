@@ -1,6 +1,7 @@
 import { canonical_json, content_digest, client_sync } from "../sync/types";
 import { validate_outbox, type SendIntent } from "./outbox";
 import type { StateFiles } from "./state-store";
+import { hydrate_backend_body } from "../backend-events";
 import { message_deleted } from "../sessions";
 
 interface PromotionBinding
@@ -21,6 +22,7 @@ interface LateReceipt extends ReceiptEvidence
 	Digest: string;
 	Promotion?: PromotionBinding;
 	Conflicts?: ReceiptEvidence[];
+	Observations?: ReceiptEvidence[];
 }
 const Terminal = (Status: string) => ["completed", "cancelled", "failed"].includes(Status);
 const Scoped = (Record: any): boolean => typeof Record?.Scope === "string" && !!Record.Scope;
@@ -59,9 +61,9 @@ async function validate_related(Other: any, Record: any, Binding?: PromotionBind
 }
 async function validate_receipt(Value: LateReceipt): Promise<void>
 {
-	if(!Value || Value.SchemaVersion !== 1 || Value.Id !== Value.Record?.Id || Value.Digest !== Value.Record?.Digest || Value.Checksum !== await content_digest(Value.Record) || (Value.Conflicts !== undefined && !Array.isArray(Value.Conflicts))) { throw new Error("迟到凭证格式或校验和无效, 原数据保留"); }
+	if(!Value || Value.SchemaVersion !== 1 || Value.Id !== Value.Record?.Id || Value.Digest !== Value.Record?.Digest || Value.Checksum !== await content_digest(Value.Record) || (Value.Conflicts !== undefined && !Array.isArray(Value.Conflicts)) || (Value.Observations !== undefined && !Array.isArray(Value.Observations))) { throw new Error("迟到凭证格式或校验和无效, 原数据保留"); }
 	await validate_record(Value.Record); if(Value.Promotion) { await validate_promotion(Value.Promotion, Value.Record); }
-	for(const Evidence of Value.Conflicts ?? [])
+	for(const Evidence of [...(Value.Conflicts ?? []), ...(Value.Observations ?? [])])
 	{
 		if(!Evidence || Evidence.Checksum !== await content_digest(Evidence.Record)) { throw new Error("迟到冲突证据校验失败, 原数据保留"); }
 		await validate_related(Evidence.Record, Value.Record, Value.Promotion);
@@ -75,8 +77,9 @@ export async function write_late_receipt(Files: StateFiles, Path: string, Record
 	if(!Queues.has(Files)) { Queues.set(Files, new Map()); } const Queue = Queues.get(Files)!;
 	const Work = (Queue.get(File) ?? Promise.resolve()).catch(() => {}).then(async () =>
 	{
-		let Value = Copy, Promotion = Binding; const Conflicts: ReceiptEvidence[] = [];
+		let Value = Copy, Promotion = Binding; const Conflicts: ReceiptEvidence[] = [], Observations: ReceiptEvidence[] = [];
 		const Keep = async (V: any) => { const Checksum = await content_digest(V); if(!Conflicts.some(E => E.Checksum === Checksum && canonical_json(E.Record) === canonical_json(V))) { Conflicts.push({ Record: structuredClone(V), Checksum }); } };
+		const Observe = async (V:any) => { const Checksum=await content_digest(V);if(!Observations.some(E=>E.Checksum===Checksum&&canonical_json(E.Record)===canonical_json(V))){Observations.push({Record:structuredClone(V),Checksum});} };
 		if(await Files.exists(File))
 		{
 			const Old: LateReceipt = JSON.parse(await Files.read(File)); await validate_receipt(Old);
@@ -85,6 +88,7 @@ export async function write_late_receipt(Files: StateFiles, Path: string, Record
 			if(Scoped(Old.Record) && !Scoped(Copy)) { await validate_related(Copy, Old.Record, Promotion); }
 			else { await validate_related(Old.Record, Copy, Promotion); }
 			for(const Evidence of Old.Conflicts ?? []) { await Keep(Evidence.Record); }
+			for(const Evidence of Old.Observations ?? []) { await Observe(Evidence.Record); }
 			const DifferentTerminal = Terminal(Old.Record.Status) && Terminal(Copy.Status) && Old.Record.Status !== Copy.Status;
 			const DifferentTurn = !!Old.Record.TurnId && !!Copy.TurnId && Old.Record.TurnId !== Copy.TurnId;
 			if(Scoped(Old.Record) && !Scoped(Copy))
@@ -98,13 +102,15 @@ export async function write_late_receipt(Files: StateFiles, Path: string, Record
 				if(Terminal(Old.Record.Status)) { await Keep(Old.Record); }
 			}
 			else if(DifferentTerminal || DifferentTurn) { Value = Old.Record; await Keep(Copy); }
+			else if(Terminal(Old.Record.Status) && !Terminal(Copy.Status)) { Value=Old.Record;await Observe(Copy); }
+			else if(Old.Record.Status==="completed" && Copy.Status==="completed" && canonical_json(Old.Record.Result)!==canonical_json(Copy.Result)) { Value=Old.Record;await Observe(Copy); }
 			else
 			{
 				Value = { ...Old.Record }; for(const [K, V] of Object.entries(Copy)) { if(V !== undefined) { Value[K] = V; } }
-				if(Terminal(Old.Record.Status) && !Terminal(Copy.Status)) { Value.Status = Old.Record.Status; }
+				
 			}
 		}
-		const Data: LateReceipt = { SchemaVersion: 1, Id: Value.Id, Digest: Value.Digest, Record: Value, Checksum: await content_digest(Value), ...(Promotion ? { Promotion } : {}), ...(Conflicts.length ? { Conflicts } : {}) };
+		const Data: LateReceipt = { SchemaVersion: 1, Id: Value.Id, Digest: Value.Digest, Record: Value, Checksum: await content_digest(Value), ...(Promotion ? { Promotion } : {}), ...(Conflicts.length ? { Conflicts } : {}), ...(Observations.length ? {Observations} : {}) };
 		await validate_receipt(Data); const Raw = JSON.stringify(Data); await Files.write(File, Raw);
 		if(await Files.read(File) !== Raw) { throw new Error("迟到凭证读回不一致, 未冒称保存成功"); }
 	}); Queue.set(File, Work); return Work;
@@ -144,6 +150,18 @@ export async function apply_late_receipts(Files: StateFiles, Path: string, State
 		const Session = State.Sessions.find((S: any) => S.Id === R.SessionId), Message = Session?.Messages.find((M: any) => M.Id === R.MessageId);
 		if(!Session || State.DeletedSessionIds?.includes(R.SessionId)) { if(!Original.SessionDeleted) { Original.SessionDeleted = true; Changed = true; } continue; }
 		if(message_deleted(State, R.SessionId, R.MessageId)) { if(!Original.MessageDeleted) { Original.MessageDeleted = true; Changed = true; } continue; }
+		if(R.Result?.backend?.result && R.TurnId && R.ThreadId)
+		{
+			// Replay only local evidence: this never resubmits inference or increments successful-round counters.
+			const B=(Original.Result as any)?.backend ?? R.Result.backend;
+			const WasComplete=Session.Messages.some((M:any)=>M.Id===B.itemId&&M.CompletionStatus==="completed");
+			if(!WasComplete)
+			{
+				if(hydrate_backend_body(State,Original,{sessionId:R.SessionId,threadId:R.ThreadId,turnId:R.TurnId,itemId:B.itemId,result:B.result})) { Changed=true; }
+			}
+
+			const Reply=Session.Messages.find((M:any)=>M.Id===B.itemId);if(Reply&&!WasComplete&&!Reply.ArchivedOnly){Reply.ArchivedOnly=true;Changed=true;}
+		}
 		if(Message && R.TurnId && !Message.TurnId) { Message.TurnId = R.TurnId; Changed = true; }
 	}
 	return Changed;

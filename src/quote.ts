@@ -1,6 +1,7 @@
 import { bound_text, type AnswerQuote } from "./prompt";
 import type { ChatMessage } from "./history";
 import { context_window, markdown_blocks, text_identity, type MarkdownBlock } from "./markdown-blocks";
+import { selected_answer_blocks } from "./quote-location";
 
 export interface QuoteLocation
 {
@@ -115,6 +116,7 @@ export function answer_status(Message: ChatMessage, ActiveTurn: string | null, B
 export function answer_quote(SessionId: string, MessageId: string, SelectedText: string, SourceText: string, SourceStatus: AnswerQuote["SourceStatus"] = "unknown", Location: QuoteLocation = {}): AnswerQuote
 {
 	const Selected = bound_text(SelectedText.trim(), 4000);
+	const SelectedBlocks = Location.Mapping === "source-blocks" ? selected_answer_blocks(SessionId, MessageId, SourceText, Location.Range, Location.BlockIds) : undefined;
 	let Range = Location.Range, Mapping = Location.Mapping ?? "unknown";
 	if(Range && (!Number.isSafeInteger(Range.From) || !Number.isSafeInteger(Range.To) || Range.From < 0 || Range.To < Range.From || Range.To > SourceText.length)) { Range = undefined; Mapping = "unknown"; }
 	if(!Range && Location.Mapping !== "unknown" && SelectedText.trim())
@@ -125,5 +127,5 @@ export function answer_quote(SessionId: string, MessageId: string, SelectedText:
 	const Window = Range ? context_window(SourceText, Range.From, Range.To) : null;
 	const Source = SourceText.length <= 24000 ? { Text: SourceText, Truncated: false } : Window ? { Text: Window.Text, Truncated: true } : { Text: "", Truncated: true };
 	const Included = markdown_blocks(SourceText).filter(B => B.To > (Window?.From ?? 0) && B.From < (Window?.To ?? Source.Text.length));
-	return { SessionId, MessageId, SelectedText: Selected.Text, SourceText: Source.Text, SelectedTruncated: Selected.Truncated, SourceTruncated: Source.Truncated, FollowupMode: "integrated-v1", SourceStatus, SourceVersion: text_identity(SourceText), Mapping: SourceText.length <= 24000 && !Range ? "full-answer" : Mapping, SourceRange: { From: SourceText.length <= 24000 ? 0 : Window?.From ?? 0, To: SourceText.length <= 24000 ? SourceText.length : Window?.To ?? Source.Text.length, Total: SourceText.length }, SourceBlocks: Included.filter(B => B.From >= (SourceText.length <= 24000 ? 0 : Window?.From ?? 0) && B.To <= (SourceText.length <= 24000 ? SourceText.length : Window?.To ?? Source.Text.length)).map(B => ({ Id: B.Id, Kind: B.Kind, From: B.From, To: B.To, Text: B.Text })), RootMessageId: Location.RootMessageId ?? MessageId, ...(Location.ParentMessageId ? { ParentMessageId: Location.ParentMessageId } : {}), ...(Location.SourcePath ? { SourcePath: Location.SourcePath } : {}), ...(Location.SourceReferences ? { SourceReferences: structuredClone(Location.SourceReferences) } : {}) };
+	return { ...(SelectedBlocks ? { SelectedBlocks } : {}), SessionId, MessageId, SelectedText: Selected.Text, SourceText: Source.Text, SelectedTruncated: Selected.Truncated, SourceTruncated: Source.Truncated, FollowupMode: "integrated-v1", SourceStatus, SourceVersion: text_identity(SourceText), Mapping: SourceText.length <= 24000 && !Range ? "full-answer" : Mapping, SourceRange: { From: SourceText.length <= 24000 ? 0 : Window?.From ?? 0, To: SourceText.length <= 24000 ? SourceText.length : Window?.To ?? Source.Text.length, Total: SourceText.length }, SourceBlocks: Included.filter(B => B.From >= (SourceText.length <= 24000 ? 0 : Window?.From ?? 0) && B.To <= (SourceText.length <= 24000 ? SourceText.length : Window?.To ?? Source.Text.length)).map(B => ({ Id: B.Id, Kind: B.Kind, From: B.From, To: B.To, Text: B.Text })), RootMessageId: Location.RootMessageId ?? MessageId, ...(Location.ParentMessageId ? { ParentMessageId: Location.ParentMessageId } : {}), ...(Location.SourcePath ? { SourcePath: Location.SourcePath } : {}), ...(Location.SourceReferences ? { SourceReferences: structuredClone(Location.SourceReferences) } : {}) };
 }

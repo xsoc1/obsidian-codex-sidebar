@@ -1,6 +1,6 @@
 import { ItemView, WorkspaceLeaf, Notice, MarkdownRenderer, Component, Platform } from "obsidian";
 import type { SidebarOwner } from "./view-owner";
-import type { AnswerQuote } from "./prompt";
+import type { AnswerQuote, ContextSnapshot } from "./prompt";
 import { answer_quote, answer_status, bind_answer_blocks, quote_blocks } from "./quote";
 import { followup_summary } from "./followup";
 import type { ChatMessage } from "./history";
@@ -10,12 +10,12 @@ import { observe_sidebar_footer } from "./sidebar-footer";
 import { selected_model, fast_tier, context_usage } from "./controls";
 import { structured_task, question_label } from "./edit/presentation";
 import { safe_math_markdown } from "./edit/safe-markdown";
-import { pdf_preview } from "./pdf/panel";
+import { pdf_preview, PdfPageModal } from "./pdf/panel";
 import { render_edit } from "./edit/panel";
 import { edit_scope } from "./edit/options";
 import { ComposerActions, type ComposeAction } from "./edit/composer";
 import { MessageList, type MessageNode } from "./message-list";
-import { SelectionPreview, selection_in_source } from "./selection-preview";
+import { SelectionPreview, selection_in_source, explanation_preview } from "./selection-preview";
 import { accessible_name, error_text } from "./ui-helpers";
 import { HistoryWindow } from "./history-window";
 import { answer_sources, source_path, render_sources } from "./sources";
@@ -24,6 +24,10 @@ import { HistoryRenderState } from "./history-render-state";
 import { EditViewState } from "./edit-view-state";
 import { render_sync_conflicts } from "./conflict-view";
 import { ComposerDraftStore, type ComposerMaterial } from "./composer-draft";
+import { resolve_material, context_completeness, type CapturedMaterial } from "./composer-material";
+import { locate_answer_blocks, inherited_quote_session } from "./quote-location";
+import { render_input_ledger } from "./input-ledger-view";
+import { render_backend_result } from "./backend-result-view";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -41,6 +45,7 @@ export class CodexView extends ItemView
 	private SessionOptionsCurrent = "";
 	private SessionOptions = "";
 	private ContextValue: unknown;
+	private ContextQuoteValue: unknown;
 	private QuoteValue: unknown;
 	private QuoteCommitted = false;
 	private DraftStore: ComposerDraftStore | null = null;
@@ -51,6 +56,11 @@ export class CodexView extends ItemView
 	private DraftBlocked = false;
 	private DraftStatus!: HTMLElement;
 	private DraftStatusKey = "";
+	private Attachment: CapturedMaterial | null = null;
+	private ConnectionRow!: HTMLElement;
+	private ConnectionSelect!: HTMLSelectElement;
+	private ConnectionLabel!: HTMLElement;
+	private ChoosingConnection = false;
 	private NavigationSummary: HTMLElement | null = null;
 	private ComposePanel: SidebarPanel | null = null;
 	private ContextPanel: SidebarContextPanel | null = null;
@@ -63,7 +73,7 @@ export class CodexView extends ItemView
 	private CompletionElement!: HTMLElement;
 	private MessagesElement!: HTMLElement;
 	private Input!: HTMLTextAreaElement;
-	private QuoteElement!: HTMLElement;
+	private QuoteElement!: HTMLDetailsElement;
 	private SelectedAnswer: AnswerQuote | null = null;
 	private ComposeActions!: ComposerActions;
 	private SessionsElement!: HTMLSelectElement;
@@ -131,6 +141,11 @@ export class CodexView extends ItemView
 		const Toolbar = Root.createDiv({ cls: "codex-toolbar" });
 		const Navigation = Panel(Toolbar, "codex-navigation", "会话与连接");
 		this.NavigationSummary = Navigation.Summary;
+		this.ConnectionRow = Navigation.Body.createDiv({ cls: "codex-connection-picker" });
+		const ConnectionCaption = this.ConnectionRow.createEl("label", { text: "连接", attr: { id: `codex-connection-${crypto.randomUUID()}` } });
+		this.ConnectionSelect = this.ConnectionRow.createEl("select", { cls: "codex-sessions", attr: { "aria-labelledby": ConnectionCaption.id } });
+		this.ConnectionLabel = this.ConnectionRow.createDiv({ cls: "codex-message-context" });
+		this.ConnectionSelect.addEventListener("change", () => void this.choose_connection(this.ConnectionSelect.value));
 		const Header = Navigation.Body.createDiv({ cls: "codex-header" });
 		Header.createEl("strong", { text: "Codex" });
 		this.button(Header, "新会话", () => void this.Owner.choose_session());
@@ -147,7 +162,7 @@ export class CodexView extends ItemView
 		});
 		this.ConflictsElement = Navigation.Body.createDiv({ cls: "codex-sync-conflicts" });
 		this.StatusElement = Root.createDiv({ cls: "codex-status" });
-		this.SelectionPreview = new SelectionPreview(Root, () => this.Owner.clear_context());
+		this.SelectionPreview = new SelectionPreview(Root, () => this.clear_material());
 		this.CompletionElement = Root.createDiv({ cls: "codex-completion-proposal" });
 		const Reading = Root.createDiv({ cls: "codex-reading-area" });
 		const ContextPanel = new SidebarContextPanel(Toolbar, Reading);
@@ -168,7 +183,7 @@ export class CodexView extends ItemView
 		this.ActivityElement.createSpan({ cls: "codex-spinner", attr: { "aria-hidden": "true" } });
 		this.ActivityLabel = this.ActivityElement.createSpan();
 		const Composer = Root.createDiv({ cls: "codex-composer" });
-		this.QuoteElement = Composer.createDiv({ cls: "codex-answer-quote" });
+		this.QuoteElement = Composer.createEl("details", { cls: "codex-answer-quote" });
 		const OptionsPanel = Panel(Toolbar, "codex-options", "模型与选项");
 		this.OptionsSummary = OptionsPanel.Summary;
 		const Controls = OptionsPanel.Body.createDiv({ cls: "codex-controls" });
@@ -259,17 +274,20 @@ export class CodexView extends ItemView
 		{
 			return;
 		}
-		this.QuoteElement.createDiv({ text: this.Owner.AnswerQuote ? "已引用回答片段" : "已选中回答片段", cls: "codex-message-context" });
-		this.QuoteElement.createEl("pre", { text: Quote.SelectedText });
-		this.button(this.QuoteElement, "返回被引用回答", () => void this.reveal_message(Quote.MessageId));
+		const Reference = this.QuoteElement;
+		Reference.open = !this.Owner.AnswerQuote;
+		Reference.createEl("summary", { text: this.Owner.AnswerQuote ? "已引用回答片段" : "已选中回答片段" });
+		Reference.createEl("pre", { text: Quote.SelectedText });
+		this.button(Reference, "返回被引用回答", () => void this.reveal_message(Quote.MessageId, Quote));
 		if(!this.Owner.AnswerQuote)
 		{
-			const Button = this.button(this.QuoteElement, "追问这段", () =>
+			const Button = this.button(Reference, "追问这段", () =>
 			{
 				this.Owner.AnswerQuote = structuredClone(Quote);
 				this.SelectedAnswer = null;
 				this.contentEl.ownerDocument.defaultView?.getSelection()?.removeAllRanges();
 				this.refresh_quote();
+				this.refresh();
 				this.save_draft(); this.refresh_draft_status();
 				reveal_sidebar_panel(this.ComposePanel);
 				this.Input.focus();
@@ -278,13 +296,18 @@ export class CodexView extends ItemView
 		}
 		else
 		{
-			this.QuoteElement.createDiv({ text: followup_summary(Quote), cls: "codex-message-context" });
-			this.button(this.QuoteElement, "取消引用", () => { this.Owner.AnswerQuote = null; this.refresh_quote(); this.save_draft(); this.refresh_draft_status(); void this.Owner.NoteSessions?.flush(); });
+			Reference.createDiv({ text: followup_summary(Quote), cls: "codex-message-context" });
+			this.button(Reference, "取消引用", () => this.cancel_quote());
 		}
 		if(Quote.SelectedTruncated || Quote.SourceTruncated)
 		{
-			this.QuoteElement.createDiv({ text: "引用已按长度限制截断", cls: "codex-message-context" });
+			Reference.createDiv({ text: "引用已按长度限制截断", cls: "codex-message-context" });
 		}
+	}
+	private cancel_quote(): void
+	{
+		this.Owner.AnswerQuote = null; this.SelectedAnswer = null;
+		this.refresh_quote(); this.save_draft(true); this.refresh_draft_status(); this.refresh(); void this.Owner.NoteSessions?.flush();
 	}
 
 	private refresh_compose_summary(): void
@@ -376,6 +399,28 @@ export class CodexView extends ItemView
 			}
 		}
 	}
+	private connection_owner(): SidebarOwner & { connection_choices?: () => { Id: string; Label: string; Active: boolean }[]; choose_connection?: (Id: string) => Promise<void>; connection_label?: () => string; connection_capabilities?: () => string }
+	{
+		return this.Owner;
+	}
+	private refresh_connections(): void
+	{
+		if(!this.ConnectionRow) { return; }
+		const Owner = this.connection_owner(), Choices = Owner.connection_choices?.() ?? [];
+		this.ConnectionRow.hidden = Choices.length === 0;
+		this.set_options(this.ConnectionSelect, Choices.map(C => ({ Value: C.Id, Label: C.Label })), Choices.find(C => C.Active)?.Id ?? "");
+		this.ConnectionSelect.disabled = this.ChoosingConnection || this.input_blocked();
+		this.ConnectionLabel.setText([Owner.connection_label?.(), Owner.connection_capabilities?.()].filter(Boolean).join(" · "));
+	}
+	private async choose_connection(Id: string): Promise<void>
+	{
+		const Owner = this.connection_owner(), Previous = Owner.connection_choices?.().find(C => C.Active)?.Id ?? "";
+		if(this.ChoosingConnection || this.input_blocked() || !Owner.choose_connection) { this.ConnectionSelect.value = Previous; return; }
+		this.ChoosingConnection = true; this.ConnectionSelect.disabled = true;
+		try { await Owner.choose_connection(Id); }
+		catch(ErrorValue) { this.ConnectionSelect.value = Previous; new Notice(error_text(ErrorValue)); }
+		finally { this.ChoosingConnection = false; this.refresh_connections(); }
+	}
 
 	private button(Parent: HTMLElement, Label: string, Callback: () => void): HTMLButtonElement
 	{
@@ -396,10 +441,60 @@ export class CodexView extends ItemView
 	{
 		return new ComposerDraftStore(localStorage, this.draft_scope(), this.Owner.Session.Id).Key;
 	}
+	private resolved_material()
+	{
+		return resolve_material({ Scope: this.draft_scope(), SessionId: this.Owner.Session.Id, AttachContext: this.Owner.State.Settings.AttachContext, Automatic: this.automatic_snapshot(), Attachment: this.Attachment, Quote: this.Owner.AnswerQuote });
+	}
 	private current_material(): ComposerMaterial
 	{
-		const Quote = this.Owner.AnswerQuote?.SessionId === this.Owner.Session.Id ? this.Owner.AnswerQuote : null;
-		return { Context: !Quote && this.Owner.State.Settings.AttachContext ? this.Owner.Capture.Snapshot : null, Quote };
+		const { Context, Quote, ContextOrigin } = this.resolved_material();
+		return { Context, Quote, ...(ContextOrigin ? { ContextOrigin } : {}) };
+	}
+	private automatic_snapshot(): ContextSnapshot | null
+	{
+		const Snapshot = this.Owner.Capture.Snapshot;
+		return this.Attachment && (this.Attachment.Scope !== this.draft_scope() || this.Attachment.SessionId !== this.Owner.Session.Id) && Snapshot === this.Attachment.Snapshot ? null : Snapshot;
+	}
+	private material_snapshot(): ContextSnapshot | null
+	{
+		return resolve_material({ Scope: this.draft_scope(), SessionId: this.Owner.Session.Id, AttachContext: true, Automatic: this.automatic_snapshot(), Attachment: this.Attachment, Quote: this.Owner.AnswerQuote }).Context;
+	}
+	accept_attachment(Snapshot: ContextSnapshot, Scope: string, SessionId: string): boolean
+	{
+		if(Scope !== this.draft_scope() || SessionId !== this.Owner.Session.Id)
+		{
+			if(this.Owner.Capture.Snapshot === Snapshot) { this.Owner.Capture.Snapshot = null; }
+			return false;
+		}
+		this.sync_draft();
+		if(this.DraftRestore) { this.restore_material(this.DraftMaterial); this.DraftRestore = false; }
+		this.Attachment = { Scope, SessionId, Snapshot: structuredClone(Snapshot) };
+		this.Owner.Capture.Snapshot = this.Attachment.Snapshot;
+		this.Owner.State.Settings.AttachContext = true;
+		this.save_draft(true); this.refresh();
+		return true;
+	}
+	forget_attachment(): void { this.Attachment = null; }
+	private restore_material(Material: ComposerMaterial): void
+	{
+		this.Owner.Capture.Snapshot = structuredClone(Material.Context); this.Owner.AnswerQuote = structuredClone(Material.Quote);
+		this.Attachment = Material.Context && Material.ContextOrigin === "explicit" ? { Scope: this.draft_scope(), SessionId: this.Owner.Session.Id, Snapshot: this.Owner.Capture.Snapshot! } : null;
+		if(Material.Context) { this.Owner.State.Settings.AttachContext = true; }
+	}
+	private clear_material(): void
+	{
+		this.forget_attachment(); this.Owner.clear_context(); this.save_draft(true); this.refresh();
+	}
+	private supplement_pdf(Snapshot: ContextSnapshot): void
+	{
+		const Scope = this.draft_scope(), SessionId = this.Owner.Session.Id, Original = JSON.stringify(Snapshot);
+		new PdfPageModal(this.app, this.Owner.Capture, async Value =>
+		{
+			if(Scope !== this.draft_scope() || SessionId !== this.Owner.Session.Id) { throw Error("会话已切换, 补图未附到其他问题"); }
+			if(JSON.stringify(this.material_snapshot()) !== Original) { throw Error("待发送材料已替换, 原补图未覆盖新选择"); }
+			if(!this.accept_attachment(Value, Scope, SessionId)) { throw Error("会话已切换, 补图未附到其他问题"); }
+			this.reveal_pdf_context();
+		}, structuredClone(Snapshot)).open();
 	}
 	private sync_draft(): void
 	{
@@ -411,16 +506,16 @@ export class CodexView extends ItemView
 			{
 				if(!this.DraftRestore && !this.DraftError)
 				{
-					const Current = this.current_material(), Changed = Current.Context !== this.DraftMaterial.Context || Current.Quote !== this.DraftMaterial.Quote;
+					const Current = this.current_material(), Changed = Current.Context !== this.DraftMaterial.Context || Current.Quote !== this.DraftMaterial.Quote || Current.ContextOrigin !== this.DraftMaterial.ContextOrigin;
 					this.DraftMaterial = Current;
-					if(Changed && (this.Input.value || Current.Quote)) { this.save_draft(); }
+					if(Changed && (this.Input.value || Current.Quote || Current.ContextOrigin === "explicit")) { this.save_draft(); }
 				}
 				return;
 			}
 			if(this.DraftStore && !this.save_draft()) { return; }
 			const Draft = Next.load(), Existing = this.Input.value, First = !this.DraftStore;
 			this.DraftStore = Next; this.DraftRevision = Draft?.Revision ?? 0; this.DraftError = ""; this.DraftRestore = false; this.DraftBlocked = false;
-			this.DraftMaterial = Draft ? { Context: Draft.Context, Quote: Draft.Quote } : this.current_material();
+			this.DraftMaterial = Draft ? { Context: Draft.Context, Quote: Draft.Quote, ...(Draft.ContextOrigin ? { ContextOrigin: Draft.ContextOrigin } : {}) } : this.current_material();
 			if(First && Existing && Draft && Existing !== Draft.Text)
 			{
 				this.DraftError = "当前输入与已保存草稿不同, 已保留当前输入; 请先复制内容后重新打开核对";
@@ -428,15 +523,12 @@ export class CodexView extends ItemView
 				return;
 			}
 			this.Input.value = First && Existing ? Existing : Draft?.Text ?? "";
-			if(Draft && (Draft.Text || Draft.Quote))
+			if(Draft && (Draft.Text || Draft.Quote || Draft.ContextOrigin === "explicit"))
 			{
 				const Current = this.current_material();
-				if(!Current.Context && !Current.Quote && !Existing)
-				{
-					this.Owner.Capture.Snapshot = structuredClone(Draft.Context); this.Owner.AnswerQuote = structuredClone(Draft.Quote);
-					if(Draft.Context) { this.Owner.State.Settings.AttachContext = true; }
-				}
+				if(!Current.Context && !Current.Quote && !Existing) { this.restore_material(this.DraftMaterial); }
 				else { this.DraftRestore = JSON.stringify(Current) !== JSON.stringify(this.DraftMaterial); }
+				if(Draft.Context && Draft.Quote && Draft.ContextOrigin === undefined) { this.DraftRestore = true; }
 			}
 		}
 		catch(ErrorValue) { this.DraftError = error_text(ErrorValue); }
@@ -466,14 +558,13 @@ export class CodexView extends ItemView
 		if(this.DraftError) { this.DraftStatus.createDiv({ text: "草稿未保存: " + this.DraftError }); }
 		if(this.DraftRestore)
 		{
-			this.DraftStatus.createDiv({ text: "已恢复输入; 草稿原来源/引用与当前位置不同, 发送将使用当前可见来源" });
+			this.DraftStatus.createDiv({ text: "草稿原来源/引用尚未恢复, 请先核对; 不会自动替换为当前文档" });
 			const Details = this.DraftStatus.createEl("details"); Details.createEl("summary", { text: "查看草稿原来源/引用" });
 			Details.createEl("pre", { text: this.DraftMaterial.Quote?.SelectedText ?? this.DraftMaterial.Context?.Path ?? "原草稿未附来源" });
 			const Restore = this.button(this.DraftStatus, "恢复草稿来源/引用", () =>
 			{
 				if(this.input_blocked() || this.DraftStore?.Key !== this.draft_key()) { return; }
-				this.Owner.Capture.Snapshot = structuredClone(this.DraftMaterial.Context); this.Owner.AnswerQuote = structuredClone(this.DraftMaterial.Quote);
-				if(this.DraftMaterial.Context) { this.Owner.State.Settings.AttachContext = true; }
+				this.restore_material({ ...this.DraftMaterial, ...(this.DraftMaterial.Context ? { ContextOrigin: "explicit" } : {}) });
 				this.DraftRestore = false; this.save_draft(); this.refresh();
 			});
 			Restore.disabled = this.input_blocked();
@@ -482,12 +573,18 @@ export class CodexView extends ItemView
 
 	private async send_input(Mode: ComposeAction): Promise<void>
 	{
+		const Issues=this.resolved_material().Issues;
+		if(Issues.length){this.DraftError=Issues.join("; ");this.refresh_draft_status();new Notice(this.DraftError);return;}
 		this.sync_draft();
+		if(this.DraftRestore) { this.refresh_draft_status(); return; }
 		if(!this.save_draft(true)) { this.refresh_draft_status(); return; }
 		const Text = this.Input.value;
-		const Quote = this.Owner.AnswerQuote;
+		const Material = this.current_material(), { Quote, Context } = Material;
 		const Identity = this.DraftStore?.Key;
-		const Accepted = await this.Owner.send_chat(Text, Quote ? null : this.Owner.State.Settings.AttachContext ? this.Owner.Capture.Snapshot : null, Quote, { Mode, Scope: edit_scope(this.Owner.State.Settings.EditScope), Role: "auto" });
+		try { if(Context?.Pdf || Context?.PdfTarget) { await this.Owner.Capture.Pdf.verify_snapshot(Context); } }
+		catch(ErrorValue) { this.DraftError = error_text(ErrorValue); this.refresh_draft_status(); new Notice(this.DraftError); return; }
+		if(Identity !== this.DraftStore?.Key || this.DraftStore?.Scope !== this.draft_scope() || this.DraftStore?.SessionId !== this.Owner.Session.Id || this.Input.value !== Text || JSON.stringify(this.current_material()) !== JSON.stringify(Material)) { return; }
+		const Accepted = await this.Owner.send_chat(Text, Context, Quote, { Mode, Scope: edit_scope(this.Owner.State.Settings.EditScope), Role: "auto", MaterialOrigin: Material.ContextOrigin });
 		if(Accepted && this.Input.value === Text && this.DraftStore?.Key === Identity && this.DraftStore?.Scope === this.draft_scope() && this.DraftStore?.SessionId === this.Owner.Session.Id)
 		{
 			this.Input.value = "";
@@ -496,6 +593,7 @@ export class CodexView extends ItemView
 				this.Owner.AnswerQuote = null;
 				this.refresh_quote();
 			}
+			if(this.Attachment?.Snapshot === Context) { this.Attachment = null; }
 			this.DraftRestore = false; this.DraftMaterial = { Context: null, Quote: null }; this.save_draft();
 		}
 		void this.Owner.NoteSessions?.flush();
@@ -537,6 +635,7 @@ export class CodexView extends ItemView
 		if(this.DeleteSessionButton) { this.DeleteSessionButton.disabled = this.input_blocked(); }
 		this.refresh_activity();
 		this.refresh_controls();
+		this.refresh_connections();
 		this.refresh_completion();
 		this.refresh_quote();
 		const Options = this.SessionOptions;
@@ -551,16 +650,24 @@ export class CodexView extends ItemView
 		}
 		this.SessionsElement.value = Session.Id;
 		this.SessionsElement.disabled = this.input_blocked();
-		const Snapshot = this.Owner.Capture.Snapshot;
+		const Snapshot = this.material_snapshot(), Material = this.current_material();
 		this.PdfBoxButton.hidden = !this.Owner.can_capture_pdf_box();
-		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
+		this.SelectionPreview.update(Snapshot, !!Material.Context);
 		this.refresh_compose_summary();
 		this.describe_context();
-		const ContextKey = this.ContextValue === Snapshot ? this.ContextKey : JSON.stringify(Snapshot);
+		const ContextKey = this.ContextValue === Snapshot && this.ContextQuoteValue === Material.Quote ? this.ContextKey : JSON.stringify([Snapshot, Material.Quote]);
 		this.ContextValue = Snapshot;
+		this.ContextQuoteValue = Material.Quote;
 		if(ContextKey !== this.ContextKey)
 		{
 			this.ContextKey = ContextKey; this.ContextElement.empty();
+			if(Material.Quote)
+			{
+				const Reference = this.ContextElement.createEl("details"); Reference.createEl("summary", { text: "本轮引用的回答片段" });
+				Reference.createEl("pre", { text: Material.Quote.SelectedText });
+				this.button(Reference, "取消引用", () => this.cancel_quote());
+				this.button(Reference, "返回被引用回答", () => void this.reveal_message(Material.Quote!.MessageId, Material.Quote!));
+			}
 			if(Snapshot)
 			{
 				const Attachment = this.ContextElement.createDiv({ cls: "codex-context-attachment" });
@@ -570,31 +677,42 @@ export class CodexView extends ItemView
 				Checkbox.addEventListener("change", () =>
 				{
 					this.Owner.State.Settings.AttachContext = Checkbox.checked;
-					this.SelectionPreview.update(this.Owner.Capture.Snapshot, Checkbox.checked);
-					this.describe_context();
+					this.save_draft(true); this.refresh();
 					void this.Owner.persist();
 				});
 				Label.createSpan({ text: "附带到提问" });
-				this.button(Attachment, "清除上下文", () => this.Owner.clear_context());
+				this.button(Attachment, "清除上下文", () => this.clear_material());
+				if(Snapshot.PdfTarget?.Kind === "text") { this.button(Attachment, "补充同页图像", () => this.supplement_pdf(Snapshot)); }
+				if(Snapshot.PdfTarget?.Kind === "text" && Snapshot.Pdf)
+				{
+					this.button(Attachment, "移除补图", () =>
+					{
+						const TextOnly = structuredClone(Snapshot); delete TextOnly.Pdf;
+						this.accept_attachment(TextOnly, this.draft_scope(), this.Owner.Session.Id);
+					});
+				}
+				if(Snapshot.Pdf || Snapshot.PdfTarget) { this.button(Attachment, "替换附件", () => this.Owner.open_pdf()); }
+				if(Snapshot.Pdf) { Attachment.createDiv({ text: `本轮 ${Snapshot.Pdf.Pages.length}/2 张图 (整页与局部图共同计数)` }); }
 				const Details = this.ContextElement.createEl("details");
 				Details.createEl("summary", { text: `${Snapshot.Path}${Snapshot.LineStart !== null ? `:${Snapshot.LineStart + 1}` : ""}` });
 				Details.createDiv({ text: Snapshot.Heading || "未定位标题", cls: "codex-context-heading" });
 				Details.createDiv({ text: `${Snapshot.Kind} · ${Snapshot.Mode} · ${Snapshot.Mapping}` });
 				if(Snapshot.Text) { Details.createEl("pre", { text: Snapshot.Text }); }
+				if(Snapshot.SelectedText && Snapshot.SelectedText !== Snapshot.Text) { Details.createEl("pre", { text: Snapshot.SelectedText }); }
+				explanation_preview(this.ContextElement, Snapshot);
 				pdf_preview(Details, Snapshot, this.Owner.PdfImages);
 				if(Snapshot.PdfTarget?.Kind === "rect") { Details.open = true; }
-				if(Snapshot.Truncated)
-				{
-					Details.createDiv({ text: "内容已截断到上下文长度限制" });
-				}
+				const Completeness = context_completeness(Snapshot); Details.createDiv({ text: `${Completeness.Selection} · ${Completeness.Background}` });
 			}
 			else
 			{
-				this.ContextElement.setText("尚未捕获上下文");
+				this.ContextElement.createDiv({ text: Material.Quote ? "未选择本轮附件; 自动捕获不会混入引用追问" : "尚未捕获上下文" });
 			}
 		}
 		const ContextCheckbox = this.ContextElement.querySelector<HTMLInputElement>(".codex-context-label input");
 		if(ContextCheckbox) { ContextCheckbox.checked = this.Owner.State.Settings.AttachContext; }
+		const Background = this.ContextElement.querySelector<HTMLElement>(".codex-explanation-background");
+		if(Background) { Background.hidden = !Material.Context; }
 
 		if(!this.RenderTimer)
 		{
@@ -609,8 +727,8 @@ export class CodexView extends ItemView
 
 	private describe_context(): void
 	{
-		const Snapshot = this.Owner.Capture.Snapshot;
-		this.ContextPanel?.describe(Snapshot && this.Owner.State.Settings.AttachContext ? `${Snapshot.Kind}${Snapshot.Truncated ? " · 已截断" : ""}` : "未附带");
+		const Material = this.current_material(), Snapshot = Material.Context;
+		this.ContextPanel?.describe([Material.Quote ? "引用" : "", Snapshot ? `${Snapshot.Kind}${Snapshot.Pdf ? ` · ${Snapshot.Pdf.Pages.length}/2 图` : ""}` : ""].filter(Boolean).join(" + ") || "未附带");
 	}
 
 	reveal_pdf_context(): void { this.ContextPanel?.show(true); }
@@ -619,6 +737,7 @@ export class CodexView extends ItemView
 	{
 		this.Version++; this.LastRendered = "";
 		if(this.SelectedAnswer?.SessionId === Id) { this.SelectedAnswer = null; }
+		if(this.Attachment?.SessionId === Id) { this.Attachment = null; }
 		if(this.EditingSession === Id) { this.EditingSession = ""; this.EditingId = ""; this.EditText = ""; }
 		this.MessageList?.forget(JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Id]));
 		this.HistoryWindow.forget(JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Id]));
@@ -754,6 +873,20 @@ export class CodexView extends ItemView
 					}
 					void navigator.clipboard.writeText(Message.Text).catch(() => new Notice("复制失败, 请使用系统复制"));
 				});
+				if(Message.BackendResult)
+				{
+					render_backend_result(Card, Message.BackendResult);
+					const ContinueOwner = this.Owner as SidebarOwner & { continue_answer?: (Id: string) => Promise<unknown> };
+					if(["partial", "unknown"].includes(Message.BackendResult.Status) && Message.Text.trim() && ContinueOwner.continue_answer)
+					{
+						const Continue = this.button(Header, "继续这份回答", () =>
+						{
+							Continue.disabled = true;
+							void ContinueOwner.continue_answer!(Message.Id).catch(ErrorValue => new Notice(error_text(ErrorValue))).finally(() => { Continue.disabled = this.input_blocked(); });
+						});
+						Continue.disabled = this.input_blocked();
+					}
+				}
 			}
 			if(Message.Role === "user" && (!Message.Task || Message.Task.Action === "edit"))
 			{
@@ -773,6 +906,13 @@ export class CodexView extends ItemView
 			if(Message.ContextLabel)
 			{
 				Card.createDiv({ cls: "codex-message-context", text: Message.ContextLabel });
+			}
+			if(Message.Role === "user" && Message.InputLedger) { render_input_ledger(Card, Message.InputLedger); }
+			if(Message.Role === "user" && Message.Quote)
+			{
+				const Quoted = Card.createEl("details"); Quoted.createEl("summary", { text: "本轮引用的回答片段" });
+				Quoted.createEl("pre", { text: Message.Quote.SelectedText });
+				this.button(Quoted, "返回被引用回答", () => void this.reveal_message(Message.Quote!.MessageId, Message.Quote!));
 			}
 			const Content = Message.Role === "reasoning" ? Card.createEl("details") : Card;
 			if(Message.Role === "reasoning")
@@ -800,10 +940,20 @@ export class CodexView extends ItemView
 				this.button(Actions, "取消", () => { this.EditingId = ""; this.refresh(); });
 				Body.createDiv({ cls: "codex-message-context", text: "将使用原消息上下文创建分支, 原会话保留." });
 			}
+			else if(Structured?.Action === "edit" && (Message.BackendResult ? Message.BackendResult.Status !== "completed" : Message.CompletionStatus && Message.CompletionStatus !== "completed"))
+			{
+				Body.dataset.editStructured = "true";
+				Body.createDiv({ text: "此输出尚未完整完成, 不可采用为修改提案; 原始正文保留供查看和复制" });
+				Body.createEl("pre", { text: Message.Text });
+			}
 			else if(Structured?.Action === "edit")
 			{
 				await render_edit(this.app, Body, this.Owner.Edits, Structured, RenderComponent, () => this.Owner.refresh(), () => this.Owner.Edits!.retry_result(Structured.Id, this.Owner.Session.Messages));
 				const Raw = Body.createEl("details"); Raw.createEl("summary", { text: "查看原始修改输出" }); Raw.createEl("pre", { text: Message.Text });
+			}
+			else if(Message.Role === "assistant" && Message.BackendResult && !Message.Text.trim())
+			{
+				Body.createDiv({ text: "未收到正文", cls: "codex-message-context" });
 			}
 			else if(Message.Role === "assistant" || Message.Role === "reasoning")
 			{
@@ -845,20 +995,28 @@ export class CodexView extends ItemView
 		}
 		catch(ErrorValue) { RenderComponent.unload(); throw ErrorValue; }
 	}
-	private async reveal_message(Id: string): Promise<void>
+	private async reveal_message(Id: string, Quote?: AnswerQuote): Promise<void>
 	{
-		const SessionId = this.Owner.Session.Id, Scope = this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop";
+		const SessionId = this.Owner.Session.Id, Scope = this.draft_scope(), RenderScope = this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop";
+		const Allowed = () => !Quote || Quote.MessageId === Id && inherited_quote_session(this.Owner.Session, this.Owner.State.Sessions ?? [], Quote.SessionId);
+		if(!Allowed()) { new Notice("引用属于原会话, 未跳到当前会话的同名消息"); return; }
+		const Current = () => this.Opened && this.Owner.Session.Id === SessionId && Scope === this.draft_scope() && Allowed();
 		try { await this.Owner.ensure_session_history?.(SessionId); }
-		catch(ErrorValue) { new Notice("原消息尚未读完整: " + error_text(ErrorValue)); return; }
-		if(!this.Opened || this.Owner.Session.Id !== SessionId || Scope !== (this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop")) { return; }
-		const Session = this.Owner.Session, Context = JSON.stringify([Scope, SessionId]);
+		catch(ErrorValue) { if(Current()) { new Notice("原消息尚未读完整: " + error_text(ErrorValue)); } return; }
+		if(!Current()) { return; }
+		const Session = this.Owner.Session, Context = JSON.stringify([RenderScope, SessionId]);
 		if(!this.HistoryWindow.focus(Context, Session.Messages, Id)) { new Notice("本会话没有这条原消息, 未跳转其他会话或补造内容"); return; }
 		this.Version++; this.LastRendered = "";
 		for(let I = 0; I < 200 && this.Rendering; I++) { await new Promise(R => setTimeout(R, 10)); }
-		if(!this.Opened || this.Owner.Session.Id !== Session.Id) { return; }
+		if(!Current()) { return; }
 		await this.render_messages();
+		if(!Current()) { return; }
 		const Card = [...this.MessagesElement.querySelectorAll<HTMLElement>("[data-message-id]")].find(E => E.dataset.messageId === Id);
-		Card?.scrollIntoView({ block: "center", behavior: "auto" });
+		const Message = this.Owner.Session.Messages.find(M => M.Id === Id && M.Role === "assistant"), Body = Card?.querySelector<HTMLElement>(".codex-message-body");
+		const Nodes = Quote && Body && Message && Quote.SourceVersion === Quote.SelectedBlocks?.SourceVersion ? locate_answer_blocks(Body, Quote.SelectedBlocks, Quote.SessionId, Id, Message.Text, Context + ":" + Id) : [];
+		(Nodes[0] ?? Card)?.scrollIntoView({ block: "center", behavior: "auto" });
+		for(const NodeValue of Nodes) { NodeValue.animate?.([{ backgroundColor: "var(--text-selection)" }, { backgroundColor: "transparent" }], { duration: 1800 }); }
+		if(Quote && !Nodes.length && Card) { new Notice("已返回原消息; 旧记录、原文版本或精确块映射无法核验, 未猜测引用位置"); }
 	}
 
 	private refresh_completion(): void

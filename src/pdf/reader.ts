@@ -3,6 +3,7 @@ import { bound_text, type ContextSnapshot } from "../prompt";
 import { pdf_hash, validate_region, validate_pdf, type PdfCaptureRequest, type PdfRegion } from "./types";
 import type { PdfImages } from "./image-store";
 import { pdf_region, pdf_selected_text, validated_pdf_target, type PdfTarget } from "./target";
+import { combine_pdf_image } from "../composer-material";
 
 export function is_pdf_view(ViewValue: View | null | undefined): ViewValue is FileView & { getViewType(): "pdf" }
 {
@@ -83,6 +84,28 @@ export class PdfReader
 	remember_page(File: TFile, Page: number): void { if(Number.isSafeInteger(Page) && Page > 0) { this.Positions.set(File.path, { Page, Stamp: File.stat.mtime, Size: File.stat.size }); } }
 	last_page(File: TFile): number | null { const Last = this.Positions.get(File.path); return Last && Last.Stamp === File.stat.mtime && Last.Size === File.stat.size ? Last.Page : null; }
 	async image_data(Id: string): Promise<string> { return this.Images.get(Id); }
+	async verify_snapshot(Snapshot: ContextSnapshot): Promise<void>
+	{
+		if(!Snapshot.Pdf && !Snapshot.PdfTarget) { return; }
+		const File = this.App.vault.getFileByPath(Snapshot.Path);
+		if(!File || !Snapshot.Version) { throw new Error(`PDF 来源已变化或缺失: ${Snapshot.Path}; 草稿与原快照保留, 请重新核对附件`); }
+		const Path = File.path, Stamp = File.stat.mtime, Size = File.stat.size;
+		const Check = () => { if(this.Closed || File.path !== Path || File.stat.mtime !== Stamp || File.stat.size !== Size) { throw new Error("PDF 在发送核验期间变化; 原输入和快照保留, 请重新核对附件"); } };
+		if((await this.document(File)).Version !== Snapshot.Version) { throw new Error(`PDF 来源已变化或缺失: ${Snapshot.Path}; 草稿与原快照保留, 请重新核对附件`); }
+		Check();
+		if(Snapshot.Pdf) { validate_pdf(Snapshot.Pdf); for(const Page of Snapshot.Pdf.Pages) { await this.Images.get(Page.Image.Id); } }
+		Check();
+	}
+	async capture_same_page_image(Selection: ContextSnapshot, Requests: (number | PdfCaptureRequest)[], Owner: Document, Signal?: AbortSignal): Promise<ContextSnapshot>
+	{
+		const Original = structuredClone(Selection), Page = Original.PdfTarget?.Kind === "text" ? Original.PdfTarget.Page : null;
+		if(Page === null || !Original.Version || !Requests.length || Requests.some(R => (typeof R === "number" ? R : R.Number) !== Page)) { throw new Error("补图仅限原文字选区的同一路径、内容版本与实际页码; 原选择保留"); }
+		if((Original.Pdf?.Pages.length ?? 0) + Requests.length > 2) { throw new Error("本轮整页与局部图合计最多两张; 原选择保留"); }
+		const File = this.App.vault.getFileByPath(Original.Path);
+		if(!File) { throw new Error("原 PDF 已不存在; 原选择保留"); }
+		const Image = await this.capture(File, Requests.map(R => ({ ...(typeof R === "number" ? { Number: R } : R), Version: Original.Version })), Owner, "当前位置", "", false, Signal);
+		return combine_pdf_image(Original, Image);
+	}
 
 	async capture_target(File: TFile, Target: PdfTarget, OwnerDocument: Document, Signal?: AbortSignal, SelectedText?: string, Rotation?: number): Promise<ContextSnapshot>
 	{
@@ -116,6 +139,7 @@ export class PdfReader
 		return {
 			Path, Mode: "阅读", Kind: "选区", Text: "", SelectedText: Text.Text, LineStart: null, LineEnd: null,
 			Heading: `PDF 第 ${Target.Page} 页选段`, Mapping: "PDF文本层", CapturedAt: new Date().toISOString(), Truncated: Text.Truncated,
+			SelectedTruncated: Text.Truncated, ContextTruncated: false,
 			Version: Loaded.Version, PdfTarget: structuredClone(Target)
 		};
 	}
@@ -179,7 +203,7 @@ export class PdfReader
 		if(Signal?.aborted || this.Closed || File.path !== Path || File.stat.mtime !== Stamp || File.stat.size !== Size) { throw new Error("PDF 在捕获期间变化或已取消, 请重新捕获"); }
 		const Bounded = bound_text(Text.join("\n\n"));
 		const Pdf: NonNullable<ContextSnapshot["Pdf"]> = { schemaVersion: Regions ? 2 : 1, ReadOnly: true, PageCount: Loaded.Document.numPages, Pages: Result }; validate_pdf(Pdf); this.remember_page(File, Requests[0].Number);
-		return { Path, Mode: "阅读", Kind, Text: Bounded.Text, SelectedText: bound_text(SelectedText, 12000).Text, LineStart: null, LineEnd: null, Heading: `PDF 第 ${Requests.map(R => R.Number).join(", ")} 页${Regions ? " (含局部图)" : ""}`, Mapping: Result.every(Value => Value.TextLayer) ? "PDF文本层" : "PDF页图", CapturedAt: new Date().toISOString(), Truncated: Truncated || Bounded.Truncated || SelectedText.length > 12000, Version: Loaded.Version, Pdf };
+		return { Path, Mode: "阅读", Kind, Text: Bounded.Text, SelectedText: bound_text(SelectedText, 12000).Text, LineStart: null, LineEnd: null, Heading: `PDF 第 ${Requests.map(R => R.Number).join(", ")} 页${Regions ? " (含局部图)" : ""}`, Mapping: Result.every(Value => Value.TextLayer) ? "PDF文本层" : "PDF页图", CapturedAt: new Date().toISOString(), Truncated: Truncated || Bounded.Truncated || SelectedText.length > 12000, SelectedTruncated: SelectedText.length > 12000, ContextTruncated: Truncated || Bounded.Truncated, Version: Loaded.Version, Pdf };
 	}
 
 	close(): void

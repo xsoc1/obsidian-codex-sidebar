@@ -1,5 +1,6 @@
 import { canonical_json, content_digest } from "../sync/types";
 import { validate_outbox } from "./outbox";
+import { merge_conflict_resolutions, verify_conflict_resolutions } from "../sync/conflicts";
 import { deleted_messages } from "../sessions";
 
 export interface StateFiles
@@ -13,6 +14,7 @@ const Queues = new WeakMap<StateFiles, Map<string, Promise<void>>>();
 const baseline = (Files: StateFiles): Map<string, string | null> => { let Map = Baselines.get(Files); if(!Map) { Map = new globalThis.Map(); Baselines.set(Files, Map); } return Map; };
 const parse_state = (Raw: string): any => { const Value = JSON.parse(Raw); validate_saved_state(Value); return Value; };
 const raw_file = async (Files: StateFiles, Path: string): Promise<string | null> => await Files.exists(Path) ? Files.read(Path) : null;
+async function verify_resolutions(Value:any):Promise<void> { if(Value.Sync?.Resolutions?.length) { await verify_conflict_resolutions(Value.Sync.Scope,Value.Sync.Resolutions); } }
 async function checked_write(Files: StateFiles, Path: string, Raw: string): Promise<void> { await Files.write(Path, Raw); if(await Files.read(Path) !== Raw) { throw new Error("文件读回不一致, 保留事务与原文件"); } }
 interface SaveReceipt { SchemaVersion: 1; Status: "pending" | "committed"; Canonical: string; Staged: string; Backup: string; PreviousDigest: string; TargetDigest: string; }
 
@@ -23,8 +25,8 @@ async function recover_save(Files: StateFiles, Canonical: string): Promise<void>
 	const Receipt: SaveReceipt = JSON.parse(await Files.read(Path)), Stage = Canonical + ".save.stage.json", Backup = Canonical + ".last-committed.json";
 	if(Receipt.SchemaVersion !== 1 || !["pending", "committed"].includes(Receipt.Status) || Receipt.Canonical !== Canonical || Receipt.Staged !== Stage || Receipt.Backup !== Backup) { throw new Error("会话保存日志无效, 原文件保留"); }
 	const Current = await raw_file(Files, Canonical);
-	if(Receipt.Status === "committed") { if(Current === null) { throw new Error("已提交会话文件缺失, 保留最近已提交备份, 不回放旧迁移初稿"); } parse_state(Current); return; }
-	const Target = await Files.read(Stage); parse_state(Target);
+	if(Receipt.Status === "committed") { if(Current === null) { throw new Error("已提交会话文件缺失, 保留最近已提交备份, 不回放旧迁移初稿"); } await verify_resolutions(parse_state(Current)); return; }
+	const Target = await Files.read(Stage); await verify_resolutions(parse_state(Target));
 	if(await content_digest(Target) !== Receipt.TargetDigest) { throw new Error("待提交会话候选摘要不符, 保留双方"); }
 	if(await content_digest(Current) !== Receipt.TargetDigest && Receipt.PreviousDigest !== await content_digest(null))
 	{
@@ -58,19 +60,21 @@ export function validate_saved_state(Value: any): void
 	if(Value.Outbox !== undefined) { validate_outbox(Value.Outbox); }
 	deleted_messages(Value.DeletedMessages);
 	if(Value.Sync && (Value.Sync.SchemaVersion !== 1 || typeof Value.Sync.Scope !== "string" || !Number.isSafeInteger(Value.Sync.Revision) || !Array.isArray(Value.Sync.Operations) || !Array.isArray(Value.Sync.Conflicts))) { throw new Error("同步元数据版本无效, 原文件保留"); }
+	if(Value.Sync){merge_conflict_resolutions(Value.Sync.Scope,Value.Sync.Resolutions);}
 }
 export async function load_state_file(Files: StateFiles, Canonical: string, Legacy: string): Promise<any | null>
 {
 	await recover_save(Files, Canonical);
 	const Journal = Canonical + ".migration.json", Staged = Canonical + ".migration.tmp";
 	let Existing = await raw_file(Files, Canonical);
+	if(Existing!==null) { let Parsed:any;try{Parsed=parse_state(Existing);}catch{} if(Parsed){await verify_resolutions(Parsed);} }
 	if(await Files.exists(Journal))
 	{
 		const Receipt = JSON.parse(await Files.read(Journal));
 		if(Receipt.SchemaVersion !== 1 || Receipt.Canonical !== Canonical || Receipt.Legacy !== Legacy || Receipt.Staged !== Staged || typeof Receipt.Backup !== "string" || !Receipt.Backup.startsWith(Legacy + ".pre-v2-")) { throw new Error("会话迁移日志无效, 原文件保留"); }
 		if(Receipt.Status === "committed") { if(Existing === null) { throw new Error("已提交会话文件缺失, 不用迁移初稿覆盖后续数据"); } const Current = parse_state(Existing); baseline(Files).set(Canonical, Existing); return Current; }
 		if(Receipt.Status !== undefined && Receipt.Status !== "pending") { throw new Error("迁移状态版本无效"); }
-		const CurrentRaw = await Files.read(Legacy), Raw = await Files.read(Staged), Value = JSON.parse(Raw); validate_saved_state(Value);
+		const CurrentRaw = await Files.read(Legacy), Raw = await Files.read(Staged), Value = JSON.parse(Raw); validate_saved_state(Value);await verify_resolutions(Value);
 		if(await content_digest(CurrentRaw) !== Receipt.SourceDigest || await content_digest(Raw) !== Receipt.TargetDigest || await Files.read(Receipt.Backup) !== CurrentRaw) { throw new Error("迁移期间旧数据或候选发生变化, 保留双方, 不覆盖新内容"); }
 		if(Existing !== null && Existing !== Raw)
 		{
@@ -88,7 +92,7 @@ export async function load_state_file(Files: StateFiles, Canonical: string, Lega
 	}
 	if(Existing !== null) { const Current = parse_state(Existing); baseline(Files).set(Canonical, Existing); return Current; }
 	if(!await Files.exists(Legacy)) { baseline(Files).set(Canonical, null); return null; }
-	const Raw = await Files.read(Legacy), Saved = JSON.parse(Raw); validate_saved_state(Saved);
+	const Raw = await Files.read(Legacy), Saved = JSON.parse(Raw); validate_saved_state(Saved);await verify_resolutions(Saved);
 	const SourceDigest = await content_digest(Raw), Backup = Legacy + ".pre-v2-" + SourceDigest.slice(0, 16) + ".json";
 	if(await Files.exists(Backup)) { if(await Files.read(Backup) !== Raw) { throw new Error("旧数据备份校验冲突, 未覆盖"); } } else { await Files.write(Backup, Raw); }
 	if(await Files.read(Backup) !== Raw) { throw new Error("备份读回失败, 未切换会话数据"); }
@@ -109,6 +113,7 @@ export function write_state_file(Files: StateFiles, Canonical: string, Data: unk
 	const Target = JSON.stringify({ ...(Data as any), SchemaVersion: 2 }); parse_state(Target);
 	const Work = (Queue.get(Canonical) ?? Promise.resolve()).catch(() => {}).then(async () =>
 	{
+		await verify_resolutions(JSON.parse(Target));
 		await recover_save(Files, Canonical);
 		const Current = await raw_file(Files, Canonical), Expected = baseline(Files);
 		if(Expected.has(Canonical) && Expected.get(Canonical) !== Current) { throw new Error("当前会话文件已被其他窗口修改, 保留双方, 不覆盖后续消息"); }

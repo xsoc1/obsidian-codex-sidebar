@@ -72,14 +72,15 @@ async function exercise_context_panel(View, Root, Owner)
 	const CaptureEntry = Captures === 1 && Panel.hidden;
 	const ImageUri = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 	Owner.PdfImages = {get:async()=>ImageUri};
-	Owner.Capture.Snapshot = {...Snapshot, Path:'原创扫描.pdf',Kind:'选区',LineStart:null,LineEnd:null,Mapping:'PDF页图',PdfTarget:{Kind:'rect',Page:1,Values:[1,2,3,4]},
-		Pdf:{PageCount:1,Pages:[{Number:1,Kind:'region',TextLayer:false,Image:{Id:'fixture-image'}}]}};
-	View.refresh(); View.reveal_pdf_context();
-	const Crop = Panel.querySelector('details details');
+	View.accept_attachment({...Snapshot, Path:'原创扫描.pdf',Kind:'选区',LineStart:null,LineEnd:null,Mapping:'PDF页图',PdfTarget:{Kind:'rect',Page:1,Values:[1,2,3,4]},
+		Pdf:{PageCount:1,Pages:[{Number:1,Kind:'region',TextLayer:false,Image:{Id:'fixture-image'}}]}},View.draft_scope(),Owner.Session.Id);
+	View.refresh(); const AttachmentBounds=JSON.stringify(GetBounds()); View.reveal_pdf_context();
+	const Crop = [...Panel.querySelectorAll('details')].find(D=>D.querySelector(':scope > summary')?.textContent.includes('第 1 页局部放大图'));
 	Crop.dispatchEvent(new Event('toggle'));
 	await Promise.resolve();
-	const CropPreview = !Panel.hidden && Crop.open && Crop.querySelector('img')?.getAttribute('src') === ImageUri && JSON.stringify(GetBounds()) === Before;
-	MouseToggle(); Owner.can_capture_pdf_box = () => false; Owner.Capture.Snapshot = Snapshot; Input.value = ''; View.refresh();
+
+	const CropPreview = !Panel.hidden && Crop.open && Crop.querySelector('img')?.getAttribute('src') === ImageUri && JSON.stringify(GetBounds()) === AttachmentBounds;
+	MouseToggle(); Owner.can_capture_pdf_box = () => false; View.forget_attachment(); Owner.Capture.Snapshot = Snapshot; Input.value = ''; View.refresh();
 	return {InitiallyClosed,StableOpen,Bounded,StatusUpdates,StableClose,KeyboardOpens,ImePreserved,EscapeRestoresFocus,OutsideKeepsDraft,Programmatic,CaptureEntry,CropPreview,PinnedWhileNavigationOpens,SameClosedArrow,SameOpenArrow};
 }
 

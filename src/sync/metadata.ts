@@ -16,7 +16,7 @@ export function merge_history_loads(Current: Record<string, HistoryLoadState> = 
 export function merge_sync_metadata(Current: ClientSync | undefined, Incoming: ClientSync): ClientSync
 {
 	if(Current && Current.Scope !== Incoming.Scope) { throw new Error("同步元数据来自其他作用域, 未覆盖当前状态"); }
-	if(!Current) { const Result = structuredClone(Incoming); Result.Conflicts = pending_conflicts(Result.Conflicts, Result.Resolutions); return Result; }
+	if(!Current) { const Result = structuredClone(Incoming); Result.Resolutions=merge_conflict_resolutions(Incoming.Scope,Incoming.Resolutions); Result.Conflicts = pending_conflicts(Result.Conflicts, Result.Resolutions); return Result; }
 	const Result = structuredClone(Current), Seen = new Set(Result.Conflicts.map(C => canonical_json(C)));
 	for(const C of Incoming.Conflicts) { const Key = canonical_json(C); if(!Seen.has(Key)) { Result.Conflicts.push(structuredClone(C)); Seen.add(Key); } }
 	for(const [Key, Version] of Object.entries(Incoming.Versions))

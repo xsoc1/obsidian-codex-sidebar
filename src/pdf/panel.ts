@@ -19,16 +19,17 @@ export class PdfPageModal extends Modal
 {
 	private Closed = false;
 	private Abort = new AbortController();
-	constructor(AppValue: App, private Capture: ContextCapture, private Accept: (Value: ContextSnapshot) => Promise<void>) { super(AppValue); }
+	constructor(AppValue: App, private Capture: ContextCapture, private Accept: (Value: ContextSnapshot) => Promise<void>, private Supplement?: ContextSnapshot) { super(AppValue); }
 	onOpen(): void
 	{
 		this.Capture.track_view();
-		this.contentEl.createEl("h3", { text: "捕获 PDF 页" });
+		this.contentEl.createEl("h3", { text: this.Supplement ? "补充同页图像" : "捕获 PDF 页" });
 		this.contentEl.createEl("p", { text: "选择实际 PDF 页码. 每轮最多两张图, 整页和局部图共同计数; 可选一页整图加一张局部放大图. 扫描页由支持图像的模型识读, 不修改 PDF." });
-		const Files = this.app.vault.getFiles().filter(File => File.extension.toLowerCase() === "pdf").sort((A, B) => A.path.localeCompare(B.path));
+		const Files = this.app.vault.getFiles().filter(File => File.extension.toLowerCase() === "pdf" && (!this.Supplement || File.path === this.Supplement.Path)).sort((A, B) => A.path.localeCompare(B.path));
 		if(!Files.length) { this.contentEl.createEl("p", { text: "当前库没有 PDF 文件" }); return; }
 		let File: TFile = Files.find(Value => Value.path === this.Capture.LastView?.file?.path) ?? Files[0];
 		let Position = default_pdf_page(this.Capture, File), Pages = String(Position.Page), Loading = false, Mode = "page", Generation = 0;
+		if(this.Supplement?.PdfTarget?.Kind === "text") { Pages = String(this.Supplement.PdfTarget.Page); Position = { Page: this.Supplement.PdfTarget.Page, Reason: "补图绑定原文字选区的实际页码和内容版本" }; }
 		let Draft: { Version: string; Number: number; Region: PdfRegionInput } | null = null, PageInput: TextComponent;
 		const Region: PdfRegionInput = { X: 0.15, Y: 0.25, Width: 0.7, Height: 0.35 };
 		const Status = this.contentEl.createDiv({ attr: { "aria-live": "polite" } });
@@ -107,7 +108,9 @@ export class PdfPageModal extends Modal
 					const Crop: PdfCaptureRequest = { Number: Numbers[0], Kind: "region", Region: { ...Region }, Version: Draft.Version };
 					Requests = Mode === "both" ? [{ Number: Numbers[0], Kind: "page", Version: Draft.Version }, Crop] : [Crop];
 				}
-				const Snapshot = await this.Capture.capture_pdf(Selected, Requests, this.contentEl.ownerDocument, "当前位置", "", false, this.Abort.signal);
+				const Snapshot = this.Supplement
+					? await this.Capture.Pdf.capture_same_page_image(this.Supplement, Requests, this.contentEl.ownerDocument, this.Abort.signal)
+					: await this.Capture.capture_pdf(Selected, Requests, this.contentEl.ownerDocument, "当前位置", "", false, this.Abort.signal);
 				if(!this.Closed && Own === Generation && Selected.path === File.path && Snapshot) { await this.Accept(Snapshot); this.close(); }
 			}
 			catch(ErrorValue) { if(!this.Closed) { Status.setText(String(ErrorValue)); } }
@@ -122,7 +125,7 @@ export function pdf_preview(Root: HTMLElement, Snapshot: ContextSnapshot, Images
 {
 	if(Snapshot.PdfTarget?.Kind === "text")
 	{
-		Root.createDiv({ text: `只读 PDF · 第 ${Snapshot.PdfTarget.Page} 页文字选区 · 不附页图` });
+		Root.createDiv({ text: `只读 PDF · 第 ${Snapshot.PdfTarget.Page} 页文字选区${Snapshot.Pdf ? " · 同页图像为独立视觉参考" : " · 不附页图"}` });
 	}
 	if(!Snapshot.Pdf) { return; }
 	Root.createDiv({ text: `只读 PDF · ${Snapshot.Pdf.Pages.length} 张图, 第 ${[...new Set(Snapshot.Pdf.Pages.map(Page => Page.Number))].join(", ")} 页 / 共 ${Snapshot.Pdf.PageCount} 页. 文字层不是 LaTeX, 扫描页按页图识读.` });

@@ -130,3 +130,14 @@ test("T07 old bridge refuses causal write before any POST; server journal failur
 	}
 	finally { await G.close(); }
 });
+
+test("T07 local state load/save and initial metadata adoption reject forged or foreign decisions before hiding conflicts",async()=>
+{
+	const {A}=await decisions(), S=state("scope");S.Sync.Resolutions=[A];
+	const Files=new Map<string,string>(),Host={exists:async(P:string)=>Files.has(P),read:async(P:string)=>Files.get(P)!,write:async(P:string,T:string)=>{Files.set(P,T);}};
+	const {merge_sync_metadata}=await import("../src/sync/metadata");
+	assert.throws(()=>merge_sync_metadata(undefined,{...S.Sync,Resolutions:[{...A,Scope:"foreign"}]}),/作用域/);
+	const Bad={...S,Sync:{...S.Sync,Resolutions:[{...A,ConflictId:"f".repeat(64)}]}};
+	await assert.rejects(write_state_file(Host,"original.json",Bad),/摘要/);assert.equal(Files.size,0);
+	Files.set("original.json",JSON.stringify(Bad));await assert.rejects(load_state_file(Host,"original.json","legacy.json"),/摘要/);assert.equal(Files.size,1);
+});

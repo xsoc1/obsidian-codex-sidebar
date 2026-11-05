@@ -1,7 +1,7 @@
-import type { ContextSnapshot, AnswerQuote } from "./prompt";
 import { source_path } from "./edit/document";
+import type { ComposerMaterial } from "./composer-material";
+export type { ComposerMaterial } from "./composer-material";
 
-export interface ComposerMaterial { Context: ContextSnapshot | null; Quote: AnswerQuote | null; }
 export interface ComposerDraft extends ComposerMaterial { schemaVersion: 1; Scope: string; SessionId: string; Revision: number; Text: string; }
 interface StorageLike { getItem(Key: string): string | null; setItem(Key: string, Value: string): void; }
 export class ComposerDraftStore
@@ -25,14 +25,16 @@ export class ComposerDraftStore
 		if(D.Context) { if(typeof D.Context.Path !== "string" || typeof D.Context.Text !== "string" || typeof D.Context.SelectedText !== "string" || typeof D.Context.CapturedAt !== "string") { throw Error("草稿来源快照损坏"); } source_path(D.Context.Path); }
 		if(D.Quote && (D.Quote.SessionId !== this.SessionId || typeof D.Quote.MessageId !== "string" || typeof D.Quote.SelectedText !== "string" || typeof D.Quote.SourceText !== "string")) { throw Error("草稿引用不属于原会话或已损坏"); }
 		if(D.Quote?.SourcePath) { source_path(D.Quote.SourcePath); }
+		if(D.ContextOrigin !== undefined && !["explicit", "automatic"].includes(D.ContextOrigin)) { throw Error("草稿材料选择标记损坏, 原数据保留"); }
 	}
 	save(Text: string, Material: ComposerMaterial, Expected: number): ComposerDraft | null
 	{
 		const Current = this.load(), Revision = Current?.Revision ?? 0;
-		const Value = { Text, Context: Text || Material.Quote ? Material.Context : null, Quote: Material.Quote };
-		if(Current && JSON.stringify({ Text: Current.Text, Context: Current.Context, Quote: Current.Quote }) === JSON.stringify(Value)) { return Current; }
+		const KeepContext = !!Text || !!Material.Quote || Material.ContextOrigin === "explicit";
+		const Value = { Text, Context: KeepContext ? Material.Context : null, Quote: Material.Quote, ...(KeepContext && Material.Context && Material.ContextOrigin ? { ContextOrigin: Material.ContextOrigin } : {}) };
+		if(Current && JSON.stringify({ Text: Current.Text, Context: Current.Context, Quote: Current.Quote, ...(Current.ContextOrigin ? { ContextOrigin: Current.ContextOrigin } : {}) }) === JSON.stringify(Value)) { return Current; }
 		if(Revision !== Expected) { throw Error("另一窗口已更新此会话草稿, 未覆盖双方内容; 请复制当前输入后核对"); }
-		if(!Current && !Text && !Material.Quote) { return null; }
+		if(!Current && !Text && !Material.Quote && !(Material.Context && Material.ContextOrigin === "explicit")) { return null; }
 		const Next: ComposerDraft = { schemaVersion: 1, Scope: this.Scope, SessionId: this.SessionId, Revision: Revision + 1, ...structuredClone(Value) }, Raw = JSON.stringify(Next);
 		this.validate(Next);
 		if(new TextEncoder().encode(Raw).byteLength > 512 * 1024) { throw Error("草稿超过本设备保存预算, 请先复制输入并缩小来源; 当前输入未清除"); }

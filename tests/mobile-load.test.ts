@@ -193,6 +193,9 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 		}
 	});
 	const Instance = new Export.exports.default(); await Instance.onload();
+	// This fixture implements native JSON transport, not SSE or function-call responses.
+	const Activate=Instance.start_backend.bind(Instance);
+	Instance.start_backend=(Profile:any,Key:string,Catalog?:any[])=>Activate(Profile.Kind==="api"?{...Profile,Stream:"buffered",HistoryTools:false}:Profile,Key,Catalog);
 	return { Instance, Files, Required, Local, Tabs, Settings, Notices, Modals, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
 }
 
@@ -520,11 +523,12 @@ test("model picker drops late catalogs on provider or key changes and still acce
 
 test("an API transport failure retains an unknown result and allows switching without retrying", async () =>
 {
-	let Requests = 0;
-	const F = await mobile_fixture(async () => { Requests++; throw Error("connection lost"); }), P = F.Instance;
+	let Requests = 0, CatalogReads=0;
+	const F = await mobile_fixture(async (Params:any) => { if(Params.method==="GET"){CatalogReads++;}else{Requests++;} throw Error("connection lost"); }), P = F.Instance;
 	try
 	{
 		await P.start_backend({ Kind: "api", Provider: "openai", Model: "fixture" }, "fixture-transport-key");
+		assert.equal(Requests,0,"model catalog GET is not inference");assert.equal(CatalogReads,1);
 		assert.equal(await P.send_message("original", null), true);
 		for(let I = 0; I < 20 && P.Busy; I++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
 		assert.equal(P.State.Sync.Operations[0].Status, "submission-unknown"); assert.equal(P.Busy, false);
@@ -1623,7 +1627,7 @@ test("actual stream finalization rejects late deltas and saves exact final text 
 		P.handle_message({ method: "item/agentMessage/delta", params: { threadId: "original-stream", turnId: "original-turn", itemId: "a", delta: "must not return" } });
 		await P.persist(false); assert.equal(P.Session.Messages[0].Text, "Final exact $x=1$");
 		assert.equal(JSON.parse(F.Files.get(".obsidian/plugins/codex-sidebar/desktop-state-v2.json")!).Sessions[0].Messages[0].Text, "Final exact $x=1$");
-		assert.equal(P.Checkpoints.Stats.checkpoints, 3);
+		assert.ok(P.Checkpoints.Stats.checkpoints <= 3, "only actually fulfilled checkpoints count; terminal can supersede pending deltas");
 	}
 	finally { P.onunload(); }
 });
@@ -1723,4 +1727,160 @@ test("a conflict confirmation queued behind another resolution must not resolve 
 		await assert.rejects(Resolving, /冲突已变化/); assert.equal(P.Session.Messages[0].Text, Local.Text); assert.equal(P.State.Sync.Resolutions?.length ?? 0, 0);
 	}
 	finally { P.onunload(); }
+});
+
+import { ComposerDraftStore } from "../src/composer-draft";
+import { combine_pdf_image } from "../src/composer-material";
+
+test("original end-to-end: PDF text plus image and long-tail quote survive draft restart, partial continuation, preview, confirmation and safe undo", async()=>
+{
+	const Requests:any[]=[];
+	const Before="设 $f(t)=t^2$.\n\n积分结果为 $1/2$.",After=Before.replace("1/2","1/3");
+	const F=await mobile_fixture(async Params=>
+	{
+		if(Params.method==="GET"){return {status:200,json:{data:[{id:"original-model"}]}};}
+		Requests.push(JSON.parse(Params.body));
+		const Text=Requests.length===1?"由 $[H,E]=2E$，下一步尚未完成":Requests.length===2?"完整说明：代入矩阵乘法，结论为 $[H,E]=2E$.":JSON.stringify({schemaVersion:1,kind:"note-edit",status:"proposal",markdown:After,rationale:"沿原路线仅修正积分值"});
+		return {status:200,json:{id:"original-response-"+Requests.length,model:"actual-original-model",choices:[{finish_reason:Requests.length===1?"length":"stop",message:{content:Text}}],usage:{completion_tokens:19}}};
+	});
+	const P=F.Instance,Key="original-fixture-key";let Current=Before,Writes=0;
+	try
+	{
+		await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original-model",Vision:true},Key);
+		P.Edits.Host.read_current=async()=>Current;P.Edits.Host.compare_write=async(_:string,Expected:string,Next:string)=>{assert.equal(Current,Expected);Current=Next;Writes++;};
+		const Original="设 H=diag(1,-1)，E=E12。\\n\\n"+"step a=b.\n\n".repeat(3000)+"$$[H,E]=2E$$";
+		P.Session.Messages.push({Id:"original-proof",Role:"assistant",Text:Original,CompletionStatus:"completed"});
+		const Quote=answer_quote(P.Session.Id,"original-proof","[H,E]=2E",Original,"completed",{Range:{From:Original.length-14,To:Original.length},Mapping:"source-blocks"});
+		const Data="data:image/jpeg;base64,"+readFileSync("examples/pdf/scanned-page.jpg").toString("base64");
+		const Image=await P.PdfImages.put(Data),Version="a".repeat(64);
+		const Selection:any={Path:"original.pdf",Mode:"阅读",Kind:"选区",Text:"设 H 是对角矩阵",SelectedText:"设 H 是对角矩阵",Mapping:"PDF文本层",Heading:"公式条件",LineStart:null,LineEnd:null,CapturedAt:"original-time",Truncated:false,Version,PdfTarget:{Kind:"text",Page:1,Values:[0,0,0,8]}};
+		const Supplement:any={...Selection,SelectedText:"",PdfTarget:{Kind:"rect",Page:1,Values:[10,10,30,30]},Pdf:{schemaVersion:1,ReadOnly:true,PageCount:1,Pages:[{Number:1,TextLayer:false,Image}]}};
+		const Context=combine_pdf_image(Selection,Supplement);
+		const Store=new ComposerDraftStore({getItem:K=>F.Local.get(K)??null,setItem:(K,V)=>{F.Local.set(K,V);}},P.draft_scope(),P.Session.Id);
+		Store.save("附上新条件，解释最后一步",{Context,Quote,ContextOrigin:"explicit"},0);
+		const Restored=Store.load()!;assert.deepEqual(Restored.Context,Context);assert.deepEqual(Restored.Quote,Quote);
+		assert.equal(await P.send_chat(Restored.Text,Restored.Context,Restored.Quote,{MaterialOrigin:Restored.ContextOrigin}),true,P.Status);
+		for(let I=0;I<200&&P.Busy;I++){await new Promise(R=>setTimeout(R,5));}
+		const Partial=P.Session.Messages.at(-1);assert.equal(Partial.CompletionStatus,"partial");assert.equal(Partial.Phase,"commentary");assert.equal(Writes,0);assert.equal(P.CompletedTurns.size,0);
+		const Sent=P.Session.Messages.findLast((M:any)=>M.Role==="user");assert.deepEqual(Sent.Context,Context);assert.deepEqual(Sent.Quote,Quote);assert.match(Sent.Prompt,/设 H 是对角矩阵/);
+		const Wire=Requests[0].messages.at(-1).content;assert.equal(Wire.filter((C:any)=>C.type==="image_url").length,1);assert.equal(Wire[0].text,Sent.Prompt);
+		assert.equal(await P.continue_answer(Partial.Id),true);for(let I=0;I<200&&P.Busy;I++){await new Promise(R=>setTimeout(R,5));}
+		const Continued=P.Session.Messages.findLast((M:any)=>M.Role==="user");assert.equal(Continued.ContinuesMessageId,Partial.Id);assert.equal(P.State.Sync.Operations.find((O:any)=>O.Id===Continued.OperationId).Input.ContinuesMessageId,Partial.Id);assert.notEqual(Continued.OperationId,Sent.OperationId);assert.equal(P.Session.Messages.find((M:any)=>M.Id===Partial.Id).CompletionStatus,"partial");
+		const Source:any={Path:"original.md",Mode:"编辑",Kind:"选区",Text:Before,SelectedText:Before,Selection:{From:0,To:Before.length},Mapping:"源文本",Heading:"",LineStart:0,LineEnd:2,Truncated:false,CapturedAt:"original-time",Version:await version_of(Before)};
+		assert.equal(await P.send_chat("最小修正积分",Source,null,{Mode:"edit",Scope:"captured"}),true);await wait_for_edit(P);assert.equal(Writes,0);
+		const Plan=P.Edits.Store.Data.Writes[0];assert.ok(Plan,JSON.stringify({Status:P.Status,Edit:P.Edits.Error,Requests:Requests.length,Last:P.Session.Messages.at(-1)}));await P.Edits.confirm(Plan.Id);assert.equal(Current,After);await P.Edits.undo(Plan.Id);assert.equal(Current,Before);assert.equal(Writes,2);
+		assert.equal(P.Session.Messages.find((M:any)=>M.Id==="original-proof").Text,Original);assert.ok(!JSON.stringify([...F.Files.values(),...F.Local.values()]).includes(Key));
+	}
+	finally{P.onunload();}
+});
+
+test("native buffered stop releases UI and late body is archived to the original operation after model switching",async()=>
+{
+	let Release!:(V:any)=>void,Posts=0;
+	const F=await mobile_fixture(async Params=>Params.method==="GET"?{status:200,json:{data:[{id:"one"},{id:"two"}]}}:(Posts++,await new Promise(R=>{Release=R;}))),P=F.Instance;
+	try
+	{
+		await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"one"},"original-stop-key");
+		assert.equal(await P.send_message("Original pending proof",null),true);for(let I=0;I<100&&!Release;I++){await new Promise(R=>setTimeout(R,2));}
+		const Operation=P.State.Sync.Operations[0];await P.stop_turn();assert.equal(P.Busy,false);assert.equal(P.Runtime.Stage,"idle");assert.equal(Operation.Status,"submission-unknown");
+		await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"two"},"");
+		Release({status:200,json:{id:"late-original",choices:[{finish_reason:"stop",message:{content:"Actual late proof"}}],usage:{completion_tokens:12}}});
+		for(let I=0;I<100&&![...F.Files.keys()].some(K=>K.includes(".receipt-"));I++){await new Promise(R=>setTimeout(R,3));}
+		assert.equal(Posts,1);assert.equal(P.State.Settings.Model,"two");assert.equal(P.CompletedTurns.size,0);assert.ok([...F.Files.keys()].some(K=>K.includes(".receipt-")));
+	}
+	finally{P.onunload();}
+});
+
+test("configured Responses-only models keep protocol at default/high/default, reuse memory key and preserve same-endpoint history",async()=>
+{
+	const Requests:any[]=[];
+	const F=await mobile_fixture(async Params=>
+	{
+		assert.equal(Params.method,"POST");assert.equal(Params.url,"https://opencode.ai/inference/go/openai/v1/responses");Requests.push(JSON.parse(Params.body));
+		return {status:200,json:{id:"original-response-"+Requests.length,status:"completed",output:[{type:"message",role:"assistant",content:[{type:"output_text",text:"Original complete proof"}]}]}};
+	}),P=F.Instance;
+	const Profile={Kind:"api",Provider:"opencode",Model:"responses-only",Protocol:"responses"},Catalog=[{Id:"responses-only",Protocol:"responses",Reasoning:{Format:"responses",Efforts:["high"]}}];
+	try
+	{
+		await P.start_backend(Profile,"original-shared-memory-key",Catalog);const SessionId=P.Session.Id;
+		for(const Effort of ["","high",""])
+		{
+			await P.update_run_settings("responses-only",Effort,false);assert.equal(await P.send_message("Original proof",null),true);
+			for(let I=0;I<100&&P.Busy;I++){await new Promise(R=>setTimeout(R,2));}
+		}
+		assert.equal(Requests.length,3);assert.equal(Requests[0].reasoning,undefined);assert.equal(Requests[1].reasoning.effort,"high");assert.equal(Requests[2].reasoning,undefined);
+		assert.ok(P.State.Sync.Operations.every((O:any)=>O.Input.Run.Backend.Protocol==="responses"));
+		const OldConnection=P.Connection,OldState=P.State;P.AnswerQuote={SelectedText:"original draft",SourceText:"original",SessionId,MessageId:"saved"};
+		await assert.rejects(P.start_backend({...Profile,Provider:"compatible",Base:"https://new-endpoint.invalid/v1"},""),/API Key/);
+		assert.equal(P.Connection,OldConnection);assert.equal(P.State,OldState);assert.equal(P.AnswerQuote.SelectedText,"original draft");
+		await P.start_backend({...Profile,Model:"responses-two"},"",[...Catalog,{Id:"responses-two",Protocol:"responses"}]);
+		assert.equal(P.Session.Id,SessionId);assert.equal(P.Session.Messages.length,6);assert.equal(P.Backend.Model,"responses-two");
+	}
+	finally{P.onunload();}
+});
+
+test("actual host checkpoint retries one async readback failure without a new delta and clears its unsaved notice",async()=>
+{
+	const F=await mobile_fixture(bootstrap_http()),P=F.Instance;
+	try
+	{
+		P.Remote.Enabled=false;P.Session.ThreadId="original-async-thread";P.Checkpoints.Interval=5;P.Checkpoints.ByteLimit=1;
+		const Write=P.app.vault.adapter.write;let Failures=0;
+		P.app.vault.adapter.write=async(Path:string,Text:string)=>{if(Path.endsWith(".save.stage.json")&&Text.includes("original async proof")&&!Failures++){await new Promise(R=>setTimeout(R,3));throw Error("original async write failure");}return Write(Path,Text);};
+		P.handle_message({method:"item/agentMessage/delta",params:{threadId:P.Session.ThreadId,turnId:"original-turn",itemId:"a",delta:"original async proof $x=1$"}});
+		for(let I=0;I<100&&(P.Checkpoints.pending||!F.Files.has(".obsidian/plugins/codex-sidebar/desktop-state-v2.json"));I++){await new Promise(R=>setTimeout(R,4));}
+		assert.equal(P.Checkpoints.Stats.failed,1);assert.equal(P.Checkpoints.Stats.checkpoints,1);assert.equal(P.Checkpoints.pending,0);
+		assert.equal(JSON.parse(F.Files.get(".obsidian/plugins/codex-sidebar/desktop-state-v2.json")!).Sessions[0].Messages[0].Text,"original async proof $x=1$");
+		assert.match(P.Status,/已保存/);
+	}
+	finally{P.onunload();}
+});
+
+for(const Scenario of ["next-turn","deleted-session"])
+{
+	test("late API evidence survives original thread replacement: "+Scenario,async()=>
+	{
+		let Release!:(V:any)=>void,Posts=0;
+		const F=await mobile_fixture(async Params=>
+		{
+			if(Params.method==="GET"){return {status:200,json:{data:[{id:"original"}]}};}
+			if(++Posts===1){return new Promise(R=>{Release=R;});}
+			return {status:200,json:{choices:[{finish_reason:"stop",message:{content:"New turn complete"}}]}};
+		}),P=F.Instance;
+		try
+		{
+			await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"original-late-key");
+			const SessionId=P.Session.Id;await P.send_message("Old proof",null);for(let I=0;I<100&&!Release;I++){await new Promise(R=>setTimeout(R,2));}
+			const Id=P.State.Sync.Operations[0].Id;await P.stop_turn();
+			if(Scenario==="next-turn")
+			{
+				assert.equal(await P.send_message("New proof",null),true);for(let I=0;I<100&&P.Busy;I++){await new Promise(R=>setTimeout(R,2));}
+			}
+			else
+			{
+				P.State.DeletedSessionIds=[SessionId];P.State.Sessions=[{Id:"retained",Title:"Other",ThreadId:null,Messages:[]}];P.State.ActiveId="retained";
+			}
+			Release({status:200,json:{id:"original-late-response",choices:[{finish_reason:"stop",message:{content:"Old late full proof"}}],usage:{completion_tokens:23}}});
+			for(let I=0;I<100&&P.State.Sync.Operations.find((O:any)=>O.Id===Id).Status!=="completed";I++){await new Promise(R=>setTimeout(R,3));}
+			const O=P.State.Sync.Operations.find((O:any)=>O.Id===Id);assert.equal(O.Status,"completed");assert.equal(O.Result.backend.result.Text,"Old late full proof");assert.equal(O.Result.backend.result.Metadata.Usage[0].OutputTokens,23);
+			if(Scenario==="next-turn"){const R=P.Session.Messages.find((M:any)=>M.Text==="Old late full proof");assert.equal(R.ArchivedOnly,true);assert.equal(P.CompletedTurns.size,1);assert.equal(P.Session.Messages.find((M:any)=>M.Text==="New turn complete").CompletionStatus,"completed");}
+			else{assert.equal(O.SessionDeleted,true);assert.equal(P.State.Sessions.some((S:any)=>S.Id===SessionId),false);assert.equal(P.CompletedTurns.size,0);}
+		}
+		finally{P.onunload();}
+	});
+}
+
+test("syntactically valid but partial edit JSON never creates an applicable preview",async()=>
+{
+	const Before="原积分值 $1/2$",After="原积分值 $1/3$";
+	const F=await mobile_fixture(async Params=>Params.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:{status:200,json:{choices:[{finish_reason:"length",message:{content:JSON.stringify({schemaVersion:1,kind:"note-edit",status:"proposal",markdown:After,rationale:"Original local correction"})}}]}}),P=F.Instance;
+	try
+	{
+		await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"original-partial-edit-key");let Writes=0;P.Edits.Host.read_current=async()=>Before;P.Edits.Host.compare_write=async()=>{Writes++;};
+		const Source:any={Path:"original.md",Kind:"选区",Mode:"编辑",Text:Before,SelectedText:Before,Selection:{From:0,To:Before.length},Mapping:"源文本",Heading:"",LineStart:0,LineEnd:0,CapturedAt:"original-time",Truncated:false,Version:await version_of(Before)};
+		assert.equal(await P.send_chat("最小修正",Source,null,{Mode:"edit",Scope:"captured"}),true);
+		for(let I=0;I<100&&(!P.Edits.Error||P.Busy);I++){await new Promise(R=>setTimeout(R,3));}
+		assert.equal(P.Session.Messages.at(-1).CompletionStatus,"partial");assert.equal(P.Edits.Store.Data.Writes.length,0);assert.equal(Writes,0);assert.match(P.Edits.Error,/中断|失败/);
+	}
+	finally{P.onunload();}
 });

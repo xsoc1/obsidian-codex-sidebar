@@ -171,7 +171,7 @@ export function plan_history_input(Messages: ChatMessage[], Options: HistoryBudg
 	const Omitted = Messages.filter(M => ["user", "assistant"].includes(M.Role) && !SelectedIds.has(M.Id));
 	const Index = Omitted.filter(M => M.Role === "user").slice(-24).map(M => ({ id: M.Id, turn: M.TurnId ?? null, question: M.Text.slice(0, 96), source: M.Context?.Path ?? M.Task?.Source?.Path ?? null, status: M.CompletionStatus ?? "unknown" }));
 	const Constraints = Options.UserConstraints ?? [];
-	const ReadInstructions = Options.HistoryReadAvailable === false ? "当前桥不支持历史读取工具; 材料缺失时请明确请用户补充或升级桥, 不假装能读取." : "需要省略的证明、符号或原文时调用 obsidian_history_read, 不猜补. 带 source_version 的定位符约束引用时原文; 第一页读取返回正文 version, 随后的页必须使用正文版本, 目录版本不能用于正文.";
+	const ReadInstructions = Options.HistoryReadAvailable === false ? "当前连接使用宿主预算预取，不提供历史读取工具；必要原文未附带时请指出缺失部分，请用户分段提供，不假装已读." : "需要省略的证明、符号或原文时调用 obsidian_history_read, 不猜补. 带 source_version 的定位符约束引用时原文; 第一页读取返回正文 version, 随后的页必须使用正文版本, 目录版本不能用于正文.";
 	const Navigation = Omitted.length || Constraints.length || Result.Materials.length ? "历史输入构造 bounded-history-v1. 完整历史仍由客户端保存, 本轮提供下列ID的材料或明确补读定位符, 不是删除历史. 历史索引仅供定位, 不作为定理条件或证明的替代. " + ReadInstructions + " 未知状态仍为未知. 字节预算是保守策略, 不是精确token数; 每张图另留保守容量, 不代表精确视觉token计数.\n" + JSON.stringify({ included: Result.Selected.map(M => M.Id), deferred_originals: Result.Materials, omitted_count: Omitted.length, recent_omitted_questions: Index, user_constraints: Constraints }) : "";
 	if(Bytes(Navigation) > 8192) { throw new Error("用户约束或历史导航超过恢复预算; 请缩小本轮材料, 原历史保留."); }
 	const Actual = Result.Messages.reduce((N, M) => N + Bytes(Saved(M)), 0) + Bytes(Navigation), Envelope = Result.Messages.length * 192;

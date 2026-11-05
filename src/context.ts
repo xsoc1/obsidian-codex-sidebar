@@ -202,6 +202,8 @@ export class ContextCapture
 			Mapping,
 			CapturedAt: new Date().toISOString(),
 			Truncated: Bounded.Truncated || SelectedText.length > 12000,
+			SelectedTruncated: SelectedText.length > 12000,
+			ContextTruncated: Bounded.Truncated,
 			Version,
 			...(Selection ? { Selection } : {}),
 			...(Explanation ? { Explanation } : {}),

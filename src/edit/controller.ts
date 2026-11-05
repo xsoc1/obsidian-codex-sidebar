@@ -87,7 +87,7 @@ export class ChatEdits
 		const User = Messages.find(Value => Value.Role === "user" && Value.Task?.Id === TaskId);
 		const Replies = User?.TurnId ? Messages.filter(Value => Value.Role === "assistant" && Value.TurnId === User.TurnId) : [];
 		const Final = Replies.filter(Value => Value.Phase === "final_answer").at(-1) ?? Replies.at(-1);
-		if(!Final || Replies.some(Value => Value.CompletionStatus !== "completed") || (Replies.some(Value => Value.Phase) && !Replies.some(Value => Value.Phase === "final_answer"))) { throw new Error("缺少完整原始回复, 不恢复中断或其他轮次的输出"); }
+		if(!Final || Replies.some(Value => Value.ArchivedOnly || Value.CompletionStatus !== "completed") || (Replies.some(Value => Value.Phase) && !Replies.some(Value => Value.Phase === "final_answer"))) { throw new Error("缺少完整原始回复, 不恢复中断或其他轮次的输出"); }
 		this.Processing.add(TaskId);
 		try
 		{
@@ -132,7 +132,7 @@ export class ChatEdits
 			const Id = User.Task!.Id, Record = this.Store.Data.Records.find(Value => Value.Spec.Id === Id);
 			if(Record?.Status !== "pending" || this.Processing.has(Id)) { continue; }
 			const Replies = Messages.filter(Value => Value.Role === "assistant" && Value.TurnId === User.TurnId);
-			if(!Replies.length || Replies.some(Value => !Value.CompletionStatus)) { continue; }
+			if(!Replies.length || Replies.some(Value => !Value.CompletionStatus || Value.ArchivedOnly)) { continue; }
 			const Final = Replies.filter(Value => Value.Phase === "final_answer").at(-1) ?? Replies.at(-1)!;
 			const Complete = Replies.every(Value => Value.CompletionStatus === "completed") && (!!Replies.find(Value => Value.Phase === "final_answer") || !Replies.some(Value => Value.Phase));
 			this.Processing.add(Id);

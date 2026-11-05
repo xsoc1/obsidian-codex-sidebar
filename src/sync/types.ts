@@ -18,6 +18,7 @@ export interface SendOperation
 	Request?: unknown;
 	RequestDigest?: string;
 	Attempted?: boolean;
+	WaitStopped?: boolean;
 	HostRequestDigest?: string;
 	Conflicts?: SyncConflict[];
 	Revision?: number;

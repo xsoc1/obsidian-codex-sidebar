@@ -16,7 +16,11 @@ export interface ChatMessage
 	Quote?: AnswerQuote | null;
 	SummaryParts?: string[];
 	Task?: TaskSpec;
-	CompletionStatus?: "completed" | "interrupted" | "failed";
+	CompletionStatus?: "completed" | "interrupted" | "failed" | "partial" | "refused" | "unknown" | "cancelled";
+	BackendResult?: import("./backend-result").BackendResult;
+	ContinuesMessageId?: string;
+	ArchivedOnly?: boolean;
+	MaterialOrigin?: "explicit" | "automatic";
 	Phase?: "commentary" | "final_answer" | null;
 	OperationId?: string;
 	SyncVersion?: { Revision: number; Digest: string; Origin: string };

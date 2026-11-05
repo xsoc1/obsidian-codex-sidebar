@@ -21,9 +21,8 @@ export class CodexSettings extends PluginSettingTab
 		const Current = this.Owner.Backend;
 		const Activate = async (Profile: unknown, Key: string) =>
 		{
-			try { await this.Owner.start_backend(Profile, Key); new Notice(this.Owner.Status); }
-			catch(ErrorValue) { this.Owner.Status = error_text(ErrorValue); this.Owner.refresh(); new Notice(this.Owner.Status); }
-			this.display();
+			try { await this.Owner.start_backend(Profile, Key); new Notice(this.Owner.Status); return true; }
+			catch(ErrorValue) { this.Owner.Status = error_text(ErrorValue); this.Owner.refresh(); new Notice(this.Owner.Status); return false; }
 		};
 		const Connection = new Setting(this.containerEl).setName("当前连接");
 		const UpdateConnection = () =>
@@ -33,11 +32,26 @@ export class CodexSettings extends PluginSettingTab
 				: this.Owner.Remote.Enabled ? "电脑上的独立远程桥" : "本机 Codex");
 		};
 		UpdateConnection();
+		const Saved = this.Owner.connection_choices();
+		if(Saved.length)
+		{
+			new Setting(this.containerEl).setName("已保存的连接").setDesc("配置不含密钥。当前进程内可复用同端点、同身份凭据；重载后重新输入。").addDropdown(D=>
+			{
+				for(const P of Saved) { D.addOption(P.Id,P.Label); }
+				D.setValue(Saved.find(P=>P.Active)?.Id ?? Saved[0].Id).onChange(async Id=>
+				{
+					D.setDisabled(true);
+					try { await this.Owner.choose_connection(Id); UpdateConnection(); }
+					catch(E) { new Notice(error_text(E)); }
+					finally { D.setDisabled(false); }
+				});
+			});
+		}
 		this.CloseApiSettings = api_settings(this.containerEl, Current, async (Profile, Key, Catalog) =>
 		{
 			try { await this.Owner.start_backend(Profile, Key, Catalog); }
 			finally { UpdateConnection(); }
-		});
+		}, (Profile,Name,Catalog)=>this.Owner.save_connection_profile(Profile,Name,Catalog));
 		if(!Platform.isWin || Platform.isMobileApp) { return; }
 		let Agent: LocalAgent = Current?.Kind === "agent" ? Current.Agent : "claude";
 		let Path = Current?.Kind === "agent" ? Current.Path : "", AgentModel = Current?.Kind === "agent" ? Current.Model : "";
@@ -56,8 +70,8 @@ export class CodexSettings extends PluginSettingTab
 			.addText(Text => { AgentInput = Text.inputEl; AgentInput.type = "password"; AgentInput.autocomplete = "off"; AgentInput.spellcheck = false; })
 			.addButton(Button => Button.setButtonText("启用本机 Agent").onClick(async () =>
 			{
-				const Key = AgentInput.value; AgentInput.value = ""; Button.setDisabled(true);
-				try { await Activate({ Kind: "agent", Agent, Path, Model: AgentModel }, Key); }
+				const Key = AgentInput.value; Button.setDisabled(true);
+				try { if(await Activate({ Kind: "agent", Agent, Path, Model: AgentModel }, Key)) { AgentInput.value="";UpdateConnection(); } }
 				finally { Button.setDisabled(false); }
 			}));
 	}
