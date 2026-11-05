@@ -12,8 +12,8 @@ import { image_inputs, message_pdf_refs, history_pdf_refs } from "../src/pdf/inp
 import { branch_prefix, history_items } from "../src/history";
 import { build_prompt, type ContextSnapshot } from "../src/prompt";
 import { note_path, source_path } from "../src/edit/document";
-import { parse_pdf_link, pdf_target, pdf_selected_text, pdf_target_subpath, resolve_pdf_file } from "../src/pdf/target";
-import { live_pdf_target, pdf_plus_active } from "../src/pdf/plus";
+import { parse_pdf_anchor, pdf_target, pdf_selected_text, pdf_target_subpath } from "../src/pdf/target";
+import { native_pdf_text_target } from "../src/pdf/native-view";
 import { locate_source, source_reference, validate_source_reference } from "../src/sources";
 import { pdf_box_target } from "../src/pdf/box";
 
@@ -130,38 +130,34 @@ test("direct PDF crop preserves display rotation in the actual render, versioned
 	finally { F.Reader.close(); }
 });
 
-test("PDF++ imports vault-local selection links and refuses ambiguous files or unbounded targets", () =>
+test("saved PDF selection anchors remain readable without accepting malformed navigation targets", () =>
 {
-	const Text = parse_pdf_link("[[课本/李代数.pdf#page=2&selection=0,0,0,5|定理]]");
-	assert.equal(Text.Path, "课本/李代数.pdf");
-	assert.equal(pdf_target_subpath(Text.Target), "#page=2&selection=0,0,0,5");
-	assert.deepEqual(parse_pdf_link("![公式](<Course/Formula%20Book.pdf#page=3&rect=12,18,100,200&width=300>)"), { Path: "Course/Formula Book.pdf", Target: pdf_target(3, "rect", "12,18,100,200") });
-	for(const Link of ["[[A.pdf#page=1]]", "https://a.test/a.pdf#page=1&rect=1,2,3,4", "[[../a.pdf#page=1&rect=1,2,3,4]]", "[[a.pdf#page=1&selection=0,0,0,0]]", "[[a.pdf#page=1&rect=1,4,3,2]]", "[[a.pdf#page=1&page=2&rect=1,2,3,4]]", "[[a.pdf#page=1&rect=1,2,3,4&selection=0,0,0,1]]"]) { assert.throws(() => parse_pdf_link(Link)); }
-	const Files = ["A/a.pdf", "B/a.pdf", "A/b.pdf"].map(path => ({ path, extension: "pdf" }));
-	const App: any = { vault: { getFiles: () => Files } };
-	assert.throws(() => resolve_pdf_file(App, "a.pdf"), /多个同名/);
-	assert.equal(resolve_pdf_file(App, "A/a.pdf"), Files[0]);
-	assert.equal(resolve_pdf_file(App, "b.pdf"), Files[2]);
-	assert.throws(() => resolve_pdf_file(App, "c.pdf"), /找不到/);
+	const Text = parse_pdf_anchor("pdf-target-v1:page=2&selection=0,0,0,5");
+	assert.equal(pdf_target_subpath(Text!), "#page=2&selection=0,0,0,5");
+	assert.deepEqual(parse_pdf_anchor("pdf-target-v1:page=3&rect=12,18,100,200"), pdf_target(3, "rect", "12,18,100,200"));
+	for(const Fragment of ["page=1", "page=1&selection=0,0,0,0", "page=1&rect=1,4,3,2", "page=1&page=2&rect=1,2,3,4", "page=1&rect=1,2,3,4&selection=0,0,0,1"])
+	{
+		assert.equal(parse_pdf_anchor("pdf-target-v1:" + Fragment), null);
+	}
 });
 
-test("PDF++ live viewer lookup is optional and never infers offsets for an unsupported viewer", () =>
+test("native reader uses precise text offsets only for the currently loaded PDF", () =>
 {
 	const PageEl = {}, Root: any = { querySelector: () => PageEl };
-	const Absent: any = {}, Unknown: any = { plugins: { getPlugin: () => ({}) } };
-	const Supported: any = { plugins: { getPlugin: (Id: string) => Id === "pdf-plus" ? { lib: { getPDFViewerChildAssociatedWithNode: (NodeValue: unknown) =>
+	const File = { path: "current.pdf" };
+	const Unknown: any = { containerEl: Root, file: File }, Child = { file: File, getTextSelectionRangeStr: (NodeValue: unknown) =>
 	{
 		assert.equal(NodeValue, PageEl);
-		return { getTextSelectionRangeStr: () => "0,1,0,5" };
-	} } } : null } };
-	assert.equal(pdf_plus_active(Absent), false); assert.equal(live_pdf_target(Absent, Root, 1), null);
-	assert.equal(pdf_plus_active(Unknown), true); assert.equal(live_pdf_target(Unknown, Root, 1), null);
-	assert.deepEqual(live_pdf_target(Supported, Root, 2), pdf_target(2, "text", "0,1,0,5"));
+		return "0,1,0,5";
+	} };
+	assert.equal(native_pdf_text_target(Unknown, 1), null);
+	assert.deepEqual(native_pdf_text_target({ ...Unknown, viewer: { child: Child } }, 2), pdf_target(2, "text", "0,1,0,5"));
+	assert.equal(native_pdf_text_target({ ...Unknown, viewer: { child: { ...Child, file: { path: "previous.pdf" } } } }, 2), null);
 	const Multi = pdf_target(2, "text", "0,1,2,2") as Extract<ReturnType<typeof pdf_target>, { Kind: "text" }>;
 	assert.equal(pdf_selected_text(Multi, [{ str: "abc", hasEOL: true }, { str: "def" }, { str: "ghi" }]), "bc\ndef gh");
 });
 
-test("PDF++ text works without images, scans crop only the requested area and versioned sources downgrade safely", async () =>
+test("PDF text works without images and old rectangle references still open their original page", async () =>
 {
 	const TextFixture = reader_fixture(), ScanFixture = reader_fixture(true);
 	try
@@ -179,11 +175,9 @@ test("PDF++ text works without images, scans crop only the requested area and ve
 		assert.equal(message_pdf_refs({ ...Msg, Context: Rect }).length, 1);
 		const [TextRef] = source_reference(Text), [RectRef] = source_reference(Rect);
 		assert.equal(validate_source_reference(TextRef).Kind, "pdf");
-		let Enabled = true, Changed = false;
-		const App: any = { plugins: { getPlugin: () => Enabled ? {} : null }, vault: { getFileByPath: () => TextFixture.File, readBinary: async () => new ArrayBuffer(Changed ? 101 : 100) } };
+		let Changed = false;
+		const App: any = { get plugins() { throw new Error("PDF source navigation must not query another plugin"); }, vault: { getFileByPath: () => TextFixture.File, readBinary: async () => new ArrayBuffer(Changed ? 101 : 100) } };
 		assert.equal((await locate_source(App, TextRef)).Subpath, "#page=1&selection=0,0,0,5");
-		assert.equal((await locate_source(App, RectRef)).Subpath, "#page=2&rect=100,180,300,320");
-		Enabled = false;
 		assert.equal((await locate_source(App, RectRef)).Subpath, undefined);
 		assert.equal((await locate_source(App, RectRef)).Page, 2);
 		assert.equal((await locate_source(App, TextRef)).Subpath, "#page=1&selection=0,0,0,5");

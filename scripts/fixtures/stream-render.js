@@ -33,8 +33,17 @@ async function exercise_context_panel(View, Root, Owner)
 	const Input = View.Input, Draft = Input.value = '尚未发送的中文草稿', Messages = Root.querySelector('.codex-messages');
 	const GetBounds = () => ['.codex-context-trigger','.codex-navigation>summary','.codex-options>summary','.codex-messages','.codex-composer'].map(S => {const R=Root.querySelector(S).getBoundingClientRect(); return [R.x,R.y,R.width,R.height];});
 	const Scroll = Messages.scrollTop, Before = JSON.stringify(GetBounds()), InitiallyClosed = Panel.hidden;
+	const Nav = Root.querySelector('.codex-navigation'), Models = Root.querySelector('.codex-options');
+	const ContextPosition = JSON.stringify(GetBounds()[0]);
+	const Arrow = El => getComputedStyle(El,'::before').transform;
+	const ClosedArrow = Arrow(Trigger);
+	const SameClosedArrow = ClosedArrow !== 'none' && Arrow(Nav.querySelector('summary')) === ClosedArrow && Arrow(Models.querySelector('summary')) === ClosedArrow;
+	Nav.open = true;
+	const PinnedWhileNavigationOpens = JSON.stringify(GetBounds()[0]) === ContextPosition;
+	const OpenArrow = Arrow(Nav.querySelector('summary')); Nav.open = false;
 	const MouseToggle = () => Trigger.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
 	MouseToggle();
+	const SameOpenArrow = Arrow(Trigger) === OpenArrow && OpenArrow !== ClosedArrow;
 	const Bounds = Panel.getBoundingClientRect(), MessageBounds = Messages.getBoundingClientRect(), ComposerBounds = Root.querySelector('.codex-composer').getBoundingClientRect();
 	const StableOpen = JSON.stringify(GetBounds()) === Before && Messages.scrollTop === Scroll && !Panel.hidden;
 	const Bounded = Bounds.top >= MessageBounds.top - 1 && Bounds.bottom <= ComposerBounds.top + 1 && Bounds.width <= MessageBounds.width + 1;
@@ -71,7 +80,7 @@ async function exercise_context_panel(View, Root, Owner)
 	await Promise.resolve();
 	const CropPreview = !Panel.hidden && Crop.open && Crop.querySelector('img')?.getAttribute('src') === ImageUri && JSON.stringify(GetBounds()) === Before;
 	MouseToggle(); Owner.can_capture_pdf_box = () => false; Owner.Capture.Snapshot = Snapshot; Input.value = ''; View.refresh();
-	return {InitiallyClosed,StableOpen,Bounded,StatusUpdates,StableClose,KeyboardOpens,ImePreserved,EscapeRestoresFocus,OutsideKeepsDraft,Programmatic,CaptureEntry,CropPreview};
+	return {InitiallyClosed,StableOpen,Bounded,StatusUpdates,StableClose,KeyboardOpens,ImePreserved,EscapeRestoresFocus,OutsideKeepsDraft,Programmatic,CaptureEntry,CropPreview,PinnedWhileNavigationOpens,SameClosedArrow,SameOpenArrow};
 }
 
 window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
@@ -181,7 +190,7 @@ window.run_context_case = async () =>
 	const Snapshot = {Path:'Original.md',Kind:'选区',Mode:'阅读',Mapping:'源块',CapturedAt:'original-time',Text:'原创段落 $x=1$.',LineStart:0,LineEnd:0,Heading:'定义',Truncated:false};
 	const Owner = {Session:{Id:'session',Title:'original',Messages:[]},Capture:{Snapshot},State:{Settings:{AttachContext:true},Sessions:[]},Busy:true,refresh:()=>{}};Owner.State.Sessions=[Owner.Session];
 	const View = new Sidebar.CodexView({},Owner);View.Opened=true;View.Input={value:''};View.ContextElement=Context;View.SelectionPreview={update:()=>{}};
-	View.StatusElement=Root.createDiv(); Owner.can_capture_pdf_box=()=>false; View.PdfBoxButton=Root.createEl("button"); View.PdfLinkButton=Root.createEl("button");
+	View.StatusElement=Root.createDiv(); Owner.can_capture_pdf_box=()=>false; View.PdfBoxButton=Root.createEl("button");
 	View.NoteSessionBind=Root.createEl('button');View.SessionsElement=Root.createEl('select');
 	for(const Method of ['refresh_controls','refresh_completion','refresh_quote','refresh_activity'])View[Method]=()=>{};
 	try{

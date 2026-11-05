@@ -1,6 +1,6 @@
 import {
 	Plugin, ItemView, WorkspaceLeaf, PluginSettingTab, Setting, Notice,
-	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, parseYaml, type App, type Menu, type EventRef, type FileView, type TFile
+	MarkdownRenderer, MarkdownView, Component, FileSystemAdapter, Modal, editorInfoField, Platform, requestUrl, parseYaml, type App, type FileView, type TFile
 } from "obsidian";
 import { ContextCapture } from "./context";
 import { build_prompt, derived_message_prompt, assert_quote_read_capability, DefaultInstructions, client_instructions, migrate_instructions, instruction_items, type ContextSnapshot, type AnswerQuote } from "./prompt";
@@ -25,10 +25,10 @@ import { safe_math_markdown } from "./edit/safe-markdown";
 import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
 import { image_inputs, message_pdf_refs, history_pdf_refs } from "./pdf/inputs";
 import { pdf_reference, jpeg_info, type PdfImageRef } from "./pdf/types";
-import { PdfLinkModal, PdfPageModal, pdf_preview, PdfInstructions } from "./pdf/panel";
-import { is_pdf_view, pdf_location } from "./pdf/reader";
-import { live_pdf_target, pdf_plus_active } from "./pdf/plus";
+import { PdfPageModal, pdf_preview, PdfInstructions } from "./pdf/panel";
+import { is_pdf_view } from "./pdf/reader";
 import { select_pdf_box, type PdfBox } from "./pdf/box";
+import { PdfBoxToolbar } from "./pdf/toolbar";
 import { ChatEdits } from "./edit/controller";
 import { open_edit_store } from "./edit/database";
 import { type EditRole, type EditScope } from "./edit/protocol";
@@ -393,6 +393,11 @@ export default class CodexSidebarPlugin extends Plugin
 	private SessionDeletion: Promise<void> | null = null;
 	private CaptureTimer: ReturnType<typeof setTimeout> | null = null;
 	private PdfBoxCapture: { View: FileView; File: TFile; Abort: AbortController } | null = null;
+	private PdfToolbar = new PdfBoxToolbar(View =>
+	{
+		if(this.PdfBoxCapture?.View === View) { this.cancel_pdf_box(); }
+		else { this.open_pdf_box(View); }
+	});
 	private Modals = new Set<Modal>();
 	private BoundDocuments = new Set<Document>();
 	private CompletionWorker: CompletionService | null = null;
@@ -547,6 +552,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			const Active = this.app.workspace.activeLeaf?.view;
 			if(this.PdfBoxCapture && note_file_path(Active) && Active !== this.PdfBoxCapture.View) { this.cancel_pdf_box(); }
+			this.sync_pdf_toolbar();
 			this.Capture.track_view();
 			if(this.Capture.LastView)
 			{
@@ -554,7 +560,7 @@ export default class CodexSidebarPlugin extends Plugin
 			}
 			this.observe_note_file(); this.refresh();
 		}));
-		this.registerEvent(this.app.workspace.on("file-open", () => { this.check_pdf_box(); this.observe_note_file(); }));
+		this.registerEvent(this.app.workspace.on("file-open", () => { this.sync_pdf_toolbar(); this.observe_note_file(); }));
 		this.registerEvent(this.app.vault.on("rename", (File, Old) =>
 		{
 			try
@@ -571,9 +577,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			try { this.NoteSessions?.forget(File.path); } catch(ErrorValue) { this.NoteSessionError = error_text(ErrorValue); this.refresh(); }
 		}));
-		this.registerEvent(this.app.workspace.on("layout-change", () => { this.check_pdf_box(); this.refresh(); }));
-		const PdfEvents = this.app.workspace as unknown as { on(Name: "pdf-menu", Callback: (MenuValue: Menu, Info?: { pageNumber?: number; selection?: string }) => void): EventRef };
-		this.registerEvent(PdfEvents.on("pdf-menu", (MenuValue, Info) => { if(Info?.selection?.trim()) { this.add_pdf_selection_action(MenuValue, Info.pageNumber); } }));
+		this.registerEvent(this.app.workspace.on("layout-change", () => { this.sync_pdf_toolbar(); this.refresh(); }));
 		this.registerEvent(this.app.workspace.on("editor-menu", (MenuValue, Editor, Info) =>
 		{
 			if(!Editor.getSelection().trim())
@@ -595,6 +599,7 @@ export default class CodexSidebarPlugin extends Plugin
 				return;
 			}
 			this.Capture.track_view();
+			this.sync_pdf_toolbar();
 			this.observe_note_file();
 			this.bind_document(document);
 			if(this.Capture.LastView)
@@ -1899,14 +1904,6 @@ export default class CodexSidebarPlugin extends Plugin
 		}).open();
 	}
 
-	open_pdf_link(): void
-	{
-		if(!pdf_plus_active(this.app)) { return; }
-		this.cancel_pdf_box();
-		if(this.CaptureTimer) { clearTimeout(this.CaptureTimer); this.CaptureTimer = null; }
-		new PdfLinkModal(this.app, this.Capture, () => this.reveal_pdf_attachment()).open();
-	}
-
 	can_capture_pdf_box(): boolean
 	{
 		return this.pdf_box_view() !== null;
@@ -1922,18 +1919,20 @@ export default class CodexSidebarPlugin extends Plugin
 	private cancel_pdf_box(): void
 	{
 		this.PdfBoxCapture?.Abort.abort(); this.PdfBoxCapture = null;
+		this.PdfToolbar.set_active(null);
 	}
 
-	private check_pdf_box(): void
+	private sync_pdf_toolbar(): void
 	{
+		if(this.Unloaded) { return; }
 		const Box = this.PdfBoxCapture;
 		if(Box && (!Box.View.containerEl.isConnected || Box.View.file !== Box.File)) { this.cancel_pdf_box(); }
+		this.PdfToolbar.sync(this.app.workspace.getLeavesOfType("pdf").map(Leaf => Leaf.view).filter(is_pdf_view));
 	}
 
-	open_pdf_box(): void
+	open_pdf_box(View: FileView | null = this.pdf_box_view()): void
 	{
-		const View = this.pdf_box_view();
-		if(!View) { new Notice("请先打开要框选的 PDF"); return; }
+		if(!is_pdf_view(View) || !View.file || !View.containerEl.isConnected) { new Notice("请先打开要框选的 PDF"); return; }
 		if(this.Capture.Suspended) { new Notice("请等待当前 PDF 缓存操作结束"); return; }
 		this.cancel_pdf_box();
 		if(this.CaptureTimer) { clearTimeout(this.CaptureTimer); this.CaptureTimer = null; }
@@ -1941,6 +1940,7 @@ export default class CodexSidebarPlugin extends Plugin
 		const Capture = { View, File, Abort };
 		const { mtime: Stamp, size: Size } = File.stat, Path = File.path;
 		this.PdfBoxCapture = Capture;
+		this.PdfToolbar.set_active(View);
 		try
 		{
 			if(Platform.isMobile) { this.app.workspace.rightSplit.collapse(); }
@@ -1958,7 +1958,7 @@ export default class CodexSidebarPlugin extends Plugin
 						const Snapshot = await this.Capture.capture_pdf_target(File, Box.Target, View.containerEl.ownerDocument, Abort.signal, undefined, Box.Rotation);
 						if(Abort.signal.aborted || this.Unloaded) { return; }
 						if(!Snapshot) { throw new Error("上下文已切换，请重新框选"); }
-						await this.reveal_pdf_attachment(false, Abort.signal);
+						await this.reveal_pdf_attachment(Abort.signal);
 					}
 					catch(ErrorValue) { if(!Abort.signal.aborted && !this.Unloaded) { this.show_error(ErrorValue); } }
 					finally { Progress.hide(); if(this.PdfBoxCapture === Capture) { this.cancel_pdf_box(); } }
@@ -1968,42 +1968,12 @@ export default class CodexSidebarPlugin extends Plugin
 		catch(ErrorValue) { this.cancel_pdf_box(); this.show_error(ErrorValue); }
 	}
 
-	private add_pdf_selection_action(MenuValue: Menu, Page: number | undefined): void
-	{
-		if(!pdf_plus_active(this.app) || typeof Page !== "number" || !Number.isSafeInteger(Page)) { return; }
-		const Matches = this.app.workspace.getLeavesOfType("pdf").flatMap(({ view: View }) =>
-		{
-			if(!is_pdf_view(View) || !View.file) { return []; }
-			const Root = View.containerEl;
-			let Location;
-			try { Location = pdf_location(Root, "选区"); } catch { return []; }
-			if(Location?.Pages.length !== 1 || Location.Pages[0] !== Page) { return []; }
-			return [{ File: View.file, Root, Selected: Location.SelectedText }];
-		});
-		if(Matches.length !== 1) { return; }
-		const { File, Root, Selected } = Matches[0], Target = live_pdf_target(this.app, Root, Page);
-		if(!Target) { return; }
-		const Path = File.path, { mtime: Stamp, size: Size } = File.stat;
-		MenuValue.addItem(Item => Item.setTitle("附带选区到 Codex").setIcon("bot").onClick(async () =>
-		{
-			try
-			{
-				if(this.Unloaded || !pdf_plus_active(this.app)) { return; }
-				if(File.path !== Path || File.stat.mtime !== Stamp || File.stat.size !== Size) { throw new Error("PDF 已变化, 请重新选择"); }
-				if(this.CaptureTimer) { clearTimeout(this.CaptureTimer); this.CaptureTimer = null; }
-				const Snapshot = await this.Capture.capture_pdf_target(File, Target, Root.ownerDocument, undefined, Selected);
-				if(Snapshot && !this.Unloaded) { await this.reveal_pdf_attachment(); }
-			}
-			catch(ErrorValue) { this.show_error(ErrorValue); }
-		}));
-	}
-
-	private async reveal_pdf_attachment(Connect = true, Signal?: AbortSignal): Promise<void>
+	private async reveal_pdf_attachment(Signal: AbortSignal): Promise<void>
 	{
 		this.State.Settings.AttachContext = true;
-		this.refresh(); await this.persist(Connect);
-		if(Signal?.aborted) { return; }
-		await this.open_sidebar(Connect);
+		this.refresh(); await this.persist(false);
+		if(Signal.aborted) { return; }
+		await this.open_sidebar(false);
 		for(const { view: View } of this.app.workspace.getLeavesOfType(ViewType))
 		{
 			if(View instanceof CodexView) { View.reveal_pdf_context(); }
@@ -2247,6 +2217,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.Runtime.close();
 		this.Unloaded = true;
 		this.cancel_pdf_box();
+		this.PdfToolbar.dispose();
 		this.BackendKey = "";
 		this.LocalApiKey = undefined;
 		void this.Edits?.Store.close();

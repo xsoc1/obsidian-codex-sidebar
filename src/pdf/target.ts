@@ -1,4 +1,3 @@
-import type { App, TFile } from "obsidian";
 import type { PdfRegionInput } from "./types";
 
 type Quad = [number, number, number, number];
@@ -52,7 +51,7 @@ function parse_fragment(Text: string): PdfTarget
 	if(!Page || !/^\d{1,5}$/.test(Page) || (TextRange === null) === (Rect === null) ||
 		["page", "selection", "rect"].some(Key => Params.getAll(Key).length > 1))
 	{
-		throw new Error("请粘贴单个 PDF 文字选区或矩形链接");
+		throw new Error("PDF 选区定位无效");
 	}
 	return pdf_target(Number(Page), TextRange === null ? "rect" : "text", TextRange ?? Rect!);
 }
@@ -63,44 +62,12 @@ export function parse_pdf_anchor(Anchor: string | undefined): PdfTarget | null
 	try { return parse_fragment(Anchor.slice(Prefix.length)); } catch { return null; }
 }
 
-export function parse_pdf_link(Input: string): { Path: string; Target: PdfTarget }
-{
-	const Text = Input.trim();
-	if(!Text || Text.length > 8192 || /[\r\n]/.test(Text)) { throw new Error("请粘贴单个 PDF 选区链接"); }
-	const Wiki = Text.match(/^!?\[\[([^\[\]]+)\]\]$/), Markdown = Text.match(/^!?\[[^\[\]]*\]\((.+)\)$/);
-	const Link = Wiki ? Wiki[1].split("|", 1)[0] : Markdown ? Markdown[1].replace(/^<(.+)>$/, "$1") : Text;
-	const At = Link.lastIndexOf("#");
-	if(At <= 0) { throw new Error("链接缺少 PDF 页码与选区"); }
-	let Path = Link.slice(0, At);
-	if(!Wiki)
-	{
-		try { Path = decodeURIComponent(Path); } catch { throw new Error("PDF 路径编码无效"); }
-	}
-	if(!/\.pdf$/i.test(Path) || Path !== Path.trim() || /[\\:\u0000-\u001f<>"|?*\[\]]/.test(Path) || Path.split("/").some(Part => !Part || Part.startsWith(".")))
-	{
-		throw new Error("只支持当前库内的 PDF 文件链接. 如有相对上级路径, 请使用库内完整路径");
-	}
-	return { Path, Target: parse_fragment(Link.slice(At + 1)) };
-}
-
-export function resolve_pdf_file(AppValue: App, Path: string): TFile
-{
-	const Files = AppValue.vault.getFiles().filter(File => File.extension.toLowerCase() === "pdf" && (File.path === Path || File.path.endsWith("/" + Path)));
-	if(Files.length !== 1)
-	{
-		const Exact = Path.includes("/") ? Files.find(File => File.path === Path) : undefined;
-		if(Exact) { return Exact; }
-		throw new Error(Files.length ? "有多个同名 PDF, 请粘贴库内完整路径" : "当前库找不到链接所指的 PDF");
-	}
-	return Files[0];
-}
-
 export function pdf_region(Target: Extract<PdfTarget, { Kind: "rect" }>, Viewport: { width: number; height: number; convertToViewportRectangle(Rect: Quad): number[] }): PdfRegionInput
 {
 	const [A, B, C, D] = Viewport.convertToViewportRectangle(Target.Values);
 	const { width: W, height: H } = Viewport;
 	const X = Math.min(A, C), Y = Math.min(B, D), Right = Math.max(A, C), Bottom = Math.max(B, D);
-	// PDF++ rounds user-space coordinates to integers when copying.
+	// Allow the rounding used by older saved rectangular anchors at page edges.
 	if(![X, Y, Right, Bottom, W, H].every(Number.isFinite) || W <= 0 || H <= 0 || X < -0.51 || Y < -0.51 || Right > W + 0.51 || Bottom > H + 0.51)
 	{
 		throw new Error("PDF 矩形超出页面");

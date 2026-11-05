@@ -1,11 +1,9 @@
 import type { FileView } from "obsidian";
 import { pdf_target, type PdfTarget } from "./target";
+import { pdf_viewer_child, type PdfViewport } from "./native-view";
 
 type Point = { x: number; y: number };
 type Bounds = { left: number; top: number; width: number; height: number };
-type Viewport = { width: number; height: number; rotation: number; convertToPdfPoint(X: number, Y: number): number[] };
-type PageView = { div: HTMLElement; viewport?: Viewport };
-type NativePdfView = FileView & { viewer?: { child?: { file?: FileView["file"]; pdfViewer?: { pdfViewer?: { getPageView?(Index: number): PageView | undefined } } } } };
 export type PdfBox = { Target: Extract<PdfTarget, { Kind: "rect" }>; Rotation: number };
 
 function inside(B: Bounds, P: Point): boolean
@@ -13,7 +11,7 @@ function inside(B: Bounds, P: Point): boolean
 	return P.x >= B.left && P.x <= B.left + B.width && P.y >= B.top && P.y <= B.top + B.height;
 }
 
-export function pdf_box_target(Page: number, Box: Bounds, Start: Point, End: Point, View: Viewport): PdfBox
+export function pdf_box_target(Page: number, Box: Bounds, Start: Point, End: Point, View: PdfViewport): PdfBox
 {
 	if(![Box.width, Box.height, View.width, View.height].every(N => Number.isFinite(N) && N > 0) || !inside(Box, Start) || !inside(Box, End))
 	{
@@ -28,13 +26,11 @@ export function pdf_box_target(Page: number, Box: Bounds, Start: Point, End: Poi
 	return { Target: pdf_target(Page, "rect", Values.join(",")) as PdfBox["Target"], Rotation };
 }
 
-interface PageHit { Number: number; Element: HTMLElement; Surface: HTMLElement; Viewport: Viewport; Bounds: DOMRect; }
-function page_hit(View: NativePdfView, Scroller: HTMLElement, Start: Point): PageHit | null
+interface PageHit { Number: number; Element: HTMLElement; Surface: HTMLElement; Viewport: PdfViewport; Bounds: DOMRect; }
+function page_hit(View: FileView, Scroller: HTMLElement, Start: Point): PageHit | null
 {
 	if(!inside(Scroller.getBoundingClientRect(), Start)) { return null; }
-	const Child = View.viewer?.child;
-	if(!View.file || Child?.file !== View.file) { return null; }
-	const Viewer = Child.pdfViewer?.pdfViewer;
+	const Viewer = pdf_viewer_child(View)?.pdfViewer?.pdfViewer;
 	for(const ElementValue of Scroller.querySelectorAll<HTMLElement>(".page[data-page-number]"))
 	{
 		if(!inside(ElementValue.getBoundingClientRect(), Start)) { continue; }

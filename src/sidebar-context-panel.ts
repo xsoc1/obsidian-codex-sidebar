@@ -11,7 +11,6 @@ export class SidebarContextPanel
 	{
 		const Id = `codex-context-${crypto.randomUUID()}`;
 		this.Trigger = Toolbar.createEl("button", { cls: "codex-context-trigger", attr: { type: "button", "aria-controls": Id, "aria-expanded": "false" } });
-		this.Trigger.createSpan({ cls: "codex-context-chevron", attr: { "aria-hidden": "true" } });
 		this.Trigger.createSpan({ cls: "codex-context-title", text: "上下文" });
 		this.Status = this.Trigger.createSpan({ cls: "codex-context-state" });
 		this.Panel = Reading.createEl("section", { cls: "codex-context-popover", attr: { id: Id, "aria-labelledby": `${Id}-heading` } });

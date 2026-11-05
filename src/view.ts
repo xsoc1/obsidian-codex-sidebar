@@ -11,7 +11,6 @@ import { selected_model, fast_tier, context_usage } from "./controls";
 import { structured_task, question_label } from "./edit/presentation";
 import { safe_math_markdown } from "./edit/safe-markdown";
 import { pdf_preview } from "./pdf/panel";
-import { pdf_plus_active } from "./pdf/plus";
 import { render_edit } from "./edit/panel";
 import { edit_scope } from "./edit/options";
 import { ComposerActions, type ComposeAction } from "./edit/composer";
@@ -56,7 +55,6 @@ export class CodexView extends ItemView
 	private ComposePanel: SidebarPanel | null = null;
 	private ContextPanel: SidebarContextPanel | null = null;
 	private PdfBoxButton!: HTMLButtonElement;
-	private PdfLinkButton!: HTMLButtonElement;
 	private OptionsSummary: HTMLElement | null = null;
 	private StatusElement!: HTMLElement;
 	private ContextElement!: HTMLElement;
@@ -161,8 +159,6 @@ export class CodexView extends ItemView
 		this.button(ContextBar, "选择 PDF 页", Leave(() => this.Owner.open_pdf()));
 		this.PdfBoxButton = this.button(ContextBar, "框选到 Codex", Leave(() => this.Owner.open_pdf_box()));
 		this.PdfBoxButton.hidden = !this.Owner.can_capture_pdf_box();
-		this.PdfLinkButton = this.button(ContextBar, "导入 PDF++ 选区链接", Leave(() => this.Owner.open_pdf_link()));
-		this.PdfLinkButton.hidden = !pdf_plus_active(this.app);
 		const Questions = ContextPanel.Body.createDiv({ cls: "codex-context-actions codex-context-questions" });
 		this.button(Questions, "解释选区", Leave(() => void this.Owner.ask_selection(ExplainPrompt)));
 		this.button(Questions, "检查证明", Leave(() => void this.Owner.ask_selection(ProofPrompt)));
@@ -557,7 +553,6 @@ export class CodexView extends ItemView
 		this.SessionsElement.disabled = this.input_blocked();
 		const Snapshot = this.Owner.Capture.Snapshot;
 		this.PdfBoxButton.hidden = !this.Owner.can_capture_pdf_box();
-		this.PdfLinkButton.hidden = !pdf_plus_active(this.app);
 		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
 		this.refresh_compose_summary();
 		this.describe_context();

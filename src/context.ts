@@ -5,7 +5,7 @@ import { PdfReader, is_pdf_view, pdf_location } from "./pdf/reader";
 import { BrowserPdfImages, type PdfImages } from "./pdf/image-store";
 import { context_window, markdown_blocks, type ContextWindow } from "./markdown-blocks";
 import type { PdfCaptureRequest } from "./pdf/types";
-import { live_pdf_target } from "./pdf/plus";
+import { native_pdf_text_target } from "./pdf/native-view";
 import { PdfTextRangeError, type PdfTarget } from "./pdf/target";
 
 export class ContextCapture
@@ -63,7 +63,7 @@ export class ContextCapture
 			if(!Location) { return null; }
 			if(Kind === "选区" && Location.Pages.length === 1)
 			{
-				const Target = live_pdf_target(this.App, View.containerEl, Location.Pages[0]);
+				const Target = native_pdf_text_target(View, Location.Pages[0]);
 				if(Target)
 				{
 					const File = View.file!, Owner = View.containerEl.ownerDocument, { mtime: Stamp, size: Size } = File.stat;

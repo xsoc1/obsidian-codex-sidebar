@@ -4,7 +4,6 @@ import { version_of, block_ids } from "./edit/document";
 import { text_identity, markdown_blocks } from "./markdown-blocks";
 import { pdf_hash, validate_pdf, validate_image_origin } from "./pdf/types";
 import { parse_pdf_anchor, pdf_anchor, pdf_target_subpath, validated_pdf_target, type PdfTarget } from "./pdf/target";
-import { pdf_plus_active } from "./pdf/plus";
 
 export interface SourceReference
 {
@@ -137,9 +136,9 @@ export async function locate_source(AppValue: App, Ref: SourceReference): Promis
 			const Same = await pdf_hash(await AppValue.vault.readBinary(File)) === Ref.Version;
 			if(!Same) { return { Status: "changed", Path, Message: "PDF 版本已变化, 仅打开准确文件; 未把旧页码当作当前同一内容" }; }
 			const Anchor = parse_pdf_anchor(Ref.Anchor);
-			if(Anchor && Anchor.Page === Ref.Page && (Anchor.Kind === "text" || pdf_plus_active(AppValue)))
+			if(Anchor?.Kind === "text" && Anchor.Page === Ref.Page)
 			{
-				return { Status: "exact", Path, Page: Ref.Page, Subpath: pdf_target_subpath(Anchor), Message: Anchor.Kind === "text" ? "PDF 版本一致, 打开原文字选区" : "PDF 版本一致, 打开原矩形区域" };
+				return { Status: "exact", Path, Page: Ref.Page, Subpath: pdf_target_subpath(Anchor), Message: "PDF 版本一致, 打开原文字选区" };
 			}
 			return { Status: "exact", Path, Page: Ref.Page, Message: "PDF 版本一致, 打开原实际页码" };
 		}
