@@ -13,9 +13,10 @@ export interface ApiReasoning
 	Format: "chat" | "responses" | "gemini-level";
 	Efforts: string[];
 }
-export interface ApiCatalogModel { Id: string; Reasoning?: ApiReasoning; }
+export type ApiProtocol = "chat" | "responses";
+export interface ApiCatalogModel { Id: string; Protocol?: ApiProtocol; Reasoning?: ApiReasoning; Vision?: boolean; ContextWindow?: number; }
 export type BackendProfile =
-	| { Kind: "api"; Provider: ApiProvider; Base: string; Model: string; Vision: boolean }
+	| { Kind: "api"; Provider: ApiProvider; Base: string; Model: string; Vision: boolean; Protocol?: ApiProtocol; Identity?: string; Stream?: "auto" | "buffered"; HistoryTools?: boolean }
 	| { Kind: "agent"; Agent: LocalAgent; Path: string; Model: string };
 
 export function valid_backend_model_id(Value: unknown): Value is string
@@ -37,7 +38,7 @@ export function api_base(Provider: ApiProvider, CustomBase: string): string
 
 export function backend_profile(Value: unknown): BackendProfile
 {
-	const Input = Value as Partial<{ Kind: "api" | "agent"; Provider: ApiProvider; Agent: LocalAgent; Base: string; Path: string; Model: string; Vision: boolean }>;
+	const Input = Value as Partial<{ Kind: "api" | "agent"; Provider: ApiProvider; Agent: LocalAgent; Base: string; Path: string; Model: string; Vision: boolean; Protocol: ApiProtocol; Identity: string; Stream: "auto" | "buffered"; HistoryTools: boolean }>;
 	if(!Input || typeof Input.Model !== "string") { throw new Error("请填写模型 ID"); }
 	const Model = Input.Model.trim();
 	if(Model && !valid_backend_model_id(Model)) { throw new Error("模型 ID 格式无效"); }
@@ -49,7 +50,12 @@ export function backend_profile(Value: unknown): BackendProfile
 		return { Kind: "agent", Agent: Input.Agent, Path, Model };
 	}
 	if(Input.Kind !== "api" || !Input.Provider || !Object.hasOwn(ApiProviders, Input.Provider) || !Model) { throw new Error("请选择 API 服务商并填写模型 ID"); }
-	return { Kind: "api", Provider: Input.Provider, Base: api_base(Input.Provider, typeof Input.Base === "string" ? Input.Base : ""), Model, Vision: Input.Vision === true };
+	if(Input.Protocol !== undefined && !["chat", "responses"].includes(Input.Protocol)) { throw new Error("未知 API 请求协议"); }
+	if(Input.Stream !== undefined && !["auto", "buffered"].includes(Input.Stream)) { throw new Error("未知 API 传输模式"); }
+	const Identity = Input.Identity?.trim();
+	if(Identity !== undefined && (!Identity || Identity.length > 80 || /[\u0000-\u001f]/.test(Identity))) { throw new Error("身份标签无效"); }
+	return { Kind: "api", Provider: Input.Provider, Base: api_base(Input.Provider, typeof Input.Base === "string" ? Input.Base : ""), Model, Vision: Input.Vision === true,
+		...(Input.Protocol ? { Protocol: Input.Protocol } : {}), ...(Identity && Identity !== "default" ? { Identity } : {}), ...(Input.Stream ? { Stream: Input.Stream } : {}), ...(typeof Input.HistoryTools==="boolean"?{HistoryTools:Input.HistoryTools}:{}) };
 }
 
 export function backend_name(Profile: BackendProfile): string
@@ -59,7 +65,7 @@ export function backend_name(Profile: BackendProfile): string
 
 export function backend_identity(Profile: BackendProfile): string
 {
-	return JSON.stringify(Profile.Kind === "api" ? [Profile.Provider, Profile.Base] : [Profile.Agent, Profile.Path.toLowerCase()]);
+	return JSON.stringify(Profile.Kind === "api" ? [Profile.Provider, Profile.Base, ...(Profile.Identity ? [Profile.Identity] : [])] : [Profile.Agent, Profile.Path.toLowerCase()]);
 }
 
 export function backend_model(Profile: BackendProfile): string { return Profile.Model || `${Profile.Kind === "agent" ? Profile.Agent : Profile.Provider}-default`; }

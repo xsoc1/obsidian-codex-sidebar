@@ -56,7 +56,8 @@ export async function list_api_models(Provider: ApiProvider, CustomBase: string,
 		const Id = Item?.id;
 		if(!valid_backend_model_id(Id) || Secret && Id.includes(Secret) || Models.has(Id)) { continue; }
 		const Reasoning = Public ? go_reasoning(Item) : Provider === "deepseek" ? deepseek_reasoning(Item) : undefined;
-		Models.set(Id, Reasoning ? { Id, Reasoning } : { Id });
+		const Protocol = Public ? Item.api?.["chat-completions"] ? "chat" as const : Item.api?.responses ? "responses" as const : undefined : Provider === "openai" ? "responses" as const : Provider === "compatible" ? undefined : "chat" as const;
+		Models.set(Id, { Id, ...(Reasoning ? { Reasoning } : {}), ...(Protocol ? {Protocol}: {}) });
 	}
 	return [...Models.values()].sort((A, B) => A.Id < B.Id ? -1 : 1);
 }

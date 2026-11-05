@@ -23,7 +23,7 @@ test("API catalogs use the provider's documented GET endpoint, with no credentia
 			Calls.push(Request);
 			return { status: 200, json: { data: [{ id: "model-b" }, { id: "model-a" }, { id: "model-b" }, { id: "bad id" }, {}, null] } };
 		});
-		assert.deepEqual(Models, [{ Id: "model-a" }, { Id: "model-b" }]);
+		assert.deepEqual(Models, ["model-a", "model-b"].map(Id=>({Id,...(Provider === "openai" ? {Protocol:"responses"} : ["deepseek","google"].includes(Provider) ? {Protocol:"chat"} : {})})));
 		assert.deepEqual(Calls, [{ url: Url, method: "GET", headers: Provider === "opencode" ? { Accept: "application/json" } : {
 			Accept: "application/json", Authorization: "Bearer " + Key
 		} }]);
@@ -41,10 +41,10 @@ test("Go advertises only allowlisted effort values on an implemented native wire
 	];
 	const Send = async () => ({ status: 200, json: { data: Data } });
 	assert.deepEqual(await list_api_models("opencode", "", "", Send), [
-		{ Id: "chat", Reasoning: { Format: "chat", Efforts: ["max", "low"] } },
+		{ Id: "chat", Protocol: "chat", Reasoning: { Format: "chat", Efforts: ["max", "low"] } },
 		{ Id: "messages" },
-		{ Id: "no-levels" },
-		{ Id: "responses", Reasoning: { Format: "responses", Efforts: ["max", "low"] } }
+		{ Id: "no-levels", Protocol: "chat" },
+		{ Id: "responses", Protocol: "responses", Reasoning: { Format: "responses", Efforts: ["max", "low"] } }
 	]);
 	assert.ok((await list_api_models("deepseek", "", Key, Send)).every(Model => !Model.Reasoning));
 });
@@ -58,10 +58,10 @@ test("DeepSeek uses per-model supported levels and does not infer options for le
 		{ id: "unknown", effort: { default_level: "high" } }
 	] } }));
 	assert.deepEqual(Models, [
-		{ Id: "deepseek-chat" },
-		{ Id: "deepseek-flash", Reasoning: { Format: "chat", Efforts: ["none", "low", "high", "max"] } },
-		{ Id: "deepseek-v4-pro", Reasoning: { Format: "chat", Efforts: ["none", "high", "max"] } },
-		{ Id: "unknown" }
+		{ Id: "deepseek-chat", Protocol: "chat" },
+		{ Id: "deepseek-flash", Protocol: "chat", Reasoning: { Format: "chat", Efforts: ["none", "low", "high", "max"] } },
+		{ Id: "deepseek-v4-pro", Protocol: "chat", Reasoning: { Format: "chat", Efforts: ["none", "high", "max"] } },
+		{ Id: "unknown", Protocol: "chat" }
 	]);
 });
 
