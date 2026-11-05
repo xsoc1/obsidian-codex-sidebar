@@ -326,3 +326,40 @@
 .codex-note-selection[hidden] { display: none; }
 .codex-note-selection summary { cursor: pointer; font-size: var(--font-ui-small); }
 .codex-selection-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 110px; overflow: auto; font-size: 13px; user-select: text; -webkit-user-select: text; margin: 6px 0; }
+.codex-pdf-box {
+	position: absolute;
+	inset: 0;
+	z-index: 12;
+	overflow: hidden;
+	touch-action: none;
+	user-select: none;
+	cursor: crosshair;
+}
+.codex-pdf-box-bar {
+	position: absolute;
+	inset-block-start: var(--size-4-2);
+	inset-inline: var(--size-4-2);
+	margin-inline: auto;
+	width: fit-content;
+	max-width: calc(100% - 2 * var(--size-4-2));
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-1) var(--size-4-2);
+	border-radius: var(--radius-m);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	box-shadow: var(--shadow-s);
+	cursor: default;
+	z-index: 1;
+}
+.codex-pdf-box-bar button { flex: 0 0 auto; }
+.codex-context-actions > button[hidden], .codex-pdf-box-outline[hidden] { display: none; }
+.codex-pdf-box-outline {
+	position: absolute;
+	pointer-events: none;
+	box-sizing: border-box;
+	border: 2px solid var(--interactive-accent);
+	box-shadow: 0 0 0 100vmax rgb(0 0 0 / 22%);
+}

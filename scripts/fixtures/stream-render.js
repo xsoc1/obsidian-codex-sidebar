@@ -28,7 +28,7 @@ window.run_simplified_sidebar_case = async (Keep = false, Width = 320) =>
 {
 	const Root = document.body.createDiv(); Root.style.cssText = `width:${Width}px;height:720px`; Root.id = 'simplified-sidebar-fixture';
 	const Calls = [], Owner = { State: { Settings: { EditScope: "captured", AttachContext: true, Model: "fixture-model", Effort: "high", Fast: false, Completion: true, ShowUsage: false } }, Session: { Id: "fixture", Title: "原创微型讲义", Messages: [{ Id: "answer", Role: "assistant", Text: "固定矩阵 X 后，交换子为 [X,Y] = XY − YX。把加法与数乘分别代入，可验证其关于 Y 的线性。" }] }, Capture: { Snapshot: null }, Models: [{ model: "fixture-model", displayName: "模型示例", supportedReasoningEfforts: [{ reasoningEffort: "high" }] }], Inline: { get_suggestion: () => null }, Status: "就绪", SkillStatus: "math-writing", CatalogError: "", Busy: false, refresh() {}, async send_chat(...Args) { Calls.push(Args); return true; } };
-	Owner.State.Sessions = [Owner.Session];
+	Owner.State.Sessions = [Owner.Session]; Owner.can_capture_pdf_box = () => false;
 	const OriginalSession = Owner.Session, OriginalScope = 'draft-fixture-' + crypto.randomUUID(); let Scope = OriginalScope;
 	Owner.draft_scope = () => Scope;
 	let Deletions = 0; Owner.open_delete_session = () => { Deletions++; };
@@ -129,7 +129,7 @@ window.run_context_case = async () =>
 	const Snapshot = {Path:'Original.md',Kind:'选区',Mode:'阅读',Mapping:'源块',CapturedAt:'original-time',Text:'原创段落 $x=1$.',LineStart:0,LineEnd:0,Heading:'定义',Truncated:false};
 	const Owner = {Session:{Id:'session',Title:'original',Messages:[]},Capture:{Snapshot},State:{Settings:{AttachContext:true},Sessions:[]},Busy:true,refresh:()=>{}};Owner.State.Sessions=[Owner.Session];
 	const View = new Sidebar.CodexView({},Owner);View.Opened=true;View.Input={value:''};View.ContextElement=Context;View.SelectionPreview={update:()=>{}};
-	View.StatusElement=Root.createDiv();
+	View.StatusElement=Root.createDiv(); Owner.can_capture_pdf_box=()=>false; View.PdfBoxButton=Root.createEl("button"); View.PdfLinkButton=Root.createEl("button");
 	View.NoteSessionBind=Root.createEl('button');View.SessionsElement=Root.createEl('select');
 	for(const Method of ['refresh_controls','refresh_completion','refresh_quote','refresh_activity'])View[Method]=()=>{};
 	try{

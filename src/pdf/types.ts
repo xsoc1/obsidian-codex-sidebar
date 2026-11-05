@@ -14,7 +14,7 @@ export interface PdfImageRef
 
 export interface PdfRegionInput { X: number; Y: number; Width: number; Height: number; }
 export interface PdfRegion extends PdfRegionInput { PageWidth: number; PageHeight: number; Scale: number; Rotation: number; }
-export interface PdfCaptureRequest { Number: number; Kind?: "page" | "region"; Region?: PdfRegionInput; Version?: string; }
+export interface PdfCaptureRequest { Number: number; Kind?: "page" | "region"; Region?: PdfRegionInput; Version?: string; Rotation?: number; }
 export interface PdfImageOrigin { Kind: "page" | "region"; Region?: PdfRegion; }
 export function validate_region(Region: PdfRegionInput, Full = false): void
 {

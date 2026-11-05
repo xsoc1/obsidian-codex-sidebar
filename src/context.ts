@@ -215,9 +215,9 @@ export class ContextCapture
 		return this.pdf_capture(() => this.Pdf.capture(File, Pages, OwnerDocument, Kind, SelectedText, Truncated, Signal), Signal, true);
 	}
 
-	async capture_pdf_target(File: TFile, Target: PdfTarget, OwnerDocument: Document, Signal?: AbortSignal, SelectedText?: string): Promise<ContextSnapshot | null>
+	async capture_pdf_target(File: TFile, Target: PdfTarget, OwnerDocument: Document, Signal?: AbortSignal, SelectedText?: string, Rotation?: number): Promise<ContextSnapshot | null>
 	{
-		return this.pdf_capture(() => this.Pdf.capture_target(File, Target, OwnerDocument, Signal, SelectedText), Signal, false);
+		return this.pdf_capture(() => this.Pdf.capture_target(File, Target, OwnerDocument, Signal, SelectedText, Rotation), Signal, false);
 	}
 
 	private async pdf_capture(Capture: () => Promise<ContextSnapshot>, Signal: AbortSignal | undefined, ClearOnFailure: boolean): Promise<ContextSnapshot | null>

@@ -84,7 +84,7 @@ export class PdfReader
 	last_page(File: TFile): number | null { const Last = this.Positions.get(File.path); return Last && Last.Stamp === File.stat.mtime && Last.Size === File.stat.size ? Last.Page : null; }
 	async image_data(Id: string): Promise<string> { return this.Images.get(Id); }
 
-	async capture_target(File: TFile, Target: PdfTarget, OwnerDocument: Document, Signal?: AbortSignal, SelectedText?: string): Promise<ContextSnapshot>
+	async capture_target(File: TFile, Target: PdfTarget, OwnerDocument: Document, Signal?: AbortSignal, SelectedText?: string, Rotation?: number): Promise<ContextSnapshot>
 	{
 		Target = validated_pdf_target(Target);
 		const Path = File.path, Stamp = File.stat.mtime, Size = File.stat.size;
@@ -102,8 +102,9 @@ export class PdfReader
 		Check();
 		if(Target.Kind === "rect")
 		{
-			const Region = pdf_region(Target, Page.getViewport({ scale: 1 }));
-			const Snapshot = await this.capture(File, [{ Number: Target.Page, Kind: "region", Region, Version: Loaded.Version }], OwnerDocument, "选区", "", false, Signal);
+			if(Rotation !== undefined && ![0, 90, 180, 270].includes(Rotation)) { throw new Error("PDF 框选的页面角度无效"); }
+			const Region = pdf_region(Target, Page.getViewport({ scale: 1, ...(Rotation === undefined ? {} : { rotation: Rotation }) }));
+			const Snapshot = await this.capture(File, [{ Number: Target.Page, Kind: "region", Region, Version: Loaded.Version, Rotation }], OwnerDocument, "选区", "", false, Signal);
 			Check();
 			return { ...Snapshot, PdfTarget: structuredClone(Target) };
 		}
@@ -130,7 +131,12 @@ export class PdfReader
 		for(const R of Requests)
 		{
 			if(R.Version && R.Version !== Loaded.Version) { throw new Error("PDF 在区域选择后已变化, 请重新预览并选择区域"); }
-			if(R.Kind === "region") { validate_region(R.Region!); } else if(R.Region) { throw new Error("整页图不能携带局部裁切区域"); }
+			if(R.Kind === "region")
+			{
+				validate_region(R.Region!);
+				if(R.Rotation !== undefined && ![0, 90, 180, 270].includes(R.Rotation)) { throw new Error("PDF 局部区域的旋转角度无效"); }
+			}
+			else if(R.Region || R.Rotation !== undefined) { throw new Error("整页图不能携带局部裁切区域或角度"); }
 			const Key = JSON.stringify([R.Number, R.Kind, R.Region]); if(Keys.has(Key)) { throw new Error("PDF 捕获来源重复"); } Keys.add(Key);
 		}
 		const Result: NonNullable<ContextSnapshot["Pdf"]>["Pages"] = [];
@@ -140,13 +146,13 @@ export class PdfReader
 			if(Signal?.aborted) { throw new Error("PDF 捕获已取消"); }
 			const NumberValue = Request.Number;
 			const Page = await Loaded.Document.getPage(NumberValue);
-			const Content = await Page.getTextContent();
-			const PageText = Request.Kind === "region" ? "" : Content.items.map((Item: any) => typeof Item.str === "string" ? Item.str + (Item.hasEOL ? "\n" : " ") : "").join("").trim();
-			const Initial = Page.getViewport({ scale: 1 });
+			const PageText = Request.Kind === "region" ? "" : (await Page.getTextContent()).items.map((Item: any) => typeof Item.str === "string" ? Item.str + (Item.hasEOL ? "\n" : " ") : "").join("").trim();
+			const RotationOption = Request.Rotation === undefined ? {} : { rotation: Request.Rotation };
+			const Initial = Page.getViewport({ scale: 1, ...RotationOption });
 			if(![Initial.width, Initial.height].every(Value => Number.isFinite(Value) && Value > 0)) { throw new Error("PDF 页面尺寸无效"); }
 			const Region = Request.Region;
 			const Scale = Region ? Math.min(20, 1600 / Math.max(Initial.width * Region.Width, Initial.height * Region.Height)) : Math.min(2.5, 1600 / Math.max(Initial.width, Initial.height));
-			const Viewport = Page.getViewport({ scale: Scale });
+			const Viewport = Page.getViewport({ scale: Scale, ...RotationOption });
 			const Geometry: PdfRegion | undefined = Region ? { ...Region, PageWidth: Initial.width, PageHeight: Initial.height, Scale, Rotation: ((Initial.rotation ?? Page.rotate ?? 0) % 360 + 360) % 360 } : undefined;
 			const Canvas = OwnerDocument.createElement("canvas");
 			Canvas.width = Math.max(1, Math.floor(Viewport.width * (Region?.Width ?? 1))); Canvas.height = Math.max(1, Math.floor(Viewport.height * (Region?.Height ?? 1)));

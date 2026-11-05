@@ -55,6 +55,7 @@ export class CodexView extends ItemView
 	private ComposePanel: SidebarPanel | null = null;
 	private ContextSummary: HTMLElement | null = null;
 	private ContextPanel: SidebarPanel | null = null;
+	private PdfBoxButton!: HTMLButtonElement;
 	private PdfLinkButton!: HTMLButtonElement;
 	private OptionsSummary: HTMLElement | null = null;
 	private StatusElement!: HTMLElement;
@@ -154,6 +155,8 @@ export class CodexView extends ItemView
 		const ContextBar = ContextPanel.Body.createDiv({ cls: "codex-context-actions" });
 		this.button(ContextBar, "捕获当前位置", () => void this.Owner.capture_current());
 		this.button(ContextBar, "选择 PDF 页", () => this.Owner.open_pdf());
+		this.PdfBoxButton = this.button(ContextBar, "框选到 Codex", () => this.Owner.open_pdf_box());
+		this.PdfBoxButton.hidden = !this.Owner.can_capture_pdf_box();
 		this.PdfLinkButton = this.button(ContextBar, "导入 PDF++ 选区链接", () => this.Owner.open_pdf_link());
 		this.PdfLinkButton.hidden = !pdf_plus_active(this.app);
 		this.button(ContextBar, "解释选区", () => void this.Owner.ask_selection(ExplainPrompt));
@@ -550,6 +553,7 @@ export class CodexView extends ItemView
 		this.SessionsElement.value = Session.Id;
 		this.SessionsElement.disabled = this.input_blocked();
 		const Snapshot = this.Owner.Capture.Snapshot;
+		this.PdfBoxButton.hidden = !this.Owner.can_capture_pdf_box();
 		this.PdfLinkButton.hidden = !pdf_plus_active(this.app);
 		this.SelectionPreview.update(Snapshot, this.Owner.State.Settings.AttachContext);
 		this.refresh_compose_summary();

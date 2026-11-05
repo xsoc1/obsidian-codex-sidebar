@@ -15,6 +15,7 @@ import { note_path, source_path } from "../src/edit/document";
 import { parse_pdf_link, pdf_target, pdf_selected_text, pdf_target_subpath, resolve_pdf_file } from "../src/pdf/target";
 import { live_pdf_target, pdf_plus_active } from "../src/pdf/plus";
 import { locate_source, source_reference, validate_source_reference } from "../src/sources";
+import { pdf_box_target } from "../src/pdf/box";
 
 const Data = "data:image/jpeg;base64," + readFileSync("examples/pdf/scanned-page.jpg").toString("base64");
 const Id = createHash("sha256").update(Data).digest("hex");
@@ -87,11 +88,47 @@ function reader_fixture(Scanned = false)
 	const Reader = new Export.exports.PdfReader({ vault: { readBinary: async () => new ArrayBuffer(100) } }, Images, async () => ({ getDocument: (Params: any) =>
 	{
 		assert.equal(Params.isEvalSupported, false); assert.equal(Params.cMapPacked, true); assert.equal(Params.cMapUrl, "/lib/pdfjs/cmaps/"); Loads++;
-		return { promise: Promise.resolve({ numPages: 3, destroy: async () => {}, getPage: async () => ({ getTextContent: async () => ({ items: Scanned ? [] : [{ str: "[X,Y]=2Y", hasEOL: true }] }), getViewport: ({ scale }: any) => ({ width: 612 * scale, height: 792 * scale, convertToViewportRectangle: ([A,B,C,D]: number[]) => [A * scale, (792 - B) * scale, C * scale, (792 - D) * scale] }), render: (Options: any) => { assert.equal(Options.intent, "print"); Renders++; RenderOptions.push(Options); return { promise: Promise.resolve(), cancel: () => {} }; } }) }) };
+		return { promise: Promise.resolve({ numPages: 3, destroy: async () => {}, getPage: async () => ({ getTextContent: async () => ({ items: Scanned ? [] : [{ str: "[X,Y]=2Y", hasEOL: true }] }), getViewport: ({ scale, rotation = 0 }: any) => rotation === 90 ?
+			{ width: 792 * scale, height: 612 * scale, rotation, convertToViewportRectangle: ([A,B,C,D]: number[]) => [B * scale, A * scale, D * scale, C * scale] } :
+			{ width: 612 * scale, height: 792 * scale, rotation, convertToViewportRectangle: ([A,B,C,D]: number[]) => [A * scale, (792 - B) * scale, C * scale, (792 - D) * scale] }, render: (Options: any) => { assert.equal(Options.intent, "print"); Renders++; RenderOptions.push(Options); return { promise: Promise.resolve(), cancel: () => {} }; } }) }) };
 	} }));
 	const Canvas: any = { width: 0, height: 0, getContext: () => ({}), toDataURL: () => Data };
 	return { Reader, File, Owner: { createElement: () => Canvas }, Canvas, RenderOptions, counts: () => ({ Loads, Renders }), location: Export.exports.pdf_location };
 }
+
+test("direct PDF drag uses the displayed canvas, reverse direction and viewer rotation without a PDF++ dependency", () =>
+{
+	const Bounds = { left: 100, top: 200, width: 400, height: 600 };
+	const Start = { x: 180, y: 320 }, End = { x: 380, y: 620 };
+	const View = { width: 200, height: 300, rotation: 90, convertToPdfPoint: (X: number, Y: number) => [Y + 10, X + 20] };
+	const Expected = { Target: pdf_target(4, "rect", "70,60,220,160"), Rotation: 90 };
+	assert.deepEqual(pdf_box_target(4, Bounds, Start, End, View), Expected);
+	assert.deepEqual(pdf_box_target(4, Bounds, End, Start, View), Expected);
+	assert.throws(() => pdf_box_target(4, Bounds, Start, { x: 510, y: 310 }, View), /同一张/);
+	assert.throws(() => pdf_box_target(4, Bounds, Start, { x: 182, y: 310 }, View), /太小/);
+	assert.throws(() => pdf_box_target(4, Bounds, Start, End, { ...View, rotation: 45 }), /旋转角度/);
+});
+
+test("direct PDF crop preserves display rotation in the actual render, versioned context and source", async () =>
+{
+	const F = reader_fixture(true);
+	try
+	{
+		const Target = pdf_target(2, "rect", "100,180,300,320");
+		const Snapshot = await F.Reader.capture_target(F.File, Target, F.Owner, undefined, undefined, 90);
+		const Region = Snapshot.Pdf.Pages[0].Region;
+		assert.equal(Region.Rotation, 90); assert.equal(Region.PageWidth, 792); assert.equal(Region.PageHeight, 612);
+		assert.equal(Region.X, 180 / 792); assert.equal(Region.Y, 100 / 612);
+		assert.equal(F.RenderOptions[0].viewport.rotation, 90);
+		assert.equal(source_reference(Snapshot)[0].Anchor, "pdf-target-v1:page=2&rect=100,180,300,320");
+		assert.equal(message_pdf_refs({ Context: Snapshot } as any).length, 1);
+		await assert.rejects(F.Reader.capture_target(F.File, Target, F.Owner, undefined, undefined, 45), /角度/);
+		const Abort = new AbortController(); Abort.abort();
+		await assert.rejects(F.Reader.capture_target(F.File, Target, F.Owner, Abort.signal), /取消/);
+		assert.equal(F.counts().Renders, 1);
+	}
+	finally { F.Reader.close(); }
+});
 
 test("PDF++ imports vault-local selection links and refuses ambiguous files or unbounded targets", () =>
 {
