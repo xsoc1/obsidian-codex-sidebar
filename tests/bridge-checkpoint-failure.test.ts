@@ -142,8 +142,8 @@ test("closing the actual bridge cancels failed checkpoint retry timers without r
 	try
 	{
 		F.fail(() => true); F.delta("Original failed tail"); F.complete("Original final tail");
-		assert.ok(F.Attempts >= 2); await F.close(); const Attempts = F.Attempts;
-		assert.equal(F.Closed, 1); assert.equal(F.Agent.Checkpoints.Pending.size, 0);
+		assert.ok(F.Attempts >= 2); await assert.rejects(F.close(), /injected disk failure/); const Attempts = F.Attempts;
+		assert.equal(F.Closed, 1); assert.ok(F.Agent.Checkpoints.Pending.size > 0, "close must report unsaved work rather than pretend it was persisted");
 		await Delay(CheckpointPolicy.intervalMs + 100);
 		assert.equal(F.Attempts, Attempts); assert.equal(F.Submits, 1);
 		assert.ok(!F.Agent.events(0, 2).events.some((E: any) => E.message.method === "turn/completed"));

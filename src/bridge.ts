@@ -291,7 +291,7 @@ class DeviceAgent
 					if(Value.method === "turn/completed" && (!Thread.Turn || Thread.Turn.id === TurnId)) { Thread.Turn = { id: TurnId, status: Params.turn.status, items: [] }; }
 					this.publish_event(Value);
 				});
-				this.Checkpoints.flush(Key);
+				void this.Checkpoints.flush(Key).catch(() => {});
 			}
 		}
 	}
@@ -658,10 +658,10 @@ class DeviceAgent
 		catch(ErrorValue) { const Latest = this.Store.operation(Operation.Id)!; Latest.Error = String(ErrorValue).slice(0, 2048); this.Store.put_operation(Latest); throw new Error("推理提交结果待核对, 不会自动重发. " + Latest.Error); }
 	}
 
-	close(): void
+	async close(): Promise<void>
 	{
-		this.Checkpoints.flush(); this.Checkpoints.close();
 		this.Completion.close(); this.Connection?.close(); this.Connection = null;
+		try { await this.Checkpoints.close(); } finally { await this.Store.close(); }
 	}
 }
 
@@ -745,7 +745,13 @@ export class RemoteBridge
 				const Revision = Url.searchParams.has("revision") ? Number(Url.searchParams.get("revision")) : null;
 				Result = Agent.sync_page(Url.pathname === "/sync/catalog" ? "catalog" : "history", Revision, Number(Url.searchParams.get("offset") ?? 0), Url.searchParams.get("session") ?? undefined);
 			}
-			else if(Request.method === "GET" && Url.pathname === "/sync/blob") { Result = Agent.Store.blob_part(Url.searchParams.get("id") ?? "", Number(Url.searchParams.get("index") ?? 0)); }
+			else if(Request.method === "GET" && Url.pathname === "/sync/blob")
+			{
+				const Controller = new AbortController(), Cancel = () => { if(!Response.writableEnded) { Controller.abort(); } };
+				Response.once("close", Cancel);
+				try { Result = await Agent.Store.blob_part_async(Url.searchParams.get("id") ?? "", Number(Url.searchParams.get("index") ?? 0), Controller.signal); }
+				finally { Response.off("close", Cancel); }
+			}
 			else if(Request.method === "GET" && Url.pathname === "/sync/storage") { Result = Agent.storage_report(); }
 			else if(Request.method === "POST" && Url.pathname === "/sync/blob") { Result = Agent.Store.put_part(Body); }
 			else if(Request.method === "POST" && Url.pathname === "/sync/delta") { Result = Agent.sync_delta(Body); }
@@ -785,12 +791,11 @@ export class RemoteBridge
 
 	async close(): Promise<void>
 	{
-		for(const Agent of this.Agents.values())
-		{
-			Agent.close();
-		}
 		this.Http.closeAllConnections();
-		await new Promise<void>(Resolve => this.Http.close(() => Resolve()));
+		const Closing = new Promise<void>(Resolve => this.Http.close(() => Resolve()));
+		const Results = await Promise.allSettled([...this.Agents.values()].map(Agent => Agent.close()));
+		await Closing;
+		const Failed = Results.find(R => R.status === "rejected"); if(Failed?.status === "rejected") { throw Failed.reason; }
 	}
 }
 

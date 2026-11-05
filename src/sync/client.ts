@@ -2,7 +2,7 @@ import { deleted_messages, restore_sessions, type SessionState } from "../sessio
 import { canonical_json, client_sync, content_digest, entity_key, SyncBudgets, type ClientSync, type DeltaMutation, type EntityVersion, type SendOperation, type HistoryLoadState, type ConflictResolution } from "./types";
 import { merge_operations } from "./operations";
 import { BlobCache } from "./blob-cache";
-import { merge_conflict_resolutions, pending_conflicts, verify_conflict_resolutions } from "./conflicts";
+import { effective_conflict_resolutions, merge_conflict_resolutions, pending_conflicts, require_conflict_finalization, verify_conflict_resolutions } from "./conflicts";
 import { merge_sync_metadata } from "./metadata";
 
 type Http = (Path: string, Method: string, Body?: unknown) => Promise<any>;
@@ -75,13 +75,16 @@ export class DeltaSyncClient
 	}
 	private async fetch_blob_parts(Id: string): Promise<any>
 	{
-		let Index = 0, Count = 1; const Parts: Uint8Array[] = []; let Total = 0;
+		let Index = 0, Count = 1, DeclaredBytes: number | undefined, FileVersion: string | undefined; const Parts: Uint8Array[] = []; let Total = 0;
 		do
 		{
 			const Part = await this.Http(`/sync/blob?id=${Id}&index=${Index}`, "GET");
 			if(Part.id !== Id || Part.index !== Index || !Number.isSafeInteger(Part.count) || Part.count < 1 || Part.count > 1024 || typeof Part.data !== "string" || Part.data.length > 90000) { throw new Error("同步内容分页损坏"); }
 			if(Index > 0 && Count !== Part.count) { throw new Error("同步内容分页总数变化"); }
+			if(!Number.isSafeInteger(Part.bytes) || Part.bytes < 1 || Part.bytes > SyncBudgets.maxBlobBytes || Part.count !== Math.ceil(Part.bytes / SyncBudgets.blobChunkBytes) || Index > 0 && (DeclaredBytes !== Part.bytes || FileVersion !== Part.version) || Part.version !== undefined && (typeof Part.version !== "string" || !/^[0-9a-f]{64}$/.test(Part.version))) { throw new Error("同步内容文件大小或版本变化"); }
+			DeclaredBytes = Part.bytes; FileVersion = Part.version;
 			Count = Part.count; const Decoded = unbase64(Part.data); Parts.push(Decoded); Total += Decoded.length; Index++;
+			if(Decoded.length !== Math.min(SyncBudgets.blobChunkBytes, Part.bytes - Part.index * SyncBudgets.blobChunkBytes)) { throw new Error("同步内容 short read 或末片长度无效"); }
 			if(Decoded.length > SyncBudgets.blobChunkBytes || Total > SyncBudgets.maxBlobBytes) { throw new Error("同步内容超过字节预算"); }
 		} while(Index < Count);
 		const Combined = new Uint8Array(Total); let Offset = 0; for(const Part of Parts) { Combined.set(Part, Offset); Offset += Part.length; }
@@ -206,6 +209,11 @@ export class DeltaSyncClient
 	async sync(State: any): Promise<void>
 	{
 		if(State.Sync && State.Sync.Scope !== this.Scope) { throw new Error("同步状态跨连接作用域, 未上传"); }
+		if([...(State.Sync?.Resolutions ?? []), ...(State.ConflictResolutions ?? []), ...this.Resolutions].some(R => R.SchemaVersion === 2))
+		{
+			const Info = await this.Http("/info", "GET"); require_conflict_finalization(Info?.capabilities);
+			if(Info.dataIdentity + ":" + Info.client !== this.Scope) { throw new Error("因果裁定写入前桥作用域已变化"); }
+		}
 		await this.adopt_conflicts(State);
 		this.adopt_versions(State.Sync?.Versions); this.Revision = Math.max(this.Revision, State.Sync?.Revision ?? 0);
 		const Work: DeltaMutation[] = [], Deleted = new Set<string>(State.DeletedSessionIds ?? []);
@@ -234,7 +242,7 @@ export class DeltaSyncClient
 			for(const Message of Messages ?? [])
 			{
 				if(MessageKeys.has(entity_key("message", Session.Id, Message.Id))) { continue; }
-				if(this.Resolutions.some(R => R.Choice === "local" && [entity_key("message", Session.Id, Message.Id), JSON.stringify([Session.Id, Message.Id])].includes(R.Conflict.Key) && canonical_json(normalized(R.Conflict.Local)) === canonical_json(normalized(Message)))) { continue; }
+				if(effective_conflict_resolutions(this.Resolutions).some(R => R.Choice === "local" && [entity_key("message", Session.Id, Message.Id), JSON.stringify([Session.Id, Message.Id])].includes(R.Conflict.Key) && canonical_json(normalized(R.Conflict.Local)) === canonical_json(normalized(Message)))) { continue; }
 				if(Message.Role !== "user" && this.Versions[entity_key("message", Session.Id, Message.Id)]) { continue; }
 				await Add("message", normalized(Message), Session.Id, Message.Id);
 			}

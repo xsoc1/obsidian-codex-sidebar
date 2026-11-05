@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, fsyncSync, fstatSync, mkdirSync, openSync, read, readSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { canonical_json, entity_key, SyncBudgets, type DeltaMutation, type EntityVersion, type SendOperation } from "./types";
 import { merge_operations } from "./operations";
@@ -12,6 +12,8 @@ interface Journal
 	SchemaVersion: 2; Identity: string; Client: string; Revision: number; ProtocolUsed: boolean;
 	Rows: Row[]; Operations: SendOperation[]; Receipts: { Id: string; Digest: string; Result: any }[];
 }
+interface BlobReader { Id: string; Handle: number; Version: string; Bytes: number; Busy: number; Verified: boolean; Parts?: readonly string[]; Scan?: Promise<void>; ScanController?: AbortController; }
+export const BlobReaderLimits = { handles: 8, concurrentReads: 8, verifiedVersions: 128, idleMs: 30_000 };
 const hash = (Bytes: string | Uint8Array): string => createHash("sha256").update(Bytes).digest("hex");
 const digest_id = (Id: unknown): string => { if(typeof Id !== "string" || !/^[0-9a-f]{64}$/.test(Id)) { throw new Error("内容摘要无效"); } return Id; };
 const object_id = (Id: unknown): string => { if(typeof Id !== "string" || !Id || Id.length > 256 || /[\u0000-\u001f]/.test(Id)) { throw new Error("对象身份无效"); } return Id; };
@@ -31,6 +33,12 @@ export class SyncServerStore
 	private ChunkDir: string;
 	private LegacyFiles: string[];
 	private Snapshots = new Map<number, Row[]>();
+	private Readers = new Map<string, BlobReader>();
+	private VerifiedVersions = new Map<string, readonly string[]>();
+	private Reads = new Set<Promise<unknown>>();
+	private ReaderTimer?: ReturnType<typeof setTimeout>;
+	private Closed = false;
+	readonly BlobReadStats = { RangeBytes: 0, RangeReads: 0, IntegrityScanBytes: 0, IntegrityScans: 0, PeakOpenHandles: 0, PeakActiveReads: 0, ShortReads: 0, Failures: 0 };
 	constructor(Root: string, Client: string, LegacyFile?: string)
 	{
 		if(!/^[a-z0-9_-]{8,80}$/i.test(Client)) { throw new Error("设备身份无效"); }
@@ -41,7 +49,7 @@ export class SyncServerStore
 		{
 			this.Data = this.decode(JSON.parse(readFileSync(this.File, "utf8"))); this.validate(this.Data);
 			if(this.Data.Client !== Client) { throw new Error("同步日志属于其他配对身份"); }
-			for(const Row of this.Data.Rows) { if(Row.Blob) { this.value(Row.Blob); } }
+			for(const Row of this.Data.Rows) { if(Row.Blob) { const Value = this.value(Row.Blob); if(Row.Kind === "root") { this.validate_resolutions(Value.ConflictResolutions); } } }
 			let Changed = false;
 			for(const Operation of this.Data.Operations) { if(Operation.Status === "running") { Operation.Status = "submission-unknown"; Operation.Revision = ++this.Data.Revision; Operation.Origin = this.Scope; Operation.Error = "桥重启后不能证明旧运行回合仍在执行, 已保存接收凭证与回合 ID; 不自动重发"; Changed = true; } }
 			if(Changed) { this.save(); }
@@ -60,6 +68,11 @@ export class SyncServerStore
 		const Readback = this.decode(JSON.parse(readFileSync(this.File, "utf8"))); if(canonical_json(Readback) !== canonical_json(this.Data)) { throw new Error("同步迁移回读不一致, 旧文件保留"); }
 	}
 	get Scope(): string { return this.Data.Identity + ":" + this.Data.Client; }
+	private validate_resolutions(Values: any): void
+	{
+		const Resolutions = merge_conflict_resolutions(this.Scope, Values);
+		for(const R of Resolutions) { if(R.ConflictId !== hash(canonical_json([this.Scope, conflict_evidence_key(R.Conflict)]))) { throw new Error("冲突决议摘要与双方版本证据不符"); } }
+	}
 	private validate(Data: Journal): void
 	{
 		if(Data.SchemaVersion !== 2 || typeof Data.Identity !== "string" || !Number.isSafeInteger(Data.Revision) || Data.Revision < 0 || !Array.isArray(Data.Rows) || !Array.isArray(Data.Operations) || !Array.isArray(Data.Receipts)) { throw new Error("同步日志损坏, 原数据保留"); }
@@ -106,18 +119,162 @@ export class SyncServerStore
 		return JSON.parse(Text);
 	}
 	has_blob(Id: string): boolean { return existsSync(join(this.BlobDir, digest_id(Id) + ".json")); }
+	private file_version(Handle: number, File: string): { Version: string; Bytes: number }
+	{
+		const Opened = fstatSync(Handle, { bigint: true }), Current = statSync(File, { bigint: true });
+		const Stamp = (S: typeof Opened) => [S.dev, S.ino, S.size, S.mtimeNs, S.ctimeNs].map(String).join(":");
+		if(!Opened.isFile() || !Current.isFile() || Stamp(Opened) !== Stamp(Current)) { throw new Error("内容文件已被替换或版本变化, 未返回分片"); }
+		if(Opened.size < 1n || Opened.size > BigInt(SyncBudgets.maxBlobBytes)) { throw new Error("内容文件大小超出预算"); }
+		return { Version: Stamp(Opened), Bytes: Number(Opened.size) };
+	}
+	private discard_reader(R: BlobReader): void
+	{
+		if(R.Busy) { return; }
+		if(this.Readers.get(R.Id) === R) { this.Readers.delete(R.Id); }
+		closeSync(R.Handle);
+	}
+	private acquire_reader(Id: string): BlobReader
+	{
+		if(this.Closed) { throw new Error("内容存储已关闭"); }
+		if([...this.Readers.values()].reduce((N, R) => N + R.Busy, 0) >= BlobReaderLimits.concurrentReads) { throw new Error("并发内容读取超过预算, 请稍后重试"); }
+		digest_id(Id); const File = join(this.BlobDir, Id + ".json"); let R = this.Readers.get(Id);
+		if(!R)
+		{
+			if(this.Readers.size >= BlobReaderLimits.handles)
+			{
+				const Idle = [...this.Readers.values()].find(V => !V.Busy);
+				if(!Idle) { throw new Error("并发内容读取超过句柄预算, 请稍后重试"); } this.discard_reader(Idle);
+			}
+			const Handle = openSync(File, "r");
+			try
+			{
+				const { Version, Bytes } = this.file_version(Handle, File);
+				const Parts = this.VerifiedVersions.get(Id + ":" + Version);
+				R = { Id, Handle, Version, Bytes, Busy: 0, Verified: !!Parts, Parts };
+				this.Readers.set(Id, R); this.BlobReadStats.PeakOpenHandles = Math.max(this.BlobReadStats.PeakOpenHandles, this.Readers.size);
+			}
+			catch(E) { closeSync(Handle); throw E; }
+		}
+		try { this.check_reader(R); }
+		catch(E) { this.discard_reader(R); throw E; }
+		R.Busy++; this.Readers.delete(Id); this.Readers.set(Id, R);
+		this.BlobReadStats.PeakActiveReads = Math.max(this.BlobReadStats.PeakActiveReads, [...this.Readers.values()].reduce((N, V) => N + V.Busy, 0)); return R;
+	}
+	private check_reader(R: BlobReader): void
+	{
+		if(this.file_version(R.Handle, join(this.BlobDir, R.Id + ".json")).Version !== R.Version) { throw new Error("内容文件版本变化或截断, 未返回混合分片"); }
+	}
+	private release_reader(R: BlobReader, Failed: boolean): void
+	{
+		R.Busy--;
+		if(Failed) { R.Verified = false; this.VerifiedVersions.delete(R.Id + ":" + R.Version); this.BlobReadStats.Failures++; }
+		if(!R.Busy && R.Scan) { R.ScanController?.abort(); }
+		if((Failed || this.Closed) && !R.Busy && !R.Scan) { this.discard_reader(R); }
+		if(this.ReaderTimer) { clearTimeout(this.ReaderTimer); }
+		this.ReaderTimer = setTimeout(() => { this.ReaderTimer = undefined; for(const Reader of this.Readers.values()) { if(!Reader.Busy) { this.discard_reader(Reader); } } }, BlobReaderLimits.idleMs);
+		this.ReaderTimer.unref?.();
+	}
+	private mark_verified(R: BlobReader, Digest: string, Parts: string[]): void
+	{
+		this.check_reader(R);
+		if(Digest !== R.Id) { throw new Error("不可变内容摘要损坏, 不返回有效历史"); }
+		R.Verified = true; R.Parts = Parts; const Key = R.Id + ":" + R.Version; this.VerifiedVersions.delete(Key); this.VerifiedVersions.set(Key, Parts);
+		if(this.VerifiedVersions.size > BlobReaderLimits.verifiedVersions) { this.VerifiedVersions.delete(this.VerifiedVersions.keys().next().value!); }
+	}
+	private read_range(R: BlobReader, BufferValue: Buffer, Offset: number, Length: number, Scan: boolean, Async: boolean): number | Promise<number>
+	{
+		const Count = (N: number) =>
+		{
+			if(Scan) { this.BlobReadStats.IntegrityScanBytes += N; } else { this.BlobReadStats.RangeBytes += N; this.BlobReadStats.RangeReads++; }
+			if(N !== Length) { this.BlobReadStats.ShortReads++; throw new Error("内容范围读取发生 short read, 不返回不完整分片"); } return N;
+		};
+		if(Async) { return new Promise<number>((Resolve, Reject) => read(R.Handle, BufferValue, 0, Length, Offset, (E, N) => { if(E) { Reject(E); return; } try { Resolve(Count(N)); } catch(ErrorValue) { Reject(ErrorValue); } })); }
+		return Count(readSync(R.Handle, BufferValue, 0, Length, Offset));
+	}
+	private scan_reader(R: BlobReader): void
+	{
+		const Digest = createHash("sha256"), BufferValue = Buffer.allocUnsafe(SyncBudgets.blobChunkBytes), Parts: string[] = []; this.BlobReadStats.IntegrityScans++;
+		for(let Offset = 0; Offset < R.Bytes; Offset += BufferValue.length) { const Length = Math.min(BufferValue.length, R.Bytes - Offset); this.read_range(R, BufferValue, Offset, Length, true, false); const Part = BufferValue.subarray(0, Length); Digest.update(Part); Parts.push(hash(Part)); }
+		this.mark_verified(R, Digest.digest("hex"), Parts);
+	}
+	private async scan_reader_async(R: BlobReader): Promise<void>
+	{
+		const Digest = createHash("sha256"), BufferValue = Buffer.allocUnsafe(SyncBudgets.blobChunkBytes), Parts: string[] = []; this.BlobReadStats.IntegrityScans++;
+		for(let Offset = 0; Offset < R.Bytes; Offset += BufferValue.length)
+		{
+			if(R.ScanController?.signal.aborted) { throw new DOMException("内容读取已取消", "AbortError"); }
+			const Length = Math.min(BufferValue.length, R.Bytes - Offset); await this.read_range(R, BufferValue, Offset, Length, true, true); const Part = BufferValue.subarray(0, Length); Digest.update(Part); Parts.push(hash(Part));
+		}
+		this.mark_verified(R, Digest.digest("hex"), Parts);
+	}
+	private part_bounds(R: BlobReader, Index: number): { Offset: number; Length: number; Count: number }
+	{
+		const Count = Math.ceil(R.Bytes / SyncBudgets.blobChunkBytes);
+		if(!Number.isSafeInteger(Index) || Index < 0 || Index >= Count) { throw new Error("内容分页无效"); }
+		const Offset = Index * SyncBudgets.blobChunkBytes; return { Offset, Length: Math.min(SyncBudgets.blobChunkBytes, R.Bytes - Offset), Count };
+	}
 	blob_part(Id: string, Index: number): any
 	{
-		const Bytes = readFileSync(join(this.BlobDir, digest_id(Id) + ".json"));
-		if(!Number.isSafeInteger(Index) || Index < 0 || Index >= Math.ceil(Bytes.length / 65536)) { throw new Error("内容分页无效"); }
-		const Part = Bytes.subarray(Index * 65536, (Index + 1) * 65536); return { id: Id, index: Index, count: Math.ceil(Bytes.length / 65536), data: Part.toString("base64"), bytes: Bytes.length };
+		const R = this.acquire_reader(Id); let Failed = true;
+		try
+		{
+			const { Offset, Length, Count } = this.part_bounds(R, Index);
+			if(!R.Verified) { this.scan_reader(R); }
+			const Part = Buffer.allocUnsafe(Length); this.read_range(R, Part, Offset, Length, false, false); this.check_reader(R);
+			if(hash(Part) !== R.Parts?.[Index]) { throw new Error("不可变内容分片摘要损坏, 未返回历史"); } Failed = false;
+			return { id: Id, index: Index, count: Count, data: Part.toString("base64"), bytes: R.Bytes, version: hash(R.Version) };
+		}
+		finally { this.release_reader(R, Failed); }
+	}
+	blob_part_async(Id: string, Index: number, Signal?: AbortSignal): Promise<any>
+	{
+		const Work = this.read_part_async(Id, Index, Signal); this.Reads.add(Work);
+		void Work.finally(() => this.Reads.delete(Work)).catch(() => {}); return Work;
+	}
+	private async read_part_async(Id: string, Index: number, Signal?: AbortSignal): Promise<any>
+	{
+		if(Signal?.aborted) { throw new DOMException("内容读取已取消", "AbortError"); }
+		const R = this.acquire_reader(Id); let Failed = true, Cancel: (() => void) | undefined;
+		try
+		{
+			const { Offset, Length, Count } = this.part_bounds(R, Index);
+			if(!R.Verified)
+			{
+				if(!R.Scan)
+				{
+					R.ScanController = new AbortController();
+					R.Scan = this.scan_reader_async(R).finally(() => { R.Scan = undefined; if(!R.Busy && (this.Closed || R.ScanController?.signal.aborted)) { this.discard_reader(R); } });
+				}
+				const Aborted = Signal ? new Promise<never>((_Resolve, Reject) => { Cancel = () => Reject(new DOMException("内容读取已取消", "AbortError")); Signal.addEventListener("abort", Cancel, { once: true }); }) : undefined;
+				await (Aborted ? Promise.race([R.Scan, Aborted]) : R.Scan);
+			}
+			if(Signal?.aborted) { throw new DOMException("内容读取已取消", "AbortError"); }
+			const Part = Buffer.allocUnsafe(Length); await this.read_range(R, Part, Offset, Length, false, true); this.check_reader(R);
+			if(hash(Part) !== R.Parts?.[Index]) { throw new Error("不可变内容分片摘要损坏, 未返回历史"); }
+			if(Signal?.aborted) { throw new DOMException("内容读取已取消", "AbortError"); } Failed = false;
+			return { id: Id, index: Index, count: Count, data: Part.toString("base64"), bytes: R.Bytes, version: hash(R.Version) };
+		}
+		finally { if(Cancel) { Signal?.removeEventListener("abort", Cancel); } this.release_reader(R, Failed); }
+	}
+	blob_reader_stats()
+	{
+		const DigestLists = new Set([...this.VerifiedVersions.values(), ...[...this.Readers.values()].flatMap(R => R.Parts ? [R.Parts] : [])]);
+		return { ...this.BlobReadStats, OpenHandles: this.Readers.size, VerifiedVersions: this.VerifiedVersions.size, ResidentDigestBytes: [...DigestLists].reduce((N, Parts) => N + Parts.length * 64, 0), ActiveReads: [...this.Readers.values()].reduce((N, R) => N + R.Busy, 0) };
+	}
+	async close(): Promise<void>
+	{
+		this.Closed = true; if(this.ReaderTimer) { clearTimeout(this.ReaderTimer); this.ReaderTimer = undefined; }
+		await Promise.allSettled([...this.Reads]);
+		await Promise.allSettled([...this.Readers.values()].flatMap(R => R.Scan ? [R.Scan] : []));
+		if(this.ReaderTimer) { clearTimeout(this.ReaderTimer); this.ReaderTimer = undefined; }
+		for(const R of this.Readers.values()) { this.discard_reader(R); } this.VerifiedVersions.clear();
 	}
 	put_part(Input: any): any
 	{
 		const Id = digest_id(Input.id), Index = Input.index, Count = Input.count;
 		if(this.has_blob(Id)) { return { present: true }; }
 		if(!Number.isSafeInteger(Count) || Count < 1 || Count > 1024 || !Number.isSafeInteger(Index) || Index < 0 || Index >= Count || typeof Input.data !== "string" || Input.data.length > 90000 || !/^[A-Za-z0-9+/]*={0,2}$/.test(Input.data)) { throw new Error("内容分片格式无效或超过预算"); }
-		const Part = Buffer.from(Input.data, "base64"); if(Part.length > 65536) { throw new Error("内容分片超过字节预算"); }
+		const Part = Buffer.from(Input.data, "base64"); if(Part.length < 1 || Part.length > SyncBudgets.blobChunkBytes || Index < Count - 1 && Part.length !== SyncBudgets.blobChunkBytes || Part.toString("base64") !== Input.data) { throw new Error("内容分片长度/编码无效或超过字节预算"); }
 		const Directory = join(this.ChunkDir, Id); mkdirSync(Directory, { recursive: true });
 		const Meta = join(Directory, "count"); if(existsSync(Meta) && readFileSync(Meta, "utf8") !== String(Count)) { throw new Error("内容分片总数冲突"); } writeFileSync(Meta, String(Count));
 		const File = join(Directory, String(Index)); if(existsSync(File) && !readFileSync(File).equals(Part)) { throw new Error("相同内容分片身份不同内容"); } writeFileSync(File, Part, { mode: 0o600 });
@@ -139,7 +296,7 @@ export class SyncServerStore
 			const { Sync: _Sync, Outbox: _Outbox, Sessions: _Sessions, Settings: _Settings, ...Content } = Value;
 			const Existing = this.Data.Rows.find(R => R.Kind === "root"), Previous = Existing?.Blob ? this.value(Existing.Blob) : {};
 			const Resolutions = merge_conflict_resolutions(this.Scope, Previous.ConflictResolutions, Content.ConflictResolutions);
-			for(const R of Resolutions) { if(R.ConflictId !== hash(canonical_json([this.Scope, conflict_evidence_key(R.Conflict)]))) { throw new Error("冲突决议摘要与双方版本证据不符"); } }
+			this.validate_resolutions(Resolutions);
 			if(Resolutions.length) { Content.ConflictResolutions = Resolutions; }
 			const Legacy = [...new Map([...(Previous.ResolvedConflicts ?? []), ...(Content.ResolvedConflicts ?? [])].map(R => [canonical_json(R), R])).values()]; if(Legacy.length) { Content.ResolvedConflicts = Legacy; }
 			Value = Content;
@@ -372,6 +529,6 @@ export class SyncServerStore
 		catch(E) { Failures.push(String(E)); }
 		if(StartRevision !== this.Data.Revision) { Failures.push("引用版本在统计期间变化"); }
 		if(!External?.Complete) { Failures.push("未证明外部有效事件、操作分页快照和在途引用完整; 保留所有内容"); }
-		return { SchemaVersion: 1, DryRun: true, AutomaticGc: false, Revision: StartRevision, CompleteRoots: Failures.length === 0, Failures, BlobCount: Present.size, BlobBytes, CurrentEntityBytes: CurrentBytes, OperationEvidenceBytes: OperationBytes, SnapshotAndRecoveryBytes: RecoveryBytes, UnclassifiedBytes, UploadBytes, Candidates: Failures.length ? [] : Candidates };
+		return { SchemaVersion: 1, DryRun: true, AutomaticGc: false, Revision: StartRevision, CompleteRoots: Failures.length === 0, Failures, BlobReads: this.blob_reader_stats(), BlobCount: Present.size, BlobBytes, CurrentEntityBytes: CurrentBytes, OperationEvidenceBytes: OperationBytes, SnapshotAndRecoveryBytes: RecoveryBytes, UnclassifiedBytes, UploadBytes, Candidates: Failures.length ? [] : Candidates };
 	}
 }

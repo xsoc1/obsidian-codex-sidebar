@@ -1,5 +1,6 @@
 import type { SyncConflict } from "./sync/types";
 import type { SessionState } from "./sessions";
+import { conflict_evidence_key, effective_conflict_resolutions } from "./sync/conflicts";
 
 export function conflict_target(Key: string): { SessionId: string; MessageId: string } | null
 {
@@ -19,8 +20,11 @@ export function render_sync_conflicts(Root: HTMLElement, Conflicts: readonly Syn
 	Details.createDiv({ text: "无法自动判断的版本保留双方. 请核对消息与来源后选择; 这只处理聊天记录, 不授权修改笔记." });
 	for(const C of Conflicts)
 	{
-		const Target = conflict_target(C.Key), Session = State.Sessions.find(S => S.Id === Target?.SessionId), Deleted = Target && State.DeletedSessionIds?.includes(Target.SessionId);
+		const Target = conflict_target(C.Key), Session = State.Sessions.find(S => S.Id === Target?.SessionId), Deleted = Target && (State.DeletedSessionIds?.includes(Target.SessionId) || State.DeletedMessages?.some(M => M.SessionId === Target.SessionId && M.MessageId === Target.MessageId));
+		const Decisions = (State.Sync?.Resolutions ?? []).filter(R => conflict_evidence_key(R.Conflict) === conflict_evidence_key(C));
+		const Active = effective_conflict_resolutions(Decisions), Final = new Set(Active.map(R => R.Choice)).size > 1;
 		const Card = Details.createEl("details", { cls: "codex-sync-conflict" }); Card.createEl("summary", { text: Target ? `${Session?.Title ?? "原会话不可用"} · 消息 ${Target.MessageId.slice(0, 16)}` : "设置或目录版本冲突" }); Card.createDiv({ text: C.Reason });
+		if(Active.length) { Card.createDiv({ text: `待核对有效决议: ${Active.map(R => `${R.Id} (${R.Choice === "local" ? "本机" : "远端"})`).join(", ")}` }); }
 		for(const [Label, Value] of [["本机版本", C.Local], ["远端版本", C.Remote]] as const)
 		{
 			Card.createEl("strong", { text: Label });
@@ -31,14 +35,14 @@ export function render_sync_conflicts(Root: HTMLElement, Conflicts: readonly Syn
 		const Export = Actions.createEl("button", { text: "导出完整冲突 JSON", attr: { type: "button" } });
 		Export.addEventListener("click", () =>
 		{
-			const Payload = JSON.stringify({ schemaVersion: 1, Scope: State.Sync?.Scope ?? null, Conflict: C }, null, 2), Url = URL.createObjectURL(new Blob([Payload], { type: "application/json;charset=utf-8" }));
+			const Payload = JSON.stringify({ schemaVersion: 2, Scope: State.Sync?.Scope ?? null, Conflict: C, Resolutions: Decisions, EffectiveIds: Active.map(R => R.Id) }, null, 2), Url = URL.createObjectURL(new Blob([Payload], { type: "application/json;charset=utf-8" }));
 			const Link = Card.createEl("a", { attr: { href: Url, download: "codex-sync-conflict.json" } }); Link.click(); Link.remove(); setTimeout(() => URL.revokeObjectURL(Url), 1000); Status.setText("已导出包含原文的双方记录, 请自行保管");
 		});
 		if(Target && Session && !Deleted)
 		{
 			for(const [Choice, Label] of [["local", "保留本机版本..."], ["remote", "采用远端版本..."]] as const)
 			{
-				const Button = Actions.createEl("button", { text: Label, attr: { type: "button" } });
+				const Button = Actions.createEl("button", { text: Final ? `最终裁定: ${Label}` : Label, attr: { type: "button" } });
 				Button.addEventListener("click", () => { Button.disabled = true; void Resolve(C.Key, Choice).catch(E => Status.setText(String(E))).finally(() => { Button.disabled = false; }); });
 			}
 		}
