@@ -605,6 +605,7 @@ export default class CodexSidebarPlugin extends Plugin
 					this.Capture.LastView.previewMode.rerender(true);
 				}
 			}
+			this.refresh();
 		});
 	}
 
@@ -1908,9 +1909,14 @@ export default class CodexSidebarPlugin extends Plugin
 
 	can_capture_pdf_box(): boolean
 	{
+		return this.pdf_box_view() !== null;
+	}
+
+	private pdf_box_view(): (FileView & { file: TFile }) | null
+	{
 		const Active = this.app.workspace.activeLeaf?.view;
-		const View = note_file_path(Active) ? Active : this.Capture.LastView;
-		return is_pdf_view(View) && View.containerEl.isConnected;
+		const View = note_file_path(Active) ? Active : this.app.workspace.getMostRecentLeaf()?.view;
+		return is_pdf_view(View) && View.file && View.containerEl.isConnected ? View as FileView & { file: TFile } : null;
 	}
 
 	private cancel_pdf_box(): void
@@ -1926,9 +1932,8 @@ export default class CodexSidebarPlugin extends Plugin
 
 	open_pdf_box(): void
 	{
-		this.Capture.track_view();
-		const View = this.Capture.LastView;
-		if(!this.can_capture_pdf_box() || !is_pdf_view(View) || !View.file) { new Notice("请先打开要框选的 PDF"); return; }
+		const View = this.pdf_box_view();
+		if(!View) { new Notice("请先打开要框选的 PDF"); return; }
 		if(this.Capture.Suspended) { new Notice("请等待当前 PDF 缓存操作结束"); return; }
 		this.cancel_pdf_box();
 		if(this.CaptureTimer) { clearTimeout(this.CaptureTimer); this.CaptureTimer = null; }
