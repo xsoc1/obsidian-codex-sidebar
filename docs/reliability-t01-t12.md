@@ -1,6 +1,6 @@
 # 材料、后端与恢复闭环
 
-2026-11-05：**2.0.0-beta.13 已安装 Windows 并升级独立桥，GitHub 预发布进行中**。本轮从 `codex/multi-backend` / `734e49785ec3f8b7165f20fd249658d6e339059e` 开始，已 fetch 核对开发线、起始工作树干净；没有 reset 或移动旧标签。beta.12 发布源码为 `aa1502854b0468822e815ceb5b287a52ff57a3e7`。候选交付后用户明确授权本版“安装并发布”，包括 Windows「数学」库、独立远程桥与 GitHub 预发布。此前候选阶段未部署的记录保留为历史；旧版授权不扩展到后续版本。
+2026-11-05：**2.0.0-beta.13 已安装 Windows、升级独立桥并发布 GitHub；双平台 CI 与公开资产读回通过**。本轮从 `codex/multi-backend` / `734e49785ec3f8b7165f20fd249658d6e339059e` 开始，已 fetch 核对开发线、起始工作树干净；没有 reset 或移动旧标签。beta.12 发布源码为 `aa1502854b0468822e815ceb5b287a52ff57a3e7`。候选交付后用户明确授权本版“安装并发布”，包括 Windows「数学」库、独立远程桥与 GitHub 预发布。此前候选阶段未部署的记录保留为历史；旧版授权不扩展到后续版本。
 
 ## T01—T12 结果
 
@@ -87,8 +87,8 @@ blob 单下载句柄峰值 1；上限为 8 个句柄、8 个活动读、128 个�
 
 ## beta.13 部署与发布收据
 
-- **Windows 实装**：四个程序文件安装并经原生插件重载读回 beta.13；33 个会话、250 条消息的原问题/来源、11 条修改记录、10 份写入计划、具体模型与思考/Fast/补全等选择、活动会话和编辑器缓冲未变。原生当前侧栏持有新插件实例，25 个公式节点存在。编辑记录最初的比较探针把 JSON 不保存的 undefined 键当成差异；归一化后全量序列化内容相同，没有用旧备份覆盖数据。
+- **Windows 实装**：四个程序文件安装并经原生插件重载读回 beta.13；33 个会话、250 条消息的原问题/来源、11 条修改记录、10 份写入计划、具体模型与思考/Fast/补全等选择、活动会话、提问框和编辑器缓冲未变。原生当前侧栏持有新插件实例，25 个公式节点存在。15 项原 localStorage 和两个当前库 IndexedDB 的内容核对一致。编辑记录最初的比较探针把 JSON 不保存的 undefined 键当成差异；归一化后全量序列化内容相同，没有用旧备份覆盖数据。
 - **本机连接**：修复失效的已保存 CLI 路径后，实际官方 app-server 使用原 ChatGPT 登录，返回 8 个模型与 math-writing 0.3.0-candidate.4。本次部署不发起推理。
 - **独立桥**：原服务已经停止，旧 CLI 路径失效，旧 loopback 端口落在 Windows 排除范围内。启动 beta.13 独立 runtime，换用有效 CLI 与允许的私有 loopback 端口；仅对齐两个既有 Tailscale 服务入口，未变更无关路径或开启公开转发。配对凭据、数据身份、原历史及 journal 版本逐项读回一致。私有 HTTPS /info 与 model/list 验证 beta.13、协议 2、隔离、conflictFinalization:1、historyReadBodyVersions:1、8 个模型和实际 math-writing。既有设备继续使用原 HTTPS 地址与密钥。
-- **发布中**：GitHub 分支、标签、CI 与 7 个公开资产尚待本轮实际执行及读回，不能由上述本机结果替代。
+- **GitHub**：发布源码 `990de90d95c54ecbd19ec0ae5a58d4d638cd32fb` 已快进推送开发线 `codex/reliability-suite`，新标签 `2.0.0-beta.13` 未移动旧标签。[Windows/Ubuntu Node 24 CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/42030185618) 与[发布流程](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/42030191531) 全部成功。[公开 Release](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.13) 非草稿、预发布，7 个资产实际下载并核对 GitHub 摘要；candidate-manifest SourceCommit 与公开 tag 一致，插件 ZIP 4 成员、桥 ZIP 19 成员的白名单、字节数、SHA-256 和版本全部通过。公开单文件与 ZIP 对应项一致，Windows 四文件和独立 runtime 全部 19 成员与发布版逐字节一致。只对齐语义相同的 manifest/source-map 行尾和桥文档，主程序/bridge.cjs 无差异，未重启不变代码。正式版通道仍为 1.1.0。标签内文档记录发布前状态，开发线另补实际收据，不改已发布标签。
 - **设备复验**：iPad 在 BRAT 指定 beta.13 后保持前台，重连核对原会话、模型与一次原创提问；再复验引用加附件、部分结果续写及换网恢复。当前没有 iPad 真机或真实付费 API 的新增验收。
