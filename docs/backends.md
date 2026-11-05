@@ -1,5 +1,13 @@
 # 选择连接方式
 
+## beta.13：配置与活动连接分开
+
+先填写服务商、模型与必要的协议/身份，选择“保存配置，不连接”。侧栏“会话与连接”中可切换已保存配置，显示实际活动连接及能力；API 模型下拉会重建匹配 driver，不只改显示文字。失败保留原连接与配置草稿，成功才切换；目录迟到结果不能覆盖新配置。
+
+请求协议独立于思考档次；Responses-only 模型在默认/high/默认间不会跳到 Chat。自定义端点不默认假设支持函数工具，可关闭受限历史读取而使用预算预取。本轮原问题、引用、图文附件和历史共享预算，用户可展开“本轮历史覆盖”。部分正文可复制并明确继续，不自动重发。用量缺失显示“服务商未提供”。
+
+当前候选、状态契约、官方协议依据和验收边界见 [T01—T12](reliability-t01-t12.md)。
+
 ## API 直连
 
 打开 Codex Sidebar 设置, 在 **API 直连** 选择服务商, 填入 **直连 API Key**. 从 beta.5 起, 点击 **加载模型**, 在 **上游模型** 选一个 ID, 再点 **启用 API 直连**. beta.4 或服务商没有提供列表时, 手动填写 **API 模型 ID**. 最后发一个短问题确认调用权限. Windows 和 iPad 使用同一入口, 设备需要能通过 HTTPS 访问所选服务商.
@@ -18,9 +26,9 @@ OpenCode Go 的工作区、套餐、模型与客户端用量限制仍适用. 自
 
 **加载模型** 只发目录 GET, 不发问题、笔记或会话. [OpenCode Go](https://opencode.ai/v2/docs/console/go/#models) 使用独立公开目录, 不发送 Key, 因此可在填 Key 前加载; 目录不检查工作区权限. [OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list)、[DeepSeek](https://api-docs.deepseek.com/zh-cn/api/list-models/) 和 [Google AI Studio](https://aistudio.google.com/docs/openai#list-models) 用各自的模型列表接口. 自定义服务用所填基础地址下的 `GET /models` 和 `data[].id` 返回格式. 列出模型不代表它支持聊天或图片, 也不代表当前 Key 有权调用; 加载不会更改已填 ID 或激活连接.
 
-Key 保留在本次插件运行的内存中. 切换后端或重载后需重新输入. API 直连需要在客户端使用长期密钥, 适用于自己信任的设备和服务. 请求附带选区、来源快照和有限的对话历史, 服务商按其数据条款处理. 官方对密钥的安全建议见 [OpenAI API 认证](https://developers.openai.com/api/reference/overview#authentication).
+Key 仅保留在本次插件运行的内存中；同可信端点与身份标签下切换模型可复用，换端点、服务商或身份不复用，重载后需重新输入。 API 直连需要在客户端使用长期密钥, 适用于自己信任的设备和服务. 请求附带选区、来源快照和有限的对话历史, 服务商按其数据条款处理. 官方对密钥的安全建议见 [OpenAI API 认证](https://developers.openai.com/api/reference/overview#authentication).
 
-直接请求在收到完整响应后显示正文. 停止按钮停止客户端等待, 底层请求可能已抵达服务端. 没有收到可确认的结果时保留原问题与状态, 由用户决定是否另行重发. 自动行内补全在新后端默认关闭, 可以在设置中开启.
+默认自动模式使用 Fetch 真正 SSE 增量显示，响应详情标明实际传输。Fetch/CORS 不可用时可明确改为“原生整段”，不会为重试而自动重复 POST。停止按钮停止客户端等待，底层请求可能已抵达服务端。 没有收到可确认的结果时保留原问题与状态, 由用户决定是否另行重发. 自动行内补全在新后端默认关闭, 可以在设置中开启.
 
 ### API 直连思考档次
 
@@ -39,11 +47,11 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 - **Antigravity** 在一个 Python 环境安装官方 `google-antigravity` SDK, 将该环境的 `python.exe` 填入 **Agent 运行入口**. 临时填 Google AI Studio Key 或用 Obsidian 启动环境中的 `GEMINI_API_KEY`. 后台调用本机 SDK, 工具只允许结束回答. 该入口使用 SDK 的密钥认证. [Antigravity SDK](https://antigravity.google/docs/sdk/overview)
 - **DeepSeek Harness** 安装官方 `@deepseek-ai/dsh` CLI, 选择其 `dsh.exe` 或 `dsh` 的 Node 入口, npm 全局安装也可留空查找. 模型 ID 留空, 使用隔离 headless 配置的模型. 临时填 DeepSeek Key 或用 `DEEPSEEK_API_KEY`. 每次运行新建临时工作区与 DSH 配置根, 启动后确认工具拒绝策略已加载才通过 stdin 发送笔记. [DeepSeek Harness headless 文档](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/bundle/headless)
 
-上述三个非 Codex 本机入口接收文字快照. API 直连及这三个入口复用插件内置数学规则、问答、引用、重发和确认式写回. 当前库按需补读、私有 `math-writing` 技能和历史分页读取由 Codex 模式提供. 模型只有生成提案的权限, 笔记写入仍由当前 Obsidian 审核执行.
+上述三个非 Codex 本机入口接收文字快照. API 直连及这三个入口复用插件内置数学规则、问答、引用、重发和确认式写回. 私有 `math-writing` 与当前库只读工具由 Codex 模式提供；支持函数工具的 API 可受限读取当前会话历史，不支持的后端采用宿主预算预取。 模型只有生成提案的权限, 笔记写入仍由当前 Obsidian 审核执行.
 
 ## 独立远程桥与切换
 
-在任意客户端填写已有桥地址和配对密钥, 点击 **保存并连接**. 桥继续管理独立 Codex Agent, 见 [iPad 设置](ipad-setup.md). 新的直连和 Windows 本机 Agent 不要求升级桥. API 配置或本机 Agent 的会话按当前设备、服务商与端点或 Agent 入口隔离. 切回原连接会恢复对应历史. 同一端点更换 API Key 仍打开该端点的历史, 换账号时可先新建会话.
+在任意客户端填写已有桥地址和配对密钥, 点击 **保存并连接**. 桥继续管理独立 Codex Agent, 见 [iPad 设置](ipad-setup.md). 新的直连和 Windows 本机 Agent 不要求升级桥. API 配置或本机 Agent 的会话按当前设备、服务商与端点或 Agent 入口隔离. 切回原连接会恢复对应历史. 同一端点与身份标签共用该设备历史；模型/协议和配置 ID 不作为新的历史归属。更换账号请使用不同身份标签，不把新账号悄悄并入旧历史。
 
 升级保留已有客户端和桥状态文件. 回退插件程序后, 直连与非 Codex Agent 的独立记录保留在设备状态目录中, 再升回候选即可恢复. 普通 Codex 的桌面与远程记录沿用原存储和回退流程.
 
@@ -82,3 +90,7 @@ Key 保留在本次插件运行的内存中. 切换后端或重载后需重新�
 - 以上不含实际服务商密钥问答或 iPad 真机测试. 验证使用原创样本、合成密钥和隔离目录.
 - 2026-11-04 Windows「数学」库安装 beta.4 后重新加载. 原生设置可见 API 预设、Windows Agent、本机 Codex 和桥入口. 本机已有登录读取到 8 个模型并发现 math-writing. 30 个会话和 246 条消息的历史、设置、笔记关联、18 条发送事务及打开的编辑器内容保持一致. 11 条修改记录和 10 条写入计划的内容在校正 JSON 字段顺序后匹配安装前的摘要. 活动临时线程与工作提示词哈希按原有重连行为清理. Obsidian 捕获日志中没有本插件相关错误.
 - GitHub 的 [Windows/Ubuntu 检查](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41755562570) 和 [发布任务](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/41755817625) 成功. [公开预发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.4) 绑定 `ca4304b571cbbaaeb3d00a87673251eb01a0a2e2`. 匿名下载 7 个文件核对 GitHub 摘要, 两个 ZIP 的 4/17 个成员匹配构建清单. Windows 四个安装文件与公开资产逐字节一致.
+
+## 流式与结果协议依据
+
+本版使用 [OpenAI SSE](https://developers.openai.com/api/docs/guides/streaming-responses) 与 [Responses 终态事件](https://developers.openai.com/api/reference/resources/responses/streaming-events)、[DeepSeek Chat SSE/finish_reason/usage](https://api-docs.deepseek.com/api/create-chat-completion/)、[Gemini OpenAI 兼容流式](https://aistudio.google.com/docs/openai#streaming) 及 [Go 协议端点](https://opencode.ai/v2/docs/console/go/)。帧拆分遵循 [WHATWG SSE](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation)。[Obsidian 官方 requestUrl 类型](https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts) 没有 ReadableStream 接口，因此原生路径明确标为 buffered；这不代表设备 Fetch 一定可达某服务商。服务端截断、拒绝、未知与网络断流分别保留实际结果，不把请求 ID 当作可恢复接口，也不静默启用存储。

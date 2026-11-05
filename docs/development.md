@@ -1,5 +1,9 @@
 # 开发与依赖
 
+## 本轮开发与验收
+
+2026-11-05 的 **2.0.0-beta.13 为本地候选，未部署/发布**。当前 T01—T12、字段含义、复验命令、兼容边界与实际证据统一见 [材料、后端与恢复闭环](reliability-t01-t12.md)。下文旧 beta 的安装、授权与验证描述仅属于相应日期和版本。
+
 项目开发、独立 Windows 桥和 CI 的 Node.js 支持基线为 **Node 24**. 普通分支与 PR 在 Ubuntu、Windows 上执行 `npm ci`、`npm run build`、`npm test`. 工作流定义不等于本次已在 GitHub 执行; 具体平台、运行结果和候选验收以 [本轮验证记录](reliability-suite.md) 为准. Node 22 尚未列为本候选支持或已测版本.
 
 ```bash

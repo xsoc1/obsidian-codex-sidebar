@@ -4,6 +4,8 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
+**开发候选：2.0.0-beta.13，尚未安装或发布。** 新增统一图文/引用材料、真实 API 流式与部分结果续写、命名连接切换、可靠保存与因果冲突裁定。操作、逐项验收、性能、迁移和剩余真机检查见 [本轮交付记录](docs/reliability-t01-t12.md)。日常 Windows 插件读回仍为 beta.12，独立远程桥未改动。
+
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
 ## 主要功能

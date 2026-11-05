@@ -107,7 +107,7 @@ export async function write_late_receipt(Files: StateFiles, Path: string, Record
 			else
 			{
 				Value = { ...Old.Record }; for(const [K, V] of Object.entries(Copy)) { if(V !== undefined) { Value[K] = V; } }
-				
+
 			}
 		}
 		const Data: LateReceipt = { SchemaVersion: 1, Id: Value.Id, Digest: Value.Digest, Record: Value, Checksum: await content_digest(Value), ...(Promotion ? { Promotion } : {}), ...(Conflicts.length ? { Conflicts } : {}), ...(Observations.length ? {Observations} : {}) };
