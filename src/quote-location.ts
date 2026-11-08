@@ -1,4 +1,5 @@
 import { markdown_blocks, text_identity } from "./markdown-blocks";
+import type { ReadingBlock } from "./reading-navigation";
 
 export interface SelectedAnswerBlocks
 {
@@ -48,4 +49,22 @@ export function locate_answer_blocks(Root: HTMLElement, Value: SelectedAnswerBlo
 		Selected.push(Matches[0]);
 	}
 	return Selected;
+}
+
+/** A block identity survives appended text, but not edited/reordered source blocks. */
+export function locate_reading_block(Root: HTMLElement, Value: ReadingBlock, Text: string, MessageKey: string): HTMLElement | null
+{
+	if(Root.dataset.codexAnswerVersion !== text_identity(Text) || Root.dataset.codexAnswerMessage !== MessageKey) { return null; }
+	const Block = markdown_blocks(Text).find(B => B.Id === Value.Id && B.From === Value.From && B.To === Value.To && text_identity(B.Text) === Value.TextVersion);
+	if(!Block) { return null; }
+	const Nodes = locate_answer_blocks(Root, { SessionId: "reading", MessageId: "reading", SourceVersion: Root.dataset.codexAnswerVersion, From: Block.From, To: Block.To, BlockIds: [Block.Id] }, "reading", "reading", Text, MessageKey);
+	return Nodes.length === 1 ? Nodes[0] : null;
+}
+
+export function capture_reading_block(Root: HTMLElement, Node: HTMLElement, Text: string, MessageKey: string): ReadingBlock | undefined
+{
+	const Block = markdown_blocks(Text).find(B => B.Id === Node.dataset.codexAnswerBlock);
+	if(!Block) { return undefined; }
+	const Value: ReadingBlock = { Id: Block.Id, From: Block.From, To: Block.To, TextVersion: text_identity(Block.Text) };
+	return locate_reading_block(Root, Value, Text, MessageKey) === Node ? Value : undefined;
 }

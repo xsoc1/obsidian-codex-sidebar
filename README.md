@@ -4,7 +4,7 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
-**[2.0.0-beta.13 已发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.13)，并已安装到 Windows「数学」库；独立远程桥已升级。** 新增统一图文/引用材料、API 流式与部分结果续写、命名连接切换、可靠保存与因果冲突裁定。操作、逐项验收、性能、迁移和剩余真机检查见 [本轮交付记录](docs/reliability-t01-t12.md)。
+**[2.0.0-beta.14 已发布](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.14)，并已安装到 Windows「数学」库；独立远程桥已升级。** 新增统一图文/引用材料、API 流式与部分结果续写、命名连接切换、可靠保存与因果冲突裁定。操作、逐项验收、性能、迁移和剩余真机检查见 [本轮交付记录](docs/reliability-t01-t12.md)。
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -38,7 +38,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.13` 属于预发布版本, 在 BRAT 中需指定此版本. 使用本版因果冲突裁定须先升级独立桥, 再升级同配对的客户端; 私有 HTTPS 地址与配对密钥不变. 从旧版迁移及代码回退请参阅 [升级说明](docs/migration.md).
+`2.0.0-beta.14` 属于预发布版本, 在 BRAT 中需指定此版本. 使用本版因果冲突裁定须先升级独立桥, 再升级同配对的客户端; 私有 HTTPS 地址与配对密钥不变. 从旧版迁移及代码回退请参阅 [升级说明](docs/migration.md).
 
 
 ### iPad
@@ -48,6 +48,8 @@ iPad 可在插件设置中选择服务商并填写 API Key, 从 **加载模型**
 完整步骤见 [iPad 与 Windows 远程服务指南](docs/ipad-setup.md). iPad 的基础远程问答已有设备验证; 新版外观、分屏及软键盘布局仍需真机确认.
 
 ## 开始使用
+
+在历史材料清单中可查看本轮实际提供和成功补读的范围；从引用跳回原说明后，可点“返回刚才阅读处”。PDF 原文字与补充图片分别导航。收到回答但尚未保存时，可复制正文或重试保存，不会再次请求模型。
 
 1. 点击 Obsidian 工具栏上的机器人图标, 打开侧栏.
 2. 在“模型与选项”中选择模型和思考档次.

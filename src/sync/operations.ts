@@ -1,4 +1,23 @@
-import { canonical_json, client_sync, content_digest, type ClientSync, type OperationStatus, type SendOperation, type SyncConflict } from "./types";
+import { canonical_json, client_sync, content_digest, type ClientSync, type OperationStatus, type SendOperation, type SyncConflict, type OperationEvidence } from "./types";
+
+export const OperationEvidenceFields = [["Input", "InputBlob"], ["Request", "RequestBlob"], ["Result", "ResultBlob"], ["Conflicts", "ConflictsBlob"]] as const;
+
+function merge_evidence(Target: SendOperation, Preferred: SendOperation, Other: SendOperation): void
+{
+	const Pending: OperationEvidence = { State: "metadata" }, Verified: NonNullable<SendOperation["EvidenceDigests"]> = {};
+	for(const [Field, Blob] of OperationEvidenceFields)
+	{
+		const Source = Preferred[Field] !== undefined ? Preferred : Other;
+		if(Source[Field] !== undefined) { (Target as any)[Field] = structuredClone(Source[Field]); }
+		const Alternate = Source === Preferred ? Other : Preferred;
+		const Digest = Source.EvidenceDigests?.[Field] ?? (Source[Field] !== undefined && canonical_json(Source[Field]) === canonical_json(Alternate[Field]) ? Alternate.EvidenceDigests?.[Field] : undefined);
+		if(Digest !== undefined) { Verified[Field] = Digest; }
+		const Locator = Preferred.Evidence?.[Blob] ?? (Preferred[Field] !== undefined && Preferred.EvidenceDigests?.[Field] ? undefined : Other.Evidence?.[Blob]);
+		if(Locator !== undefined && (Source[Field] === undefined || Locator !== Digest)) { Pending[Blob] = Locator; }
+	}
+	if(OperationEvidenceFields.some(([, Blob]) => Pending[Blob] !== undefined)) { Target.Evidence = Pending; } else { delete Target.Evidence; }
+	if(Object.keys(Verified).length) { Target.EvidenceDigests = Verified; } else { delete Target.EvidenceDigests; }
+}
 
 const terminal = (Status: OperationStatus): boolean => ["completed", "cancelled", "failed"].includes(Status);
 function conflict(Local: SendOperation, Remote: SendOperation, Reason: string, Conflicts?: SyncConflict[]): void
@@ -38,15 +57,15 @@ export function merge_operations(Local: SendOperation[] = [], Remote: SendOperat
 	{
 		const L = Result.find(O => O.Id === R.Id);
 		if(!L) { Result.push(structuredClone(R)); continue; }
-		if(L.Scope !== R.Scope || L.Digest !== R.Digest || !L.Evidence && !R.Evidence && canonical_json(L.Input) !== canonical_json(R.Input) || L.SessionId !== R.SessionId || L.MessageId !== R.MessageId || L.RequestDigest && R.RequestDigest && L.RequestDigest !== R.RequestDigest || L.Request && R.Request && canonical_json(L.Request) !== canonical_json(R.Request)) { conflict(L, R, "相同操作 ID 的不可变输入或作用域不同, 未合并或重发", Conflicts); continue; }
+		if(L.Scope !== R.Scope || L.Digest !== R.Digest || L.Input !== undefined && R.Input !== undefined && canonical_json(L.Input) !== canonical_json(R.Input) || L.SessionId !== R.SessionId || L.MessageId !== R.MessageId || L.RequestDigest && R.RequestDigest && L.RequestDigest !== R.RequestDigest || L.Request !== undefined && R.Request !== undefined && canonical_json(L.Request) !== canonical_json(R.Request)) { conflict(L, R, "相同操作 ID 的不可变输入或作用域不同, 未合并或重发", Conflicts); continue; }
 		if(terminal(L.Status) && terminal(R.Status) && L.Status !== R.Status) { conflict(L, R, "同一发送操作出现不同终态, 保留双方供核对", Conflicts); continue; }
 		if(L.TurnId && R.TurnId && L.TurnId !== R.TurnId) { conflict(L, R, "同一发送操作出现不同回合身份, 不自动替换", Conflicts); continue; }
 		const ExistingConflicts = [...(L.Conflicts ?? []), ...(R.Conflicts ?? [])], Attempted = L.Attempted || R.Attempted, Deleted = L.SessionDeleted || R.SessionDeleted, MessageDeleted = L.MessageDeleted || R.MessageDeleted;
 		const Rank: Record<OperationStatus, number> = { local: 0, received: 1, "submission-unknown": 2, running: 3, completed: 4, cancelled: 4, failed: 4 };
 		const Comparable = L.Origin === L.Scope && R.Origin === L.Scope && L.Revision !== undefined && R.Revision !== undefined;
-		const Hydrated = !L.Evidence ? { Input: L.Input, Request: L.Request, Result: L.Result, Conflicts: L.Conflicts } : !R.Evidence ? { Input: R.Input, Request: R.Request, Result: R.Result, Conflicts: R.Conflicts } : null;
-		if(!terminal(L.Status) && Comparable ? R.Revision! > L.Revision! : Rank[R.Status] > Rank[L.Status] || Rank[R.Status] === Rank[L.Status] && R.Status === L.Status) { Object.assign(L, structuredClone(R)); }
-		if(Hydrated) { for(const [Key, Value] of Object.entries(Hydrated)) { if(Value !== undefined && (L as any)[Key] === undefined) { (L as any)[Key] = structuredClone(Value); } } if(L.Input !== undefined) { delete L.Evidence; } }
+		const Previous = { ...L }, RemoteWins = Comparable && (!terminal(L.Status) || L.Status === R.Status) ? R.Revision! > L.Revision! : Rank[R.Status] > Rank[L.Status] || Rank[R.Status] === Rank[L.Status] && R.Status === L.Status;
+		if(RemoteWins) { Object.assign(L, structuredClone(R)); }
+		merge_evidence(L, RemoteWins ? R : Previous, RemoteWins ? Previous : R);
 		if(Attempted) { L.Attempted = true; } if(Deleted) { L.SessionDeleted = true; } if(MessageDeleted) { L.MessageDeleted = true; }
 		if(ExistingConflicts.length) { L.Conflicts = [...new Map(ExistingConflicts.map(C => [canonical_json(C), C])).values()]; for(const C of L.Conflicts) { if(Conflicts && !Conflicts.some(P => canonical_json(P) === canonical_json(C))) { Conflicts.push(structuredClone(C)); } } }
 	}

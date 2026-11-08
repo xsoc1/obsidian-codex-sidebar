@@ -16,6 +16,7 @@ import { SyncServerStore } from "./sync/server-store";
 import { canonical_json, SyncBudgets, SyncCapabilities, SyncProtocol, type SendOperation } from "./sync/types";
 import { restore_sessions } from "./sessions";
 import { HistoryReadTool, read_history_page } from "./history-budget";
+import { record_history_read } from "./history-ledger";
 import { tool_read_reference, type SourceReference } from "./sources";
 import { StreamCheckpoints } from "./runtime/checkpoints";
 import { authenticate_api_key, openai_api_key } from "./api-auth";
@@ -179,7 +180,27 @@ class DeviceAgent
 				}
 				else if(Value.method === "item/tool/call" && Value.params?.tool === HistoryReadTool.name && this.Threads.has(Value.params.threadId))
 				{
-					try { const SessionId = this.Threads.get(Value.params.threadId)!.Session; const Messages = (this.State?.Sessions?.find((S: any) => S.Id === SessionId)?.Messages ?? []).filter((M: any) => !this.Store.is_message_deleted(SessionId, M.Id)); Connection?.send({ id: Value.id, result: await read_history_page(SessionId, Messages, Value.params.arguments, this.Store.Scope) }); }
+					try
+					{
+						const SessionId = this.Threads.get(Value.params.threadId)!.Session;
+						const Messages = (this.State?.Sessions?.find((S: any) => S.Id === SessionId)?.Messages ?? []).filter((M: any) => !this.Store.is_message_deleted(SessionId, M.Id));
+						const Result = await read_history_page(SessionId, Messages, Value.params.arguments, this.Store.Scope);
+						if(Connection !== this.Connection) { throw Error("历史读取期间原独立连接已变化"); }
+						const User = Messages.find((M: any) => M.Role === "user" && M.TurnId === Value.params.turnId);
+						const Operation = User?.OperationId && this.Store.Data.Operations.find(O => O.Id === User.OperationId && O.SessionId === SessionId && O.ThreadId === Value.params.threadId && O.TurnId === Value.params.turnId);
+						if(Operation && User.InputLedger)
+						{
+							const Next = record_history_read(User.InputLedger, { Scope: Operation.Scope, SessionId, OperationId: Operation.Id }, Value.params.arguments, Result, Messages);
+							if(Next !== User.InputLedger)
+							{
+								User.InputLedger = Next;
+								const Stored = this.Messages.get(this.checkpoint_key(SessionId, User.Id));
+								if(Stored) { Stored.Message.InputLedger = structuredClone(Next); this.checkpoint_message(Value.params.threadId, Value.params.turnId, User.Id); }
+								else { this.Store.observe_message(SessionId, User); }
+							}
+						}
+						Connection?.send({ id: Value.id, result: Result });
+					}
 					catch(ErrorValue) { Connection?.send({ id: Value.id, result: { success: false, contentItems: [{ type: "inputText", text: String(ErrorValue) }] } }); }
 				}
 				else

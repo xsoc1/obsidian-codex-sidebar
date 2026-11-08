@@ -4,6 +4,7 @@ import { canonical_json, type ClientSync, type EntityVersion, type SyncConflict,
 import { merge_operations } from "./sync/operations";
 import { merge_conflict_resolutions, pending_conflicts, resolved_message } from "./sync/conflicts";
 import { merge_history_loads } from "./sync/metadata";
+import { merge_history_read_records } from "./history-ledger";
 
 export interface ChatSession
 {
@@ -74,7 +75,7 @@ export function delete_session_plan<T extends SessionState>(State: T, Id: string
 	for(const Operation of Sync?.Operations ?? []) { if(Operation.SessionId === Id) { Operation.SessionDeleted = true; if(Operation.Status === "local" || Operation.Status === "received") { Operation.Status = "cancelled"; } } }
 	return { State: { ...State, Sessions, ActiveId, DeletedSessionIds: [...new Set([...deleted_session_ids(State.DeletedSessionIds), Id])], ...(Sync ? { Sync } : {}) }, ReplacementId: Replacement?.Id };
 }
-function merge_message(Local: ChatMessage, Remote: ChatMessage, SessionId: string, Conflicts: SyncConflict[], Resolutions: readonly ConflictResolution[]): ChatMessage
+function merge_message(Local: ChatMessage, Remote: ChatMessage, SessionId: string, Conflicts: SyncConflict[], Resolutions: readonly ConflictResolution[], Scope?: string): ChatMessage
 {
 	if(canonical_json(Local) === canonical_json(Remote)) { return structuredClone(Local); }
 	const Chosen = resolved_message(Resolutions, JSON.stringify([SessionId, Local.Id]), Local, Remote); if(Chosen) { return Chosen as ChatMessage; }
@@ -86,7 +87,19 @@ function merge_message(Local: ChatMessage, Remote: ChatMessage, SessionId: strin
 	}
 	const L = (Local as ChatMessage & { SyncVersion?: EntityVersion }).SyncVersion, R = (Remote as ChatMessage & { SyncVersion?: EntityVersion }).SyncVersion;
 	const Immutable = (M: ChatMessage) => canonical_json({ Role: M.Role, Text: M.Role === "user" ? M.Text : undefined, Prompt: M.Prompt, Context: M.Context, Quote: M.Quote, Task: M.Task, OperationId: (M as any).OperationId });
-	if(Local.Role === "user" && Immutable(Local) === Immutable(Remote)) { return { ...Remote, ...Local, ...(Remote.TurnId && !Local.TurnId ? { TurnId: Remote.TurnId } : {}), ...(Remote.CompletionStatus && !Local.CompletionStatus ? { CompletionStatus: Remote.CompletionStatus } : {}) }; }
+	if(Local.Role === "user" && Immutable(Local) === Immutable(Remote))
+	{
+		const Merged = { ...Remote, ...Local, ...(Remote.TurnId && !Local.TurnId ? { TurnId: Remote.TurnId } : {}), ...(Remote.CompletionStatus && !Local.CompletionStatus ? { CompletionStatus: Remote.CompletionStatus } : {}) };
+		const Valid = (V: EntityVersion | undefined) => V && V.Origin === Scope && Number.isSafeInteger(V.Revision) && V.Revision > 0 && typeof V.Digest === "string" && /^[0-9a-f]{64}$/.test(V.Digest);
+		// Versions are supplied by the existing digest-verified sync reader. Only
+		// read evidence may advance here; the saved input/plan stays local.
+		if(Scope && Local.OperationId && Local.InputLedger && Remote.InputLedger && Valid(L) && Valid(R) && (R!.Revision > L!.Revision || R!.Revision === L!.Revision && R!.Digest === L!.Digest))
+		{
+			const Ledger = merge_history_read_records(Local.InputLedger, Remote.InputLedger, { Scope, SessionId, OperationId: Local.OperationId });
+			if(Ledger && canonical_json(Ledger) !== canonical_json(Local.InputLedger)) { Merged.InputLedger = Ledger; Merged.SyncVersion = structuredClone(R); }
+		}
+		return Merged;
+	}
 	if(Local.Role !== "user" && Local.TurnId && Local.TurnId === Remote.TurnId)
 	{
 		if(L && R && L.Origin === R.Origin && L.Revision !== R.Revision) { return structuredClone(L.Revision > R.Revision ? Local : Remote); }
@@ -115,7 +128,7 @@ export function restore_sessions<T extends SessionState>(Local: T, Remote: T, Li
 		{
 			if(MessageKeys.has(JSON.stringify([R.Id, M.Id]))) { continue; }
 			const Index = L.Messages.findIndex(P => P.Id === M.Id);
-			if(Index < 0) { L.Messages.push(structuredClone(M)); } else { L.Messages[Index] = merge_message(L.Messages[Index], M, L.Id, Conflicts, Resolutions); }
+			if(Index < 0) { L.Messages.push(structuredClone(M)); } else { L.Messages[Index] = merge_message(L.Messages[Index], M, L.Id, Conflicts, Resolutions, Scope); }
 		}
 		for(const [Key, Value] of Object.entries(R)) { if(Key !== "Messages" && (L as any)[Key] === undefined) { (L as any)[Key] = structuredClone(Value); } }
 	}

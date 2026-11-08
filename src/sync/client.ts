@@ -1,9 +1,10 @@
 import { deleted_messages, restore_sessions, type SessionState } from "../sessions";
-import { canonical_json, client_sync, content_digest, entity_key, SyncBudgets, type ClientSync, type DeltaMutation, type EntityVersion, type SendOperation, type HistoryLoadState, type ConflictResolution } from "./types";
-import { merge_operations } from "./operations";
+import { canonical_json, client_sync, content_digest, entity_key, SyncBudgets, type ClientSync, type DeltaMutation, type EntityVersion, type SendOperation, type HistoryLoadState, type ConflictResolution, type OperationEvidenceField } from "./types";
+import { OperationEvidenceFields } from "./operations";
 import { BlobCache } from "./blob-cache";
 import { effective_conflict_resolutions, merge_conflict_resolutions, pending_conflicts, require_conflict_finalization, verify_conflict_resolutions } from "./conflicts";
 import { merge_sync_metadata } from "./metadata";
+import { merge_outbox } from "../runtime/outbox";
 
 type Http = (Path: string, Method: string, Body?: unknown) => Promise<any>;
 const bytes = (Value: unknown) => new TextEncoder().encode(canonical_json(Value));
@@ -15,6 +16,23 @@ async function bounded_map<T, R>(Values: readonly T[], Run: (Value: T) => Promis
 	const Result: R[] = new Array(Values.length); let Index = 0;
 	await Promise.all(Array.from({ length: Math.min(3, Values.length) }, async () => { while(Index < Values.length) { const Current = Index++; Result[Current] = await Run(Values[Current]); } }));
 	return Result;
+}
+
+export class IncompleteOperationEvidenceError extends Error
+{
+	constructor(readonly IncompleteState: SessionState, readonly Missing: { OperationId: string; Fields: OperationEvidenceField[]; Error: string }[])
+	{
+		super("发送操作证据未完整读取, 未生成完整导出: " + Missing.map(M => M.OperationId + " [" + M.Fields.join(", ") + "]: " + M.Error).join("; "));
+		this.name = "IncompleteOperationEvidenceError";
+	}
+}
+
+class OperationEvidenceFieldError extends Error
+{
+	constructor(readonly Operation: SendOperation, readonly Field: OperationEvidenceField, Cause: unknown)
+	{
+		super(`操作 ${Operation.Id} 的 ${Field} 证据未通过读取校验: ${String(Cause)}`);
+	}
 }
 
 export class DeltaSyncClient
@@ -153,8 +171,9 @@ export class DeltaSyncClient
 				const Operations = await this.operation_pages();
 				Remote.Sync = { ...client_sync(this.Scope), Revision: Catalog.Revision, Versions, Operations, History, Resolutions: merge_conflict_resolutions(this.Scope, Local.Sync?.Resolutions, Remote.ConflictResolutions) };
 				const State = restore_sessions(Local, Remote, Linked, FollowLocal) as T;
+				if((Local as any).Outbox || Remote.Outbox) { (State as any).Outbox = merge_outbox((Local as any).Outbox, Remote.Outbox); }
 				const Conflicts = [...(State.Sync?.Conflicts ?? State.MessageConflicts ?? [])];
-				State.Sync = { ...Remote.Sync, Operations: merge_operations(Local.Sync?.Operations, Operations, Conflicts), Conflicts }; delete State.MessageConflicts; delete (State as any).ConflictResolutions;
+				State.Sync = { ...Remote.Sync, Operations: State.Sync!.Operations, History: State.Sync!.History, Conflicts }; delete State.MessageConflicts; delete (State as any).ConflictResolutions;
 				const SettingsDigest = await content_digest((Local as any).Settings ?? {}), PreviousDigest = Local.Sync?.SettingsDigest;
 				const Dirty = PreviousDigest !== undefined && SettingsDigest !== PreviousDigest;
 				const ExpectedSettings = Dirty ? Local.Sync?.SettingsRevision ?? Local.Sync?.Versions[entity_key("settings")]?.Revision ?? 0 : Settings?.Revision ?? 0;
@@ -203,7 +222,19 @@ export class DeltaSyncClient
 		const Missing = Result.Sessions.filter(S => Result.Sync?.History?.[S.Id]?.Status === "unloaded");
 		if(Missing.length) { Result = (await this.restore(Result, [], true, Result.Sessions.map(S => S.Id))).State; }
 		if(Result.Sessions.some(S => Result.Sync?.History?.[S.Id]?.Status === "unloaded")) { throw new Error("完整历史目录仍在变化, 未生成不完整导出"); }
-		Result.Sync!.Operations = await bounded_map(Result.Sync!.Operations, async O => O.Evidence ? this.expand_operation({ ...O, ...O.Evidence }) : O);
+		const MissingEvidence: IncompleteOperationEvidenceError["Missing"] = [];
+		Result.Sync!.Operations = await bounded_map(Result.Sync!.Operations, async O =>
+		{
+			try { return O.Evidence ? await this.expand_operation(O) : O; }
+			catch(E)
+			{
+				const Partial = E instanceof OperationEvidenceFieldError ? E.Operation : O;
+				const Fields = OperationEvidenceFields.filter(([, Blob]) => Partial.Evidence?.[Blob] !== undefined).map(([Field]) => Field);
+				if(E instanceof OperationEvidenceFieldError && !Fields.includes(E.Field)) { Fields.push(E.Field); }
+				MissingEvidence.push({ OperationId: O.Id, Fields, Error: String(E) }); return Partial;
+			}
+		});
+		if(MissingEvidence.length) { throw new IncompleteOperationEvidenceError(Result, MissingEvidence); }
 		return Result;
 	}
 	async sync(State: any): Promise<void>
@@ -298,14 +329,39 @@ export class DeltaSyncClient
 	{
 		if(Meta.Scope !== this.Scope) { throw new Error("发送操作来自其他作用域"); }
 		const { InputBlob, RequestBlob, ResultBlob, ConflictsBlob, Evidence: _Evidence, State: _State, ...Data } = Meta;
-		const Expanded = { ...Data, Input: await this.read_blob(InputBlob), ...(RequestBlob ? { Request: await this.read_blob(RequestBlob) } : {}), ...(ResultBlob ? { Result: await this.read_blob(ResultBlob) } : {}), ...(ConflictsBlob ? { Conflicts: await this.read_blob(ConflictsBlob) } : {}) };
-		if(Expanded.Digest !== await content_digest({ Scope: Expanded.Scope, SessionId: Expanded.SessionId, MessageId: Expanded.MessageId, Input: Expanded.Input }) || Expanded.RequestDigest !== undefined && Expanded.RequestDigest !== await content_digest(Expanded.Request)) { throw new Error("展开的操作凭据与原输入/请求摘要不符, 不重新提交"); }
+		const Expanded: SendOperation = structuredClone(Data), Locators = { ...Meta.Evidence, ...(InputBlob !== undefined ? { InputBlob } : {}), ...(RequestBlob !== undefined ? { RequestBlob } : {}), ...(ResultBlob !== undefined ? { ResultBlob } : {}), ...(ConflictsBlob !== undefined ? { ConflictsBlob } : {}) };
+		Expanded.Evidence = { State: "metadata" };
+		for(const [, Blob] of OperationEvidenceFields) { if(Locators[Blob] !== undefined) { Expanded.Evidence[Blob] = Locators[Blob]; } }
+		for(const [Field, Blob] of OperationEvidenceFields)
+		{
+			const Locator = Locators[Blob]; if(Locator === undefined && Expanded[Field] === undefined && Field !== "Input") { continue; }
+			try
+			{
+				if(Locator !== undefined && (typeof Locator !== "string" || !/^[0-9a-f]{64}$/.test(Locator))) { throw new Error("字段 locator 摘要无效"); }
+				const Known = Expanded[Field], Matches = Known !== undefined && (Locator === undefined || await content_digest(Known) === Locator);
+				if(Locator !== undefined && Known !== undefined && !Matches && ["Input", "Request"].includes(Field)) { throw new Error("已保存的不可变字段与远端 locator 摘要不符"); }
+				const Value = Matches ? Known : Locator === undefined ? undefined : await this.read_blob(Locator);
+				if(Field === "Input" && (Value === undefined || Expanded.Digest !== await content_digest({ Scope: Expanded.Scope, SessionId: Expanded.SessionId, MessageId: Expanded.MessageId, Input: Value })) || Field === "Request" && Expanded.RequestDigest !== undefined && Expanded.RequestDigest !== await content_digest(Value)) { throw new Error("原输入/请求摘要不符, 不重新提交"); }
+				if(Field === "Result" && Value?.turn?.id !== undefined && Expanded.TurnId !== undefined && Value.turn.id !== Expanded.TurnId || Field === "Request" && Value?.threadId !== undefined && Expanded.ThreadId !== undefined && Value.threadId !== Expanded.ThreadId) { throw new Error("回合或线程身份不符, 不重新提交"); }
+				if(Field === "Conflicts")
+				{
+					if(!Array.isArray(Value)) { throw new Error("冲突证据不是数组"); }
+					Expanded.Conflicts = [...new Map([...(Expanded.Conflicts ?? []), ...Value].map(C => [canonical_json(C), C])).values()];
+				}
+				else { (Expanded as any)[Field] = Value; }
+				if(Locator !== undefined) { Expanded.EvidenceDigests = { ...Expanded.EvidenceDigests, [Field]: Locator }; }
+				delete Expanded.Evidence![Blob];
+			}
+			catch(E) { throw new OperationEvidenceFieldError(Expanded, Field, E); }
+		}
+		delete Expanded.Evidence;
 		return Expanded;
 	}
 	private operation_summary(Meta: any): SendOperation
 	{
 		if(Meta.Scope !== this.Scope || typeof Meta.Id !== "string" || !/^[0-9a-f]{64}$/.test(Meta.InputBlob) || !/^[0-9a-f]{64}$/.test(Meta.Digest)) { throw new Error("操作索引作用域或摘要无效"); }
-		const { InputBlob, RequestBlob, ResultBlob, ConflictsBlob, Input: _Input, Request: _Request, Result: _Result, ...Data } = Meta;
+		for(const [, Blob] of OperationEvidenceFields) { if(Meta[Blob] !== undefined && (typeof Meta[Blob] !== "string" || !/^[0-9a-f]{64}$/.test(Meta[Blob]))) { throw new Error("操作索引字段 locator 无效"); } }
+		const { InputBlob, RequestBlob, ResultBlob, ConflictsBlob, Input: _Input, Request: _Request, Result: _Result, Conflicts: _Conflicts, Evidence: _Evidence, EvidenceDigests: _Verified, ...Data } = Meta;
 		return { ...Data, Input: undefined, Evidence: { State: "metadata", InputBlob, ...(RequestBlob ? { RequestBlob } : {}), ...(ResultBlob ? { ResultBlob } : {}), ...(ConflictsBlob ? { ConflictsBlob } : {}) } };
 	}
 	async message_value(Blob: string, Version: EntityVersion): Promise<any> { return { ...await this.read_blob(Blob), SyncVersion: Version }; }
@@ -316,7 +372,7 @@ export class DeltaSyncClient
 	}
 	async submit(Operation: SendOperation, Params: unknown, Prepared?: { InputBlob: string; RequestBlob: string }): Promise<{ operation: SendOperation; result?: any }>
 	{
-		const { InputBlob, RequestBlob } = Prepared ?? await this.prepare(Operation, Params), { Input: _Input, Request: _Request, Result: _Result, ...Meta } = Operation;
+		const { InputBlob, RequestBlob } = Prepared ?? await this.prepare(Operation, Params), { Input: _Input, Request: _Request, Result: _Result, Evidence: _Evidence, EvidenceDigests: _Verified, ...Meta } = Operation;
 		const Response = await this.Http("/operations", "POST", { operation: { ...Meta, InputBlob }, requestBlob: RequestBlob });
 		return { operation: await this.expand_operation(Response.operation), ...(Response.result ? { result: Response.result } : {}) };
 	}

@@ -40,6 +40,10 @@ export interface HistoryInputLedger
 	WorkReserveUtf8Bytes?: number;
 	ImageReserveBytes?: number;
 	DeferredMaterials?: { MessageId: string; Field: "text" | "prompt"; SourceVersion: string; Utf8Bytes: number }[];
+	Identity?: import("./history-ledger").HistoryLedgerIdentity;
+	MaterialLabels?: import("./history-ledger").HistoryMaterialLabel[];
+	ReadRecords?: import("./history-ledger").HistoryReadRecord[];
+	ReadRecordsTruncated?: boolean;
 }
 export interface HistoryPlan { Messages: ChatMessage[]; Ledger: HistoryInputLedger; Navigation: string; }
 const Bytes = (Text: string) => new TextEncoder().encode(Text).byteLength;

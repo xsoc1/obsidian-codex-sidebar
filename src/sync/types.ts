@@ -1,5 +1,14 @@
 export type OperationStatus = "local" | "received" | "submission-unknown" | "running" | "completed" | "cancelled" | "failed";
 export interface DeletedMessage { SessionId: string; MessageId: string; }
+export type OperationEvidenceField = "Input" | "Request" | "Result" | "Conflicts";
+export interface OperationEvidence
+{
+	State: "metadata";
+	InputBlob?: string;
+	RequestBlob?: string;
+	ResultBlob?: string;
+	ConflictsBlob?: string;
+}
 export interface SendOperation
 {
 	Id: string;
@@ -23,7 +32,10 @@ export interface SendOperation
 	Conflicts?: SyncConflict[];
 	Revision?: number;
 	Origin?: string;
-	Evidence?: { State: "metadata"; InputBlob: string; RequestBlob?: string; ResultBlob?: string; ConflictsBlob?: string };
+	// Pending fields and verified source blobs are independent of the operation status.
+	Evidence?: OperationEvidence;
+	// Conflicts can include local audit entries in addition to the verified source array.
+	EvidenceDigests?: Partial<Record<OperationEvidenceField, string>>;
 }
 export interface EntityVersion { Revision: number; Digest: string; Origin: string; }
 export interface SyncConflict { Key: string; Reason: string; Local: unknown; Remote: unknown; }

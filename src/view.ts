@@ -25,9 +25,11 @@ import { EditViewState } from "./edit-view-state";
 import { render_sync_conflicts } from "./conflict-view";
 import { ComposerDraftStore, type ComposerMaterial } from "./composer-draft";
 import { resolve_material, context_completeness, type CapturedMaterial } from "./composer-material";
-import { locate_answer_blocks, inherited_quote_session } from "./quote-location";
+import { locate_answer_blocks, inherited_quote_session, capture_reading_block, locate_reading_block } from "./quote-location";
 import { render_input_ledger } from "./input-ledger-view";
 import { render_backend_result } from "./backend-result-view";
+import { message_label } from "./history-ledger";
+import { ReadingNavigation, type ReadingPosition, type ReadingTicket } from "./reading-navigation";
 
 const ViewType = "codex-sidebar-view";
 const ExplainPrompt = "请解释选中的内容. 说明符号、所需前置知识和关键推导, 保留原来的数学符号, 用中文回答.";
@@ -95,6 +97,14 @@ export class CodexView extends ItemView
 	private RenderTimer: ReturnType<typeof setTimeout> | null = null;
 	private LastRendered = "";
 	private Rendering = false;
+	private RenderingDone: Promise<void> = Promise.resolve();
+	private ReadingNavigation = new ReadingNavigation();
+	private ActiveNavigation: ReadingTicket | null = null;
+	private PendingSaveKeys = new Map<string, { Text: string; Status: string; Revision: number }>();
+	private NextPendingSaveKey = 0;
+	private LedgerKeys = new WeakMap<object, number>();
+	private NextLedgerKey = 0;
+	private MountedReading: { Context: string; Scope: string; Window: ReturnType<HistoryWindow["snapshot"]> } | null = null;
 	private Opened = false;
 	private ReleaseFooter: (() => void) | null = null;
 	private Version = 0;
@@ -263,7 +273,8 @@ export class CodexView extends ItemView
 		}
 		const Quote = this.Owner.AnswerQuote ?? this.SelectedAnswer;
 		const CanStop = (this.Owner as SidebarOwner & { CanStop?: boolean }).CanStop ?? (this.Owner.Busy && !!this.Owner.TurnId);
-		this.ComposeActions?.refresh(this.input_blocked(), CanStop, !!this.Owner.AnswerQuote);
+		this.ComposeActions?.refresh(this.input_blocked() || !!this.Owner.BackendSaveBlocked, CanStop, !!this.Owner.AnswerQuote);
+		this.Input.disabled = !!this.Owner.BackendSaveBlocked;
 		this.refresh_compose_summary();
 		if(this.QuoteValue === Quote && this.QuoteCommitted === !!this.Owner.AnswerQuote) { return; }
 		this.QuoteValue = Quote; this.QuoteCommitted = !!this.Owner.AnswerQuote;
@@ -573,6 +584,7 @@ export class CodexView extends ItemView
 
 	private async send_input(Mode: ComposeAction): Promise<void>
 	{
+		if(this.Owner.BackendSaveBlocked) { new Notice("回答已收到, 尚未保存; 请先重试保存, 不会重发推理"); return; }
 		const Issues=this.resolved_material().Issues;
 		if(Issues.length){this.DraftError=Issues.join("; ");this.refresh_draft_status();new Notice(this.DraftError);return;}
 		this.sync_draft();
@@ -607,6 +619,7 @@ export class CodexView extends ItemView
 			return;
 		}
 		const Session = this.Owner.Session;
+		this.ReadingNavigation.enter(this.reading_context());
 		this.sync_draft(); this.refresh_draft_status();
 		const CurrentLabel = JSON.stringify([Session.Id, Session.Title]);
 		if(this.SessionOptionsSource !== this.Owner.State.Sessions || this.SessionOptionsCount !== this.Owner.State.Sessions.length || this.SessionOptionsCurrent !== CurrentLabel)
@@ -638,6 +651,7 @@ export class CodexView extends ItemView
 		this.refresh_connections();
 		this.refresh_completion();
 		this.refresh_quote();
+		this.refresh_pending_save_statuses();
 		const Options = this.SessionOptions;
 		if(this.SessionsElement.dataset.options !== Options)
 		{
@@ -735,6 +749,7 @@ export class CodexView extends ItemView
 
 	forget_session(Id: string): void
 	{
+		this.ReadingNavigation.forget(JSON.stringify([this.draft_scope(), Id]));
 		this.Version++; this.LastRendered = "";
 		if(this.SelectedAnswer?.SessionId === Id) { this.SelectedAnswer = null; }
 		if(this.Attachment?.SessionId === Id) { this.Attachment = null; }
@@ -751,6 +766,7 @@ export class CodexView extends ItemView
 	}
 	private message_plan()
 	{
+		this.ReadingNavigation.enter(this.reading_context());
 		const Session = this.Owner.Session, Messages = Session.Messages;
 		const Context = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", Session.Id]);
 		let State = this.HistoryStates.get(Context);
@@ -768,8 +784,19 @@ export class CodexView extends ItemView
 			const EditState = Task?.Action === "edit" ? [this.Owner.Edits?.Error, this.Owner.Edits?.ErrorTaskId, this.EditState.key(Task.Id), this.Owner.Edits?.Cache?.Turns] : null;
 			const Operation = Message.OperationId ? this.Owner.operation_state?.(Message.OperationId) : null;
 			const OperationKey = Operation ? [Operation.Status, Operation.Error, Operation.TurnId, Operation.Attempted] : null;
-			return { Id: Message.Id, Key: JSON.stringify([State!.version(Message.Id), Source.Key, Followups.get(Message.Id), OperationKey, Message.Role === "user" ? [this.input_blocked(), this.EditingId === Message.Id] : null, EditState]), Render: () => this.render_card(Message, Bound, Followups, Source, Context + ":" + Message.Id) };
+			let LedgerKey: number | undefined;
+			if(Message.InputLedger) { LedgerKey = this.LedgerKeys.get(Message.InputLedger); if(LedgerKey === undefined) { LedgerKey = ++this.NextLedgerKey; this.LedgerKeys.set(Message.InputLedger, LedgerKey); } }
+			return { Id: Message.Id, Key: JSON.stringify([this.draft_scope(), State!.version(Message.Id), Source.Key, Followups.get(Message.Id), OperationKey, Message.Role === "user" ? [this.input_blocked(), this.EditingId === Message.Id, LedgerKey] : null, EditState]), Render: () => this.render_card(Message, Bound, Followups, Source, Context + ":" + Message.Id) };
 		});
+		const Pending = this.Owner.PendingBackendSaves ?? [], Keep = new Set(Pending.map(P => P.Key));
+		for(const Id of this.PendingSaveKeys.keys()) { if(!Keep.has(Id)) { this.PendingSaveKeys.delete(Id); } }
+		for(const Value of Pending)
+		{
+			const Old = this.PendingSaveKeys.get(Value.Key), Same = Old && Old.Text === Value.Text && Old.Status === Value.Status;
+			const Revision = Same ? Old.Revision : ++this.NextPendingSaveKey;
+			this.PendingSaveKeys.set(Value.Key, { Text: Value.Text, Status: Value.Status, Revision });
+			Items.push({ Id: "pending-save:" + Value.Key, Key: "pending-save:" + Revision, Render: () => this.render_pending_save(Value) });
+		}
 		const HistoryState = (this.Owner.State?.Sync as any)?.History?.[Session.Id]?.Status;
 		return { Session, Messages, Context, Visible, Items, HistoryState, Signature: JSON.stringify([Context, Visible.Signature, HistoryState, Items.map(Item => [Item.Id, Item.Key])]) };
 	}
@@ -778,10 +805,17 @@ export class CodexView extends ItemView
 		if(this.Rendering || !this.Opened) { return; }
 		if(this.EditingSession !== this.Owner.Session.Id) { this.EditingId = ""; }
 		const { Session, Context, Visible, Items, HistoryState, Signature } = this.message_plan();
+		const Scope = this.draft_scope(), Window = this.HistoryWindow.snapshot(Context);
+		this.refresh_pending_save_statuses();
 		if(Signature === this.LastRendered && this.MessageList) { return; }
 		this.Rendering = true;
+		let Settled!: () => void; this.RenderingDone = new Promise(Resolve => { Settled = Resolve; });
 		const Version = ++this.Version;
-		this.MessageList ??= new MessageList(this.MessagesElement);
+		this.MessageList ??= new MessageList(this.MessagesElement, () =>
+		{
+			this.ReadingNavigation.cancel();
+			if(this.ActiveNavigation) { this.Version++; this.LastRendered = ""; }
+		});
 		const PreparedSignature = Signature;
 		try
 		{
@@ -820,12 +854,13 @@ export class CodexView extends ItemView
 					return { Element, Dispose: () => {} };
 				} });
 			}
-			if(await this.MessageList.update(Context, Items, () => this.Opened && Version === this.Version && this.Owner.Session.Id === Session.Id && Context === JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Session.Id]))) { this.LastRendered = PreparedSignature; }
+			if(await this.MessageList.update(Context, Items, () => this.Opened && Version === this.Version && Scope === this.draft_scope() && this.Owner.Session.Id === Session.Id && Context === JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Session.Id]))) { this.LastRendered = PreparedSignature; this.MountedReading = { Context, Scope, Window }; this.refresh_reading_returns(); this.refresh_pending_save_statuses(); }
 			else if(this.Opened) { this.refresh(); }
 		}
 		finally
 		{
 			this.Rendering = false;
+			Settled();
 			if(this.Opened && PreparedSignature !== this.message_signature()) { this.refresh(); }
 		}
 	}
@@ -833,6 +868,11 @@ export class CodexView extends ItemView
 	private async render_card(Message: ChatMessage, Messages: ChatMessage[], Followups = followup_index(Messages), Source?: ReturnType<HistoryRenderState["source"]>, MessageKey?: string): Promise<MessageNode>
 	{
 		const RenderComponent = new Component(); RenderComponent.load();
+		const RenderScope = this.draft_scope(), RenderSessionId = this.Owner.Session.Id;
+		const Navigate = (Id: string, Quote?: AnswerQuote) =>
+		{
+			if(RenderScope === this.draft_scope() && RenderSessionId === this.Owner.Session.Id) { void this.reveal_message(Id, Quote); }
+		};
 		try
 		{
 			const Card = this.MessagesElement.ownerDocument.createElement("div");
@@ -841,6 +881,11 @@ export class CodexView extends ItemView
 			Card.dataset.messageId = Message.Id;
 			const Header = Card.createDiv({ cls: "codex-message-label" });
 			Header.createSpan({ text: Message.Role === "user" ? "你" : Message.Role === "assistant" ? "Codex" : Message.Role === "reasoning" ? "思考摘要" : "状态" });
+			if(Message.Role === "assistant" || Message.Role === "user")
+			{
+				const Context = this.reading_context(), Return = this.button(Header, "返回刚才阅读处", () => { if(Context === this.reading_context()) { void this.return_reading(); } });
+				Return.className = "codex-reading-return"; Return.hidden = !this.ReadingNavigation.target(Context);
+			}
 			const Operation = Message.OperationId ? this.Owner.operation_state?.(Message.OperationId) : null;
 			if(Operation)
 			{
@@ -907,12 +952,18 @@ export class CodexView extends ItemView
 			{
 				Card.createDiv({ cls: "codex-message-context", text: Message.ContextLabel });
 			}
-			if(Message.Role === "user" && Message.InputLedger) { render_input_ledger(Card, Message.InputLedger); }
+			if(Message.Role === "user" && Message.InputLedger)
+			{
+				const Scope = this.draft_scope(), SessionId = this.Owner.Session.Id;
+				const Delivery = Message.TurnId || Operation?.TurnId ? "submitted" : Operation?.Attempted === false || Operation && ["local", "queued", "received"].includes(Operation.Status) ? "prepared" : "unknown";
+				render_input_ledger(Card, Message.InputLedger, { Messages: this.Owner.Session.Messages, Identity: { Scope: Message.InputLedger.Identity?.Scope ?? Scope, SessionId, OperationId: Message.OperationId ?? "" }, NavigationScope: Scope, Delivery,
+					Reveal: Target => { if(Target.Scope === this.draft_scope() && Target.SessionId === this.Owner.Session.Id) { void this.reveal_message(Target.MessageId); } } });
+			}
 			if(Message.Role === "user" && Message.Quote)
 			{
 				const Quoted = Card.createEl("details"); Quoted.createEl("summary", { text: "本轮引用的回答片段" });
 				Quoted.createEl("pre", { text: Message.Quote.SelectedText });
-				this.button(Quoted, "返回被引用回答", () => void this.reveal_message(Message.Quote!.MessageId, Message.Quote!));
+				this.button(Quoted, "返回被引用回答", () => Navigate(Message.Quote!.MessageId, Message.Quote!));
 			}
 			const Content = Message.Role === "reasoning" ? Card.createEl("details") : Card;
 			if(Message.Role === "reasoning")
@@ -986,37 +1037,153 @@ export class CodexView extends ItemView
 				if(Related)
 				{
 					const Chain = Card.createEl("details", { cls: "codex-followup-chain" }); Chain.createEl("summary", { text: "追问关联" });
-					if(Related.RootId !== Message.Id) { this.button(Chain, "原始说明", () => void this.reveal_message(Related.RootId)); }
-					if(Related.ParentId && Related.ParentId !== Related.RootId) { this.button(Chain, "上次引用的回答", () => void this.reveal_message(Related.ParentId!)); }
-					if(Related.LatestId && Related.LatestId !== Message.Id) { this.button(Chain, Related.LatestUnknown ? "最近历史说明 (完成状态未知)" : "最新整合说明", () => void this.reveal_message(Related.LatestId!)); }
+					const Label = (Id: string) => { const M = this.Owner.Session.Messages.find(M => M.Id === Id); return M ? " · " + message_label(M) : ""; };
+					if(Related.RootId !== Message.Id) { this.button(Chain, "原始说明" + Label(Related.RootId), () => Navigate(Related.RootId)); }
+					if(Related.ParentId && Related.ParentId !== Related.RootId) { this.button(Chain, "上次引用的回答" + Label(Related.ParentId), () => Navigate(Related.ParentId!)); }
+					if(Related.LatestId && Related.LatestId !== Message.Id) { this.button(Chain, (Related.LatestUnknown ? "最近历史说明 (完成状态未知)" : "最新整合说明") + Label(Related.LatestId), () => Navigate(Related.LatestId!)); }
 				}
 			}
 			return { Element: Card, Dispose: () => RenderComponent.unload() };
 		}
 		catch(ErrorValue) { RenderComponent.unload(); throw ErrorValue; }
 	}
-	private async reveal_message(Id: string, Quote?: AnswerQuote): Promise<void>
+	private async render_pending_save(Value: SidebarOwner["PendingBackendSaves"][number]): Promise<MessageNode>
 	{
-		const SessionId = this.Owner.Session.Id, Scope = this.draft_scope(), RenderScope = this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop";
+		const Element = this.MessagesElement.ownerDocument.createElement("div"); Element.className = "codex-message codex-pending-backend-save";
+		Element.dataset.pendingSaveKey = Value.Key;
+		Element.createDiv({ cls: "codex-message-label", text: "回答已收到, 尚未保存", attr: { role: "status" } });
+		Element.createDiv({ cls: "codex-pending-save-status", text: Value.Saving ? "正在重试保存; 不会重新提交推理" : "可阅读、复制已收到正文; 请重试保存后再发送或采用修改稿" });
+		const Status = ({ completed: "完整正文", partial: "部分正文", unknown: "未知", refused: "拒绝", failed: "失败", cancelled: "已取消" } as Record<string, string>)[Value.Status] ?? "未知";
+		Element.createDiv({ cls: "codex-message-context", text: `服务端结果: ${Status}; 本机保存: 未确认` });
+		const ErrorElement = Element.createDiv({ cls: "codex-save-error", text: Value.Error?.slice(0, 2000) ?? "" }); ErrorElement.hidden = !Value.Error;
+		const RenderComponent = new Component(); RenderComponent.load();
+		const Body = Element.createDiv({ cls: "codex-unsaved-body markdown-rendered" });
+		try
+		{
+			if(safe_math_markdown(Value.Text))
+			{
+				await MarkdownRenderer.render(this.app, Value.Text || "未收到正文", Body, "", RenderComponent);
+				RenderComponent.registerDomEvent(Body, "click", Event =>
+				{
+					const Link = (Event.target as Element | null)?.closest?.("a"), Href = Link?.getAttribute("href") ?? "";
+					if(Link && (Link.classList.contains("internal-link") || (!!Href && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(Href)))) { Event.preventDefault(); Event.stopImmediatePropagation(); new Notice("未保存结果尚无可靠来源链接基准, 请核对原问题来源; 未按当前笔记猜测跳转"); }
+				}, { capture: true });
+			}
+			else { Body.createDiv({ cls: "codex-message-context", text: "为避免执行嵌入内容, 此段按原文展示" }); Body.createEl("pre", { text: Value.Text }); }
+		}
+		catch(ErrorValue) { Body.empty(); Body.createDiv({ text: "数学排版暂时失败, 原正文保留: " + error_text(ErrorValue) }); Body.createEl("pre", { text: Value.Text }); }
+		const Actions = Element.createDiv({ cls: "codex-edit-actions" });
+		this.button(Actions, "复制未保存正文", () =>
+		{
+			if(!navigator.clipboard?.writeText) { new Notice("当前环境无法访问剪贴板, 请选中文字后使用系统复制"); return; }
+			void navigator.clipboard.writeText(Value.Text).catch(() => new Notice("复制失败, 请使用系统复制"));
+		});
+		const Retry = this.button(Actions, "重试保存", () =>
+		{
+			Retry.disabled = true;
+			void this.Owner.retry_backend_saves().catch(E => new Notice(error_text(E))).finally(() => { Retry.disabled = false; this.refresh(); });
+		});
+		Retry.disabled = Value.Saving;
+		Retry.classList.add("codex-pending-save-retry");
+		return { Element, Dispose: () => RenderComponent.unload() };
+	}
+	private refresh_pending_save_statuses(): void
+	{
+		if(!this.MessagesElement) { return; }
+		const Values = new Map((this.Owner.PendingBackendSaves ?? []).map(V => [V.Key, V]));
+		for(const Root of this.MessagesElement.querySelectorAll<HTMLElement>("[data-pending-save-key]"))
+		{
+			const Value = Values.get(Root.dataset.pendingSaveKey ?? ""); if(!Value) { continue; }
+			Root.querySelector<HTMLElement>(".codex-pending-save-status")?.setText(Value.Saving ? "正在重试保存; 不会重新提交推理" : "可阅读、复制已收到正文; 请重试保存后再发送或采用修改稿");
+			const ErrorElement = Root.querySelector<HTMLElement>(".codex-save-error"); if(ErrorElement) { ErrorElement.setText(Value.Error?.slice(0, 2000) ?? ""); ErrorElement.hidden = !Value.Error; }
+			const Retry = Root.querySelector<HTMLButtonElement>(".codex-pending-save-retry"); if(Retry) { Retry.disabled = Value.Saving; }
+		}
+	}
+	private reading_context(): string { return JSON.stringify([this.draft_scope(), this.Owner.Session.Id]); }
+	private refresh_reading_returns(): void
+	{
+		const Target = this.ReadingNavigation.target(this.reading_context());
+		for(const Button of this.MessagesElement.querySelectorAll<HTMLButtonElement>(".codex-reading-return"))
+		{
+			Button.hidden = !Target; Button.textContent = "返回刚才阅读处" + (Target ? " · " + Target.Label.slice(0, 32) : "");
+			Button.parentElement?.classList.toggle("codex-reading-active", !!Target);
+		}
+		this.MessageList?.reanchor();
+	}
+	private capture_reading(): ReadingPosition | undefined
+	{
+		const Scope = this.draft_scope(), SessionId = this.Owner.Session.Id;
+		if(this.MountedReading?.Scope !== Scope || this.MountedReading.Context !== JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", SessionId])) { return undefined; }
+		const Bounds = this.MessagesElement.getBoundingClientRect();
+		const Card = [...this.MessagesElement.querySelectorAll<HTMLElement>("[data-message-id]")].find(E => E.getBoundingClientRect().bottom > Bounds.top && E.getBoundingClientRect().top < Bounds.bottom);
+		const Message = Card && this.Owner.Session.Messages.find(M => M.Id === Card.dataset.messageId);
+		if(!Card || !Message) { return undefined; }
+		const Body = Card.querySelector<HTMLElement>(".codex-message-body"), Key = JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", SessionId]) + ":" + Message.Id;
+		const Node = Body && [...Body.querySelectorAll<HTMLElement>("[data-codex-answer-block]")].find(E => E.getBoundingClientRect().bottom > Bounds.top);
+		const Block = Body && Node ? capture_reading_block(Body, Node, Message.Text, Key) : undefined;
+		return { Scope, SessionId, MessageId: Message.Id, Label: message_label(Message), Offset: (Block ? Node! : Card).getBoundingClientRect().top - Bounds.top, ...(Block ? { Block } : {}) };
+	}
+	private async return_reading(): Promise<void>
+	{
+		const Context = this.reading_context(), Target = this.ReadingNavigation.target(Context);
+		if(!Target) { return; }
+		if(Target.Scope !== this.draft_scope() || Target.SessionId !== this.Owner.Session.Id) { this.ReadingNavigation.discard(Context); this.refresh_reading_returns(); return; }
+		await this.navigate_reading(Target.MessageId, undefined, Target);
+	}
+	private async reveal_message(Id: string, Quote?: AnswerQuote): Promise<void> { await this.navigate_reading(Id, Quote); }
+	private async navigate_reading(Id: string, Quote?: AnswerQuote, ReturnTarget?: ReadingPosition): Promise<void>
+	{
+		const SessionId = this.Owner.Session.Id, Scope = this.draft_scope(), RenderScope = this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", ReadingContext = this.reading_context();
 		const Allowed = () => !Quote || Quote.MessageId === Id && inherited_quote_session(this.Owner.Session, this.Owner.State.Sessions ?? [], Quote.SessionId);
 		if(!Allowed()) { new Notice("引用属于原会话, 未跳到当前会话的同名消息"); return; }
-		const Current = () => this.Opened && this.Owner.Session.Id === SessionId && Scope === this.draft_scope() && Allowed();
-		try { await this.Owner.ensure_session_history?.(SessionId); }
-		catch(ErrorValue) { if(Current()) { new Notice("原消息尚未读完整: " + error_text(ErrorValue)); } return; }
-		if(!Current()) { return; }
-		const Session = this.Owner.Session, Context = JSON.stringify([RenderScope, SessionId]);
-		if(!this.HistoryWindow.focus(Context, Session.Messages, Id)) { new Notice("本会话没有这条原消息, 未跳转其他会话或补造内容"); return; }
-		this.Version++; this.LastRendered = "";
-		for(let I = 0; I < 200 && this.Rendering; I++) { await new Promise(R => setTimeout(R, 10)); }
-		if(!Current()) { return; }
-		await this.render_messages();
-		if(!Current()) { return; }
-		const Card = [...this.MessagesElement.querySelectorAll<HTMLElement>("[data-message-id]")].find(E => E.dataset.messageId === Id);
-		const Message = this.Owner.Session.Messages.find(M => M.Id === Id && M.Role === "assistant"), Body = Card?.querySelector<HTMLElement>(".codex-message-body");
-		const Nodes = Quote && Body && Message && Quote.SourceVersion === Quote.SelectedBlocks?.SourceVersion ? locate_answer_blocks(Body, Quote.SelectedBlocks, Quote.SessionId, Id, Message.Text, Context + ":" + Id) : [];
-		(Nodes[0] ?? Card)?.scrollIntoView({ block: "center", behavior: "auto" });
-		for(const NodeValue of Nodes) { NodeValue.animate?.([{ backgroundColor: "var(--text-selection)" }, { backgroundColor: "transparent" }], { duration: 1800 }); }
-		if(Quote && !Nodes.length && Card) { new Notice("已返回原消息; 旧记录、原文版本或精确块映射无法核验, 未猜测引用位置"); }
+		const Ticket = this.ReadingNavigation.begin(ReadingContext, this.capture_reading()), Context = JSON.stringify([RenderScope, SessionId]);
+		const Previous = this.MountedReading?.Context === Context && this.MountedReading.Scope === Scope ? this.MountedReading.Window : this.HistoryWindow.snapshot(Context);
+		this.ActiveNavigation = Ticket;
+		const SameContext = () => this.Opened && this.Owner.Session.Id === SessionId && Scope === this.draft_scope();
+		const Deleted = () => this.Owner.State.DeletedSessionIds?.includes(SessionId) || this.Owner.State.DeletedMessages?.some(M => M.SessionId === SessionId && M.MessageId === Id);
+		const Current = () => SameContext() && this.ReadingNavigation.current(Ticket, this.reading_context()) && Allowed() && !Deleted();
+		let Focused = false, Committed = false;
+		try
+		{
+			try { await this.Owner.ensure_session_history?.(SessionId); }
+			catch(ErrorValue) { if(Current()) { new Notice("原消息尚未读完整: " + error_text(ErrorValue)); } return; }
+			if(!Current()) { return; }
+			await this.RenderingDone;
+			if(!Current()) { return; }
+			if(!this.HistoryWindow.focus(Context, this.Owner.Session.Messages, Id))
+			{
+				if(ReturnTarget) { this.ReadingNavigation.discard(ReadingContext); this.refresh_reading_returns(); }
+				new Notice("本会话没有这条原消息, 未跳转其他会话或补造内容"); return;
+			}
+			Focused = true; this.Version++; this.LastRendered = "";
+			await this.render_messages();
+			if(!Current()) { return; }
+			const Message = this.Owner.Session.Messages.find(M => M.Id === Id);
+			if(!Message) { return; }
+			let Exact = false;
+			const Resolve = (Card: HTMLElement): HTMLElement | null =>
+			{
+				const Body = Card.querySelector<HTMLElement>(".codex-message-body"), Live = this.Owner.Session.Messages.find(M => M.Id === Id);
+				if(!SameContext() || !Live || Deleted()) { return null; }
+				if(!Body) { return Card; }
+				const Node = ReturnTarget?.Block ? locate_reading_block(Body, ReturnTarget.Block, Live.Text, Context + ":" + Id) : Quote && Quote.SourceVersion === Quote.SelectedBlocks?.SourceVersion ? locate_answer_blocks(Body, Quote.SelectedBlocks, Quote.SessionId, Id, Live.Text, Context + ":" + Id)[0] : null;
+				Exact = !!Node; return Node ?? Card;
+			};
+			if(!this.MessageList?.reveal(Id, Resolve, ReturnTarget ? ReturnTarget.Block ? ReturnTarget.Offset : 0 : Math.max(0, this.MessagesElement.clientHeight / 2 - 30))) { return; }
+			// A missing block falls back to the message start, not an unrelated pixel offset.
+			if(ReturnTarget?.Block && !Exact) { this.MessageList.reveal(Id, Card => Card, 0); }
+			if((Quote || ReturnTarget?.Block) && !Exact) { new Notice("已返回原消息; 原文或精确块映射无法核验, 未猜测局部位置"); }
+			if(ReturnTarget) { this.ReadingNavigation.exchange(Ticket); } else { this.ReadingNavigation.commit(Ticket); }
+			Committed = true; this.refresh_reading_returns();
+		}
+		finally
+		{
+			if(this.ActiveNavigation === Ticket)
+			{
+				this.ActiveNavigation = null;
+				if(!Committed && Focused && SameContext()) { this.HistoryWindow.restore(Context, Previous); this.Version++; this.LastRendered = ""; this.refresh(); }
+			}
+		}
 	}
 
 	private refresh_completion(): void
@@ -1055,6 +1222,8 @@ export class CodexView extends ItemView
 		this.ContextPanel?.hide(); this.ContextPanel = null;
 		this.ReleaseFooter?.(); this.ReleaseFooter = null;
 		this.Opened = false;
+		this.ReadingNavigation.clear(); this.ActiveNavigation = null; this.PendingSaveKeys.clear();
+		this.MountedReading = null;
 		this.Version++;
 		if(this.RenderTimer)
 		{

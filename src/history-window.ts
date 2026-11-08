@@ -38,6 +38,8 @@ export class HistoryWindow
 		this.Windows.set(Context, { FirstId: Messages[Start].Id, LastId: Messages[End].Id, Start, End: End + 1, Forced: true }); return true;
 	}
 	latest(Context: string): void { this.Windows.delete(Context); }
+	snapshot(Context: string): WindowState | undefined { const State = this.Windows.get(Context); return State ? { ...State } : undefined; }
+	restore(Context: string, State: WindowState | undefined): void { if(State) { this.Windows.set(Context, { ...State }); } else { this.Windows.delete(Context); } }
 	key(Context: string): string { return JSON.stringify(this.Windows.get(Context) ?? null); }
 	forget(Context: string): void { this.Windows.delete(Context); }
 	clear(): void { this.Windows.clear(); }

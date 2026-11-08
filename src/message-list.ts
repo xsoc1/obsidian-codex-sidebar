@@ -31,17 +31,26 @@ export class MessageList
 	private Observer: ResizeObserver | null = null;
 	private Frame: number | null = null;
 	private Window: (Window & typeof globalThis) | null;
-	constructor(private Root: HTMLElement)
+	private Pinned: { Context: string; MessageId: string; Resolve: (Card: HTMLElement) => HTMLElement | null; Offset: number } | null = null;
+	constructor(private Root: HTMLElement, private UserInteraction?: () => void)
 	{
 		this.Window = Root.ownerDocument.defaultView;
 		Root.addEventListener("scroll", this.on_scroll, { passive: true });
+		for(const Name of ["wheel", "touchstart", "pointerdown"]) { Root.addEventListener(Name, this.on_user_input, { passive: true }); }
+		Root.addEventListener("keydown", this.on_key);
 		const Resize = this.Window?.ResizeObserver;
 		if(Resize) { this.Observer = new Resize(() => this.schedule_scroll()); this.Observer.observe(Root); }
 	}
+	private on_user_input = (): void => { this.Pinned = null; this.UserInteraction?.(); };
+	private on_key = (Event: KeyboardEvent): void =>
+	{
+		if(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(Event.key)) { this.on_user_input(); }
+	};
 	private on_scroll = (): void =>
 	{
 		if(this.LastWritten !== null && Math.abs(this.Root.scrollTop - this.LastWritten) < 1) { return; }
 		this.LastWritten = null;
+		this.on_user_input();
 		this.Follow = this.Root.scrollHeight - this.Root.scrollTop - this.Root.clientHeight < 2;
 		this.remember_anchor();
 	};
@@ -54,14 +63,29 @@ export class MessageList
 	private apply_scroll(): void
 	{
 		if(this.Closed) { return; }
+		if(this.Pinned?.Context === this.Context)
+		{
+			const Card = this.Entries.get(this.Pinned.MessageId)?.Element, Node = Card && this.Pinned.Resolve(Card);
+			if(Node) { this.Anchor = { Element: Node, Offset: this.Pinned.Offset }; }
+			else { this.Pinned = null; }
+		}
 		if(this.Follow) { this.Root.scrollTop = this.Root.scrollHeight; this.LastWritten = this.Root.scrollTop; }
-		else if(this.Anchor?.Element.parentElement === this.Root)
+		else if(this.Anchor && (this.Anchor.Element.parentElement === this.Root || this.Root.contains?.(this.Anchor.Element)))
 		{
 			const Delta = this.Anchor.Element.getBoundingClientRect().top - this.Root.getBoundingClientRect().top - this.Anchor.Offset;
 			if(Math.abs(Delta) > 0.5) { this.Root.scrollTop += Delta; this.LastWritten = this.Root.scrollTop; }
 		}
-		this.remember_anchor();
+		if(!this.Pinned) { this.remember_anchor(); }
 	}
+	/** Offset is local viewport geometry, never a Markdown character offset. */
+	reveal(MessageId: string, Resolve: (Card: HTMLElement) => HTMLElement | null, Offset: number): boolean
+	{
+		const Card = this.Entries.get(MessageId)?.Element, Element = Card && Resolve(Card);
+		if(!Element || !Number.isFinite(Offset)) { return false; }
+		this.Follow = false; this.Pinned = { Context: this.Context, MessageId, Resolve, Offset };
+		this.Anchor = { Element, Offset }; this.apply_scroll(); return true;
+	}
+	reanchor(): void { if(this.Pinned) { this.apply_scroll(); this.schedule_scroll(); } }
 	private schedule_scroll(): void
 	{
 		if(this.Closed || this.Frame !== null) { return; }
@@ -108,6 +132,7 @@ export class MessageList
 					for(const Entry of this.Entries.values()) { this.Observer?.unobserve(Entry.Element); }
 				}
 				this.Cache.delete(Context);
+				this.Pinned = null;
 				this.Follow = Cached?.Follow ?? true; this.Anchor = Cached?.Anchor ?? null;
 			}
 			let Index = 0;
@@ -133,6 +158,7 @@ export class MessageList
 	forget(Context: string): void
 	{
 		this.Generation++;
+		if(this.Pinned?.Context === Context) { this.Pinned = null; }
 		if(this.Context === Context)
 		{
 			for(const Entry of this.Entries.values()) { this.Observer?.unobserve(Entry.Element); Entry.Element.remove(); Entry.Dispose(); }
@@ -145,6 +171,8 @@ export class MessageList
 	{
 		this.Closed = true; this.Generation++;
 		this.Root.removeEventListener("scroll", this.on_scroll); this.Observer?.disconnect();
+		for(const Name of ["wheel", "touchstart", "pointerdown"]) { this.Root.removeEventListener(Name, this.on_user_input); }
+		this.Root.removeEventListener("keydown", this.on_key); this.Pinned = null;
 		if(this.Frame !== null) { this.Window?.cancelAnimationFrame(this.Frame); this.Frame = null; }
 		for(const Entry of this.Entries.values()) { Entry.Dispose(); }
 		for(const Value of this.Cache.values()) { for(const Entry of Value.Entries.values()) { Entry.Dispose(); } }

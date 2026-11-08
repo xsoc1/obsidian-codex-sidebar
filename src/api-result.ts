@@ -4,6 +4,59 @@ import type { SseEvent } from "./api-sse";
 export interface ApiToolCall { Id: string; Name: string; Arguments: string; }
 export interface ApiResult { Result: BackendResult; Calls: ApiToolCall[]; Value: any; }
 const StringValue = (V: unknown): string | undefined => typeof V === "string" && V.length <= 1024 ? V : undefined;
+export const ApiOpaqueBudget = { MaxFields: 8, MaxChars: 65536, MaxFieldUtf8Bytes: 65536, MaxUtf8Bytes: 262144, MaxOperationUtf8Bytes: 262144 } as const;
+export interface ApiChatToolCall
+{
+	id: string;
+	type: "function";
+	function: { name: string; arguments: string };
+	extra_content?: { google: { thought_signature: string } };
+}
+export class ApiReplayError extends Error {}
+const Encoder = new TextEncoder();
+
+// Google requires the opaque value on its original tool call, never concatenated.
+// https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures
+// https://ai.google.dev/gemini-api/docs/openai
+function signature(Value: any): string | undefined
+{
+	const V = Value?.extra_content?.google?.thought_signature;
+	if(V === undefined) { return; }
+	if(typeof V !== "string" || !V.length) { throw new ApiReplayError("工具签名格式无效; 未提交后续请求"); }
+	if(V.length > ApiOpaqueBudget.MaxChars || Encoder.encode(V).byteLength > ApiOpaqueBudget.MaxFieldUtf8Bytes) { throw new ApiReplayError("工具签名超过字段预算; 未截断或提交后续请求"); }
+	return V;
+}
+
+export function api_chat_tool_calls(Values: any[], OnOpaque?: (Value: string) => void): ApiChatToolCall[]
+{
+	if(Values.length > 8) { throw new ApiReplayError("工具调用数量超过限制; 未提交后续请求"); }
+	let Fields = 0, Bytes = 0;
+	return Values.map(V =>
+	{
+		if(!V || V.type != null && V.type !== "function" || typeof V.id !== "string" || V.id.length > 1024 || typeof V.function?.name !== "string" || V.function.name.length > 256 || typeof V.function?.arguments !== "string" || V.function.arguments.length > 16384) { throw new ApiReplayError("工具调用结构超过限制或无效; 未提交后续请求"); }
+		const S = signature(V);
+		if(S !== undefined) { Fields++; Bytes += Encoder.encode(S).byteLength; }
+		if(Fields > ApiOpaqueBudget.MaxFields || Bytes > ApiOpaqueBudget.MaxUtf8Bytes) { throw new ApiReplayError("工具签名累计超过响应预算; 未提交后续请求"); }
+		if(S !== undefined) { OnOpaque?.(S); }
+		return { id: V.id, type: V.type ?? "function", function: { name: V.function?.name, arguments: V.function?.arguments }, ...(S !== undefined ? { extra_content: { google: { thought_signature: S } } } : {}) };
+	});
+}
+
+export function api_error_reason(Value: any): string
+{
+	const Error = Value?.error ?? Value;
+	const SafeCode = (V: unknown) => typeof V === "string" && /^[a-z0-9_.:-]{1,80}$/i.test(V) ? V : undefined;
+	const Code = SafeCode(Error?.code) ?? (typeof Error?.code === "number" && Number.isSafeInteger(Error.code) ? String(Error.code) : SafeCode(Error?.type) ?? "provider-error");
+	const Status = SafeCode(Error?.status), Label = Status && Status !== Code ? `${Code}/${Status}` : Code;
+	// Keep a bounded explanation, not arbitrary request dumps, URLs or credentials.
+	const Message = typeof Error?.message === "string" ? Error.message.slice(0, 2048)
+		.replace(/(?:Bearer\s+|(?:thought[_-]?signature|api[_-]?key|token|authorization)\s*[=:]\s*)[^\s;,]+/gi, "[redacted]")
+		.replace(/https?:\/\/\S+/gi, "[redacted-url]")
+		.replace(/["'`][^"'`]*["'`]/g, "[redacted-detail]")
+		.replace(/[a-z0-9_+\/=.-]{32,}/gi, "[redacted]")
+		.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 384) : "";
+	return Message ? `${Label}: ${Message}` : Label;
+}
 
 export function api_usage(Value: any, Receipt?: BackendReceipt): BackendUsage | undefined
 {
@@ -20,7 +73,7 @@ export function api_usage(Value: any, Receipt?: BackendReceipt): BackendUsage | 
 	return Usage;
 }
 
-export function parse_api_result(Value: any, Protocol: "chat" | "responses", RequestId?: string): ApiResult
+export function parse_api_result(Value: any, Protocol: "chat" | "responses", RequestId?: string, OnOpaque?: (Value: string) => void): ApiResult
 {
 	const Receipt: BackendReceipt = { ...(RequestId ? { RequestId } : {}), ...(StringValue(Value?.id) ? { ResponseId: Value.id } : {}) };
 	const Usage = api_usage(Value?.usage, Object.keys(Receipt).length ? Receipt : undefined);
@@ -28,7 +81,7 @@ export function parse_api_result(Value: any, Protocol: "chat" | "responses", Req
 		Submission: "submitted", Wait: "finished", ...(StringValue(Value?.model) ? { Model: Value.model } : {}),
 		...(Object.keys(Receipt).length ? { Receipts: [Receipt] } : {}), ...(Usage ? { Usage: [Usage] } : {})
 	};
-	let Text = "", Refusal = "", Status: BackendResult["Status"] = "unknown", Reason = "missing-terminal", Calls: ApiToolCall[] = [];
+	let Text = "", Refusal = "", Status: BackendResult["Status"] = "unknown", Reason = "missing-terminal", Calls: ApiToolCall[] = [], ReplayFailure: string | undefined;
 	if(Protocol === "responses")
 	{
 		for(const Item of Array.isArray(Value?.output) ? Value.output : [])
@@ -43,7 +96,7 @@ export function parse_api_result(Value: any, Protocol: "chat" | "responses", Req
 			}
 			else if(Item?.type === "function_call") { Calls.push({ Id: Item.call_id, Name: Item.name, Arguments: Item.arguments }); }
 		}
-		Reason = Value?.incomplete_details?.reason ?? Value?.error?.code ?? Value?.status ?? Reason;
+		Reason = Value?.incomplete_details?.reason ?? (Value?.error ? api_error_reason(Value) : undefined) ?? Value?.status ?? Reason;
 		if(Value?.status === "completed") { Status = Refusal ? "refused" : "completed"; }
 		else if(Value?.status === "incomplete") { Status = Reason === "content_filter" ? "refused" : "partial"; }
 		else if(Value?.status === "failed") { Status = Text || Refusal ? "partial" : "failed"; }
@@ -54,7 +107,11 @@ export function parse_api_result(Value: any, Protocol: "chat" | "responses", Req
 		const Choice = Value?.choices?.[0], Message = Choice?.message;
 		if(typeof Message?.content === "string") { Text = Message.content; }
 		if(typeof Message?.refusal === "string") { Refusal = Message.refusal; }
-		if(Array.isArray(Message?.tool_calls)) { Calls = Message.tool_calls.map((C: any) => ({ Id: C.id, Name: C.function?.name, Arguments: C.function?.arguments })); }
+		if(Array.isArray(Message?.tool_calls))
+		{
+			try { api_chat_tool_calls(Message.tool_calls, OnOpaque); Calls = Message.tool_calls.map((C: any) => ({ Id: C.id, Name: C.function?.name, Arguments: C.function?.arguments })); }
+			catch(E) { if(!(E instanceof ApiReplayError)) { throw E; } ReplayFailure = E.message; }
+		}
 		Reason = Choice?.finish_reason ?? Reason;
 		if(Reason === "stop") { Status = Refusal ? "refused" : "completed"; }
 		else if(Reason === "length") { Status = "partial"; }
@@ -63,8 +120,9 @@ export function parse_api_result(Value: any, Protocol: "chat" | "responses", Req
 	}
 	Text = [Text, Refusal].filter(Boolean).join("\n\n");
 	if(Text.length > 2_000_000) { Text = Text.slice(0, 2_000_000); Status = "partial"; Reason = "output-limit"; }
+	if(ReplayFailure) { Status = Text ? "partial" : "failed"; Reason = ReplayFailure; Calls = []; }
 	if(Status === "completed" && !Text.trim() && !Calls.length) { Status = "failed"; Reason = "empty-body"; }
-	return { Result: { Text, Status, Metadata: { ...Metadata, Reason: typeof Reason === "string" ? Reason : "invalid-terminal" } }, Calls, Value };
+	return { Result: { Text, Status, Metadata: { ...Metadata, Reason: typeof Reason === "string" && Reason.length <= 1024 ? Reason : "invalid-terminal" } }, Calls, Value };
 }
 
 export class ApiStreamAccumulator
@@ -76,7 +134,7 @@ export class ApiStreamAccumulator
 	private Chat: any = { choices: [{ message: { content: "", tool_calls: [] }, finish_reason: null }] };
 	private Response: any = {};
 	private Calls = new Map<number, any>();
-	constructor(private Protocol: "chat" | "responses", private Delta: (Text: string) => void, private RequestId?: string) {}
+	constructor(private Protocol: "chat" | "responses", private Delta: (Text: string) => void, private RequestId?: string, private OnOpaque?: (Value: string) => void) {}
 	metadata(): BackendMetadata
 	{
 		const V = this.Protocol === "chat" ? this.Chat : this.Response;
@@ -103,7 +161,7 @@ export class ApiStreamAccumulator
 		}
 		if(Type === "error" || V.error)
 		{
-			if(!this.Terminal) { this.Terminal = { Result: { Text: this.Text, Status: this.Text ? "partial" : "failed", Metadata: { ...this.metadata(), Reason: String(V.error?.code ?? V.code ?? "stream-error"), Submission: "submitted", Wait: "finished" } }, Calls: [], Value: V }; }
+			if(!this.Terminal) { this.Terminal = { Result: { Text: this.Text, Status: this.Text ? "partial" : "failed", Metadata: { ...this.metadata(), Reason: api_error_reason(V), Submission: "submitted", Wait: "finished" } }, Calls: [], Value: V }; }
 			this.Done = true; return;
 		}
 		if(this.Protocol === "chat")
@@ -118,15 +176,24 @@ export class ApiStreamAccumulator
 			if(typeof D?.reasoning_content === "string") { Message.reasoning_content = (Message.reasoning_content ?? "") + D.reasoning_content; }
 			for(const Call of D?.tool_calls ?? [])
 			{
-				if(!Number.isSafeInteger(Call.index) || Call.index < 0 || Call.index >= 8) { throw new Error("工具调用索引无效"); }
+				if(!Number.isSafeInteger(Call.index) || Call.index < 0 || Call.index >= 8) { throw new ApiReplayError("工具调用索引无效或超过数量限制; 未提交后续请求"); }
 				const C = this.Calls.get(Call.index) ?? { id: "", type: "function", function: { name: "", arguments: "" } };
+				if(Call.id != null && (typeof Call.id !== "string" || C.id && C.id !== Call.id)) { throw new ApiReplayError("工具调用身份冲突; 未提交后续请求"); }
 				if(typeof Call.id === "string") { C.id = Call.id; }
+				if(Call.type != null && Call.type !== "function") { throw new ApiReplayError("工具调用类型无效; 未提交后续请求"); }
+				const S = signature(Call), Previous = signature(C);
+				if(S !== undefined)
+				{
+					if(Previous !== undefined && Previous !== S) { throw new ApiReplayError("工具签名冲突; 未合并或提交后续请求"); }
+					C.extra_content = { google: { thought_signature: S } };
+					this.OnOpaque?.(S);
+				}
 				C.function.name += Call.function?.name ?? ""; C.function.arguments += Call.function?.arguments ?? "";
-				if(C.function.arguments.length > 16384) { throw new Error("工具参数超过限制"); }
+				if(C.function.arguments.length > 16384) { throw new ApiReplayError("工具参数超过限制; 未提交后续请求"); }
 				this.Calls.set(Call.index, C);
 			}
 			if(Choice.finish_reason != null) { this.Chat.choices[0].finish_reason = Choice.finish_reason; }
-			Message.tool_calls = [...this.Calls.values()];
+			Message.tool_calls = api_chat_tool_calls([...this.Calls].sort(([A], [B]) => A - B).map(([, C]) => C));
 			return;
 		}
 		if(this.Terminal) { return; }

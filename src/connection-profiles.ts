@@ -1,4 +1,4 @@
-import { backend_identity, backend_name, backend_profile, type BackendProfile, type ApiCatalogModel } from "./backend-profile";
+import { backend_identity, backend_name, backend_profile, select_api_model, type BackendProfile, type ApiCatalogModel } from "./backend-profile";
 
 interface StorageLike { getItem(Key: string): string | null; setItem(Key: string, Text: string): void; }
 export interface ConnectionProfile { Id: string; Name: string; Profile: BackendProfile; Catalog?: ApiCatalogModel[]; }
@@ -16,15 +16,20 @@ export class ConnectionProfiles
 		this.Data = Saved.Profiles.map((P: ConnectionProfile) =>
 		{
 			if(!P || Object.keys(P).some(K => !["Id","Name","Profile","Catalog"].includes(K)) || typeof P.Id !== "string" || !P.Id || Seen.has(P.Id) || typeof P.Name !== "string" || P.Name.length > 120) { throw new Error("连接配置身份无效"); }
-			Seen.add(P.Id); return { Id: P.Id, Name: P.Name, Profile: backend_profile(P.Profile), ...(P.Catalog ? { Catalog: clean_catalog(P.Catalog) } : {}) };
+			const Catalog = P.Catalog ? clean_catalog(P.Catalog) : undefined;
+			const Profile = backend_profile(P.Profile);
+			Seen.add(P.Id); return { Id: P.Id, Name: P.Name, Profile: Profile.Kind === "api" && (Profile.Selection || typeof Catalog?.find(M => M.Id === Profile.Model)?.Vision === "boolean") ? select_api_model(Profile, Profile.Model, Catalog).Profile : Profile, ...(Catalog ? { Catalog } : {}) };
 		});
 	}
 	list(): ConnectionProfile[] { return structuredClone(this.Data); }
 	save(Input: unknown, Name = "", Catalog?: ApiCatalogModel[]): ConnectionProfile
 	{
-		const Profile = backend_profile(Input), Identity = backend_identity(Profile);
+		let Profile = backend_profile(Input);
+		const CleanCatalog = Catalog ? clean_catalog(Catalog) : undefined;
+		if(Profile.Kind === "api" && (Profile.Selection || typeof CleanCatalog?.find(M => M.Id === Profile.Model)?.Vision === "boolean")) { Profile = select_api_model(Profile, Profile.Model, CleanCatalog).Profile; }
+		const Identity = backend_identity(Profile);
 		const Existing = this.Data.find(P => backend_identity(P.Profile) === Identity && (Name.trim() ? P.Name===Name.trim() : JSON.stringify(P.Profile)===JSON.stringify(Profile)));
-		const Next: ConnectionProfile = { Id: Existing?.Id ?? crypto.randomUUID(), Name: Name.trim().slice(0, 120) || Existing?.Name || backend_name(Profile) + " · " + (Profile.Model || "当前模型"), Profile, ...(Catalog ? { Catalog: clean_catalog(Catalog) } : Existing?.Catalog ? { Catalog: Existing.Catalog } : {}) };
+		const Next: ConnectionProfile = { Id: Existing?.Id ?? crypto.randomUUID(), Name: Name.trim().slice(0, 120) || Existing?.Name || backend_name(Profile) + " · " + (Profile.Model || "当前模型"), Profile, ...(CleanCatalog ? { Catalog: CleanCatalog } : Existing?.Catalog ? { Catalog: Existing.Catalog } : {}) };
 		const Data = [...this.Data.filter(P => P.Id !== Next.Id), Next];
 		if(Data.length > 64) { throw new Error("最多保存 64 份连接配置，请先移除不用的配置"); }
 		this.write(Data); return structuredClone(Next);

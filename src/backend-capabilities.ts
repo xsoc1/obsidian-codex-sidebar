@@ -1,4 +1,4 @@
-import { ApiProviders, type BackendProfile, type ApiReasoning } from "./backend-profile";
+import { ApiProviders, selection_images, type BackendProfile, type ApiReasoning } from "./backend-profile";
 
 export type Capability = true | false | "unknown";
 export interface BackendCapabilities
@@ -21,7 +21,8 @@ export function backend_capabilities(Profile: BackendProfile, Options: { Streami
 {
 	const Api = Profile.Kind === "api";
 	return {
-		Images: Api ? Profile.Vision ? true : "unknown" : false,
+		// Legacy Vision is a transport opt-in, not verified capability evidence.
+		Images: Api ? Profile.Selection ? selection_images(Profile.Selection) : "unknown" : false,
 		Streaming: Api ? Profile.Stream === "buffered" ? false : Options.Streaming ?? "unknown" : false,
 		HistoryRead: Api ? !Options.HistoryRead || Profile.HistoryTools === false ? false : Profile.Provider === "compatible" && Profile.HistoryTools !== true ? "unknown" : true : false,
 		SourceRead: false,

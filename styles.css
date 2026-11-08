@@ -145,6 +145,15 @@
 	font-size: 11px;
 }
 .codex-messages { flex: 1; min-height: 80px; overflow-y: auto; overflow-x: hidden; overflow-anchor: none; scroll-behavior: auto; }
+.codex-ledger-material { margin-block: 10px; overflow-wrap: anywhere; }
+.codex-ledger-material > strong { display: block; font-weight: 600; }
+.codex-input-ledger pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.codex-reading-return { max-width: 100%; white-space: normal; text-align: start; font-size: var(--font-ui-small); }
+.codex-reading-return[hidden] { display: none; }
+.codex-message-label.codex-reading-active { position: sticky; top: 0; z-index: 1; background: var(--background-primary, #fafafa); }
+.codex-pending-backend-save { border-inline-start: 3px solid var(--color-orange); }
+.codex-unsaved-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; user-select: text; }
+.codex-save-error { color: var(--text-error); overflow-wrap: anywhere; }
 .codex-reading-area { position: relative; display: flex; flex: 1 1 auto; min-height: 96px; min-width: 0; }
 .codex-sidebar .codex-reading-area > .codex-messages { min-height: 0; min-width: 0; }
 .codex-context-popover {

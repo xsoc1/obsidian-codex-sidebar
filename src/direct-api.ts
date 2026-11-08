@@ -2,7 +2,7 @@ import { api_reasoning_supported, type ApiReasoning, type BackendProfile } from 
 import type { BackendInput, StructuredBackendDriver, BackendMessage } from "./backend";
 import type { BackendMetadata, BackendResult } from "./backend-result";
 import { api_protocol } from "./backend-capabilities";
-import { parse_api_result, ApiStreamAccumulator, type ApiResult } from "./api-result";
+import { parse_api_result, ApiStreamAccumulator, ApiReplayError, api_chat_tool_calls, api_error_reason, ApiOpaqueBudget, type ApiResult } from "./api-result";
 import { SseDecoder, stream_step, DefaultStreamBudget, type StreamBudget } from "./api-sse";
 import { HistoryReadTool } from "./history-budget";
 import type { BrowserRequest } from "./browser-http";
@@ -11,13 +11,13 @@ import { ProductVersion } from "./version";
 type Profile = Extract<BackendProfile, { Kind: "api" }>;
 type NativeRequest = (Value: BrowserRequest) => PromiseLike<{ status: number; json: any; headers?: Record<string, string> }>;
 export interface DirectApiOptions { Fetch?: typeof fetch; Budget?: Partial<StreamBudget>; }
-export const ApiHistoryBudget = { MaxCalls: 6, MaxRounds: 4, MaxOutputUtf8Bytes: 32000 } as const;
+export const ApiHistoryBudget = { MaxCalls: 6, MaxRounds: 4, MaxOutputUtf8Bytes: 32000, MaxRequestUtf8Bytes: 12 * 1024 * 1024 } as const;
 const Encoder = new TextEncoder();
 function redact<T>(Value: T, Secret: string): T
 {
 	if(typeof Value === "string") { return Value.replaceAll(Secret, "[redacted]") as T; }
 	if(Array.isArray(Value)) { return Value.map(V => redact(V, Secret)) as T; }
-	if(Value && typeof Value === "object") { return Object.fromEntries(Object.entries(Value).map(([K, V]) => [K.replaceAll(Secret, "[redacted]"), redact(V, Secret)])) as T; }
+	if(Value && typeof Value === "object") { return Object.fromEntries(Object.entries(Value).map(([K, V]) => [K.replaceAll(Secret, "[redacted]"), /^(thought_signature|encrypted_content)$/i.test(K) ? "[redacted]" : redact(V, Secret)])) as T; }
 	return Value;
 }
 
@@ -44,10 +44,11 @@ function chat_reasoning(Provider: Profile["Provider"], Format: ApiReasoning["For
 	return { reasoning_effort: Effort };
 }
 
-function http_failure(Status: number): ApiResult
+function http_failure(Status: number, Value?: unknown): ApiResult
 {
-	const Hint = Status === 401 || Status === 403 ? "核对密钥、项目权限及模型可用性" : Status === 429 ? "核对额度或频率限制" : "核对模型 ID、端点或服务商状态";
-	return { Result: { Text: "", Status: "failed", Metadata: { Reason: `API HTTP ${Status}. ${Hint}`, Submission: "rejected", Wait: "finished" } }, Calls: [], Value: null };
+	const Hint = Status === 401 || Status === 403 ? "核对密钥、项目权限及模型可用性" : Status === 429 ? "核对额度或频率限制" : Status === 400 ? "请求协议或参数被拒绝" : "服务商请求失败";
+	const Detail = Value ? api_error_reason(Value) : "";
+	return { Result: { Text: "", Status: "failed", Metadata: { Reason: `API HTTP ${Status}. ${Hint}${Detail && Detail !== "provider-error" ? "; " + Detail : ""}`, Submission: "rejected", Wait: "finished" } }, Calls: [], Value: null };
 }
 
 function unknown_result(Reason: string, Transport: "streaming" | "buffered"): ApiResult
@@ -55,7 +56,7 @@ function unknown_result(Reason: string, Transport: "streaming" | "buffered"): Ap
 	return { Result: { Text: "", Status: "unknown", Metadata: { Reason, Submission: "unknown", Wait: "stopped", Transport } }, Calls: [], Value: null };
 }
 
-async function streaming_request(Request: BrowserRequest, Protocol: "chat" | "responses", Input: BackendInput, Signal: AbortSignal, Options: DirectApiOptions): Promise<ApiResult>
+async function streaming_request(Request: BrowserRequest, Protocol: "chat" | "responses", Input: BackendInput, Signal: AbortSignal, Options: DirectApiOptions, AccountBytes: (Bytes: number) => void, OnOpaque: (Value: string) => void): Promise<ApiResult>
 {
 	const Budget = { ...DefaultStreamBudget, ...Options.Budget }, Start = Date.now(), Controller = new AbortController();
 	const Stop = () => Controller.abort();
@@ -68,12 +69,32 @@ async function streaming_request(Request: BrowserRequest, Protocol: "chat" | "re
 		const Response = await stream_step((Options.Fetch ?? globalThis.fetch)(Request.url, {
 			method: "POST", headers: Request.headers, body: Request.body, signal: Controller.signal, credentials: "omit", cache: "no-store", redirect: "error"
 		}), Math.min(Budget.FirstEventMs, Remaining()), "等待首个 API 事件超时", Signal);
-		if(Response.status < 200 || Response.status >= 300) { return http_failure(Response.status); }
+		if(Response.status < 200 || Response.status >= 300)
+		{
+			let Value: unknown;
+			try
+			{
+				if(Response.body)
+				{
+					Reader = Response.body.getReader();
+					const Decode = new TextDecoder(); let ErrorText = "", ErrorBytes = 0;
+					while(ErrorBytes <= 8192)
+					{
+						const Chunk = await stream_step(Reader.read(), Math.min(Budget.IdleMs, Remaining()), "读取 API 错误超时", Signal);
+						if(Chunk.done) { try { Value = JSON.parse(ErrorText + Decode.decode()); } catch {} break; }
+						AccountBytes(Chunk.value.byteLength); ErrorBytes += Chunk.value.byteLength;
+						if(ErrorBytes <= 8192) { ErrorText += Decode.decode(Chunk.value, { stream: true }); }
+					}
+				}
+			}
+			catch { /* An unreadable error body cannot undo the observed HTTP rejection. */ }
+			return http_failure(Response.status, Value);
+		}
 		if(!Response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") || !Response.body)
 		{
 			return unknown_result("服务商未返回 SSE 流; 未自动重发, 可显式切换整段响应模式", "streaming");
 		}
-		Stream = new ApiStreamAccumulator(Protocol, Text => { FirstText ??= Date.now() - Start; Input.OnDelta?.(Text); }, Response.headers.get("x-request-id") ?? undefined);
+		Stream = new ApiStreamAccumulator(Protocol, Text => { FirstText ??= Date.now() - Start; Input.OnDelta?.(Text); }, Response.headers.get("x-request-id") ?? undefined, OnOpaque);
 		const Decoder = new SseDecoder(Frame =>
 		{
 			FirstEvent ??= Date.now() - Start;
@@ -87,6 +108,7 @@ async function streaming_request(Request: BrowserRequest, Protocol: "chat" | "re
 			const Chunk = await stream_step(Reader.read(), Math.min(Wait, Remaining()), FirstEvent === undefined ? "等待首个 API 事件超时" : Remaining() <= Budget.IdleMs ? "API 整体运行预算已到" : "API 流空闲超时", Signal);
 			if(Chunk.done) { Decoder.finish(); break; }
 			Bytes += Chunk.value.byteLength;
+			AccountBytes(Chunk.value.byteLength);
 			if(Bytes > Budget.MaxBytes) { throw new Error("API 流超过字节预算"); }
 			Decoder.push(Chunk.value);
 		}
@@ -97,6 +119,11 @@ async function streaming_request(Request: BrowserRequest, Protocol: "chat" | "re
 	catch(E)
 	{
 		const Parsed = Stream?.result(Signal.aborted ? "stopped-waiting" : E instanceof Error ? E.message : "stream-interrupted") ?? unknown_result("API 网络请求失败; 结果待核对, 未自动重发", "streaming");
+		if(E instanceof ApiReplayError)
+		{
+			Parsed.Calls = []; Parsed.Result.Status = Parsed.Result.Text ? "partial" : "failed";
+			Parsed.Result.Metadata = { ...Parsed.Result.Metadata, Reason: E.message, Submission: "submitted", Wait: "finished" };
+		}
 		Parsed.Result.Metadata = { ...Parsed.Result.Metadata, Transport: "streaming", Wait: Signal.aborted ? "stopped" : Parsed.Result.Metadata.Wait, FirstEventMs: FirstEvent, FirstTextMs: FirstText, ElapsedMs: Date.now() - Start };
 		return Parsed;
 	}
@@ -113,9 +140,11 @@ export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, R
 	Key = direct_api_key(Key);
 	Reasoning = Reasoning ? { ...Reasoning, Efforts: [...Reasoning.Efforts] } : undefined;
 	const Frozen = { ...Profile }, Protocol = api_protocol(Frozen, Reasoning), Buffered = Frozen.Stream === "buffered";
-	const Clean = <T>(V: T): T => redact(V, Key);
 	return async (Input, Signal) =>
 	{
+		const Opaque = new Set<string>();
+		const RememberOpaque = (Value: string) => { Opaque.add(Value); };
+		const Clean = <T>(V: T): T => { let Safe = redact(V, Key); for(const S of Opaque) { Safe = redact(Safe, S); } return Safe; };
 		Signal.throwIfAborted();
 		const { Session, Messages, Effort } = Input, Started = Date.now(), Budget = { ...DefaultStreamBudget, ...Options.Budget };
 		if(Effort && (!api_reasoning_supported(Frozen.Provider) || !Reasoning?.Efforts.includes(Effort))) { throw new Error("当前模型不支持所选思考档次"); }
@@ -126,7 +155,8 @@ export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, R
 			role: M.Role === "system" ? "developer" : M.Role,
 			content: M.Images?.length ? [{ type: "input_text", text: M.Text }, ...M.Images.map(image_url => ({ type: "input_image", image_url, detail: "auto" }))] : M.Text
 		})) : Messages.map(chat_message);
-		let Calls = 0, OutputBytes = 0, Prefix = "";
+		let Calls = 0, OutputBytes = 0, ResponseBytes = 0, OpaqueBytes = 0, SuccessfulReads = 0, Prefix = "";
+		const AccountBytes = (Bytes: number) => { ResponseBytes += Bytes; if(ResponseBytes > Budget.MaxBytes) { throw new ApiReplayError("API 响应累计超过字节预算; 未提交后续请求"); } };
 		const Aggregate: BackendMetadata = { Transport: Buffered ? "buffered" : "streaming", Receipts: [], Usage: [] };
 		const Finish = (Result: BackendResult): BackendResult =>
 		{
@@ -141,7 +171,7 @@ export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, R
 				? { model: Frozen.Model, store: false, stream: !Buffered, ...(Effort ? { reasoning: { effort: Effort } } : {}), input: Conversation, ...(Tools ? { tools: Tools, parallel_tool_calls: false } : {}) }
 				: { model: Frozen.Model, messages: Conversation, stream: !Buffered, ...(!Buffered ? { stream_options: { include_usage: true } } : {}), ...chat_reasoning(Frozen.Provider, Reasoning?.Format, Effort), ...(Tools ? { tools: Tools, parallel_tool_calls: false } : {}) };
 			const Body = JSON.stringify(Request);
-			if(Body.length > 12 * 1024 * 1024)
+			if(Encoder.encode(Body).byteLength > ApiHistoryBudget.MaxRequestUtf8Bytes)
 			{
 				if(!Round) { throw new Error("当前 API 输入过长, 请缩小选区或开启新会话"); }
 				return Finish({ Text: "", Status: "partial", Metadata: { Reason: "历史工具后续输入超过预算; 未提交后续请求", Submission: "submitted", Wait: "finished" } });
@@ -161,10 +191,16 @@ export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, R
 					// requestUrl cannot be aborted; the original result remains observable after local stop.
 					const Pending = Promise.resolve(Send(Http)).then(Result =>
 					{
-						const Value = Result.status < 200 || Result.status >= 300 ? http_failure(Result.status) : parse_api_result(Result.json, Protocol, Result.headers?.["x-request-id"]);
+						const Value = Result.status < 200 || Result.status >= 300 ? http_failure(Result.status, Clean(Result.json)) : parse_api_result(Result.json, Protocol, Result.headers?.["x-request-id"], RememberOpaque);
+						try { AccountBytes(Encoder.encode(JSON.stringify(Result.json) ?? "").byteLength); }
+						catch(E)
+						{
+							if(!(E instanceof ApiReplayError)) { throw E; }
+							Value.Calls = []; Value.Result = { ...Value.Result, Status: "partial", Metadata: { ...Value.Result.Metadata, Reason: E.message } };
+						}
 						if(TimedOut)
 						{
-							const Late = Finish(Value.Result);
+							const Late = Finish(Value.Calls.length ? { ...Value.Result, Status: "partial", Metadata: { ...Value.Result.Metadata, Reason: "已停止等待; 历史工具尚未执行, 未发起后续推理" } } : Value.Result);
 							const Receipts = [...(Late.Metadata.Receipts ?? []), ...(Value.Result.Metadata.Receipts ?? [])], Usage = [...(Late.Metadata.Usage ?? []), ...(Value.Result.Metadata.Usage ?? [])];
 							if(Receipts.length) { Late.Metadata.Receipts = Receipts; }
 							if(Usage.length) { Late.Metadata.Usage = Usage; }
@@ -187,18 +223,38 @@ export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, R
 					Tail = Hold ? Redacted.slice(-Hold) : "";
 					const Safe = Redacted.slice(0, Redacted.length - Hold);
 					if(Safe) { Input.OnDelta?.(Safe); }
-				}, OnMetadata: M => Input.OnMetadata?.(Clean(M)) }, Signal, { ...Options, Budget: { ...Budget, TotalMs: Remaining } });
+				}, OnMetadata: M => Input.OnMetadata?.(Clean(M)) }, Signal, { ...Options, Budget: { ...Budget, TotalMs: Remaining } }, AccountBytes, RememberOpaque);
 				if(Tail) { Input.OnDelta?.(Tail); }
 			}
 			Aggregate.Receipts!.push(...(Parsed.Result.Metadata.Receipts ?? [])); Aggregate.Usage!.push(...(Parsed.Result.Metadata.Usage ?? []));
+			if(Round && !["completed", "refused"].includes(Parsed.Result.Status))
+			{
+				Parsed.Result.Metadata.Reason = `${SuccessfulReads ? "历史读取完成" : "历史工具已返回失败结果"}, 后续模型请求失败或未完成; ${Parsed.Result.Metadata.Reason ?? Parsed.Result.Status}`;
+			}
 			if(Prefix.length + Parsed.Result.Text.length > 2_000_000) { return Finish(Parsed.Result); }
 			if(!Parsed.Calls.length || Parsed.Result.Status !== "completed") { return Finish(Parsed.Result); }
 			const StopTools = (Reason: string) => Finish({ ...Parsed.Result, Status: "partial", Metadata: { ...Parsed.Result.Metadata, Reason } });
+			if(Protocol === "chat")
+			{
+				try
+				{
+					const Message = Parsed.Value.choices[0].message;
+					Message.tool_calls = api_chat_tool_calls(Message.tool_calls);
+					for(const Call of Message.tool_calls)
+					{
+						const S = Call.extra_content?.google.thought_signature;
+						if(S !== undefined) { Opaque.add(S); OpaqueBytes += Encoder.encode(S).byteLength; }
+					}
+					if(OpaqueBytes > ApiOpaqueBudget.MaxOperationUtf8Bytes) { return StopTools("工具签名累计超过操作预算; 未提交后续请求"); }
+				}
+				catch(E) { return StopTools(E instanceof ApiReplayError ? E.message : "工具续轮结构无效; 未提交后续请求"); }
+			}
 			if(!HistoryRead || Round >= ApiHistoryBudget.MaxRounds || Calls + Parsed.Calls.length > ApiHistoryBudget.MaxCalls) { return StopTools("历史工具调用预算已到; 请明确选择下一轮继续"); }
 			if(Signal.aborted) { return StopTools("已停止等待; 未发起工具后续推理"); }
 			const Ids = new Set<string>();
 			for(const C of Parsed.Calls)
 			{
+				if(Signal.aborted) { return StopTools("已停止等待; 未发起工具后续推理"); }
 				if(C.Name !== HistoryReadTool.name || typeof C.Id !== "string" || !C.Id || Ids.has(C.Id) || typeof C.Arguments !== "string" || C.Arguments.length > 16384) { return StopTools("拒绝未授权或无效工具调用"); }
 				Ids.add(C.Id);
 			}
@@ -209,14 +265,26 @@ export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, R
 				try { Args = JSON.parse(C.Arguments); } catch { return StopTools("历史工具参数不是有效 JSON"); }
 				Calls++;
 				let Output: string;
-				try { Output = JSON.stringify(await stream_step(HistoryRead(Args), Budget.TotalMs - (Date.now() - Started), "历史读取超时", Signal)); }
+				if(Signal.aborted) { return StopTools("已停止等待; 未发起工具后续推理"); }
+				try
+				{
+					const Result = await stream_step(HistoryRead(Args), Budget.TotalMs - (Date.now() - Started), "历史读取超时", Signal);
+					if(Result.success) { SuccessfulReads++; }
+					Output = JSON.stringify(Result);
+				}
 				catch { return StopTools("历史工具读取未完成; 未发起后续推理"); }
 				OutputBytes += Encoder.encode(Output).byteLength;
 				if(OutputBytes > ApiHistoryBudget.MaxOutputUtf8Bytes) { return StopTools("历史工具输出超过 32000 UTF8 字节预算"); }
 				Outputs.push({ Id: C.Id, Text: Output });
 			}
 			if(Protocol === "responses") { Conversation.push(...Parsed.Value.output, ...Outputs.map(O => ({ type: "function_call_output", call_id: O.Id, output: O.Text }))); }
-			else { Conversation.push({ role: "assistant", ...Parsed.Value.choices[0].message }, ...Outputs.map(O => ({ role: "tool", tool_call_id: O.Id, content: O.Text }))); }
+			else
+			{
+				const Message = Parsed.Value.choices[0].message;
+				Conversation.push({ role: "assistant", content: Message.content ?? null, tool_calls: Message.tool_calls,
+					...(typeof Message.reasoning_content === "string" ? { reasoning_content: Message.reasoning_content } : {}), ...(typeof Message.refusal === "string" ? { refusal: Message.refusal } : {})
+				}, ...Outputs.map(O => ({ role: "tool", tool_call_id: O.Id, content: O.Text })));
+			}
 			Prefix += Parsed.Result.Text;
 		}
 		throw new Error("历史工具回合预算无效");

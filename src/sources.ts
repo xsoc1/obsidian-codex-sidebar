@@ -71,13 +71,23 @@ export function source_reference(Context: ContextSnapshot, Host: SourceReference
 	const Base = { Path: Context.Path, PathExact: true, Version: Context.Version, CapturedAt: typeof Context.CapturedAt === "string" ? Context.CapturedAt : "", Heading: Context.Heading, Mapping: Context.Mapping, LineStart: Context.LineStart, LineEnd: Context.LineEnd, Host, Purpose: Context.Kind === "选区" ? "selection" as const : "capture" as const, Truncated: !!Context.Truncated, ...(Context.Selection ? { Range: { ...Context.Selection } } : {}), ...(Anchor ? { Anchor } : {}), ...(BlockId ? { BlockId } : {}) };
 	// PDF anchors fit the existing source schema, so older clients can still open the page.
 	let Target: PdfTarget | undefined;
-	if(Context.PdfTarget) { try { Target = validated_pdf_target(Context.PdfTarget); } catch { return []; } }
+	if(Context.PdfTarget) { try { Target = validated_pdf_target(Context.PdfTarget); } catch { if(!Context.Pdf) { return []; } } }
 	const PdfAnchor = Target ? pdf_anchor(Target) : undefined;
-	const Values: Omit<SourceReference, "Id">[] = Context.Pdf ? Context.Pdf.Pages.map(Page => ({
-		...Base, Kind: "pdf", VersionKind: "pdf-bytes", Page: Page.Number, ImageKind: Page.Kind ?? "page",
-		...(Page.Region ? { Region: structuredClone(Page.Region) } : {}), ...(Target?.Kind === "rect" && Target.Page === Page.Number && Page.Kind === "region" ? { Anchor: PdfAnchor } : {})
-	})) : Target?.Kind === "text" ? [{ ...Base, Kind: "pdf", VersionKind: "pdf-bytes", Page: Target.Page, Anchor: PdfAnchor }]
-		: [{ ...Base, Kind: "markdown", VersionKind: "file-text" }];
+	const Values: Omit<SourceReference, "Id">[] = [];
+	if(Target?.Kind === "text" && (!Context.Pdf || Target.Page <= Context.Pdf.PageCount))
+	{
+		Values.push({ ...Base, Kind: "pdf", VersionKind: "pdf-bytes", Page: Target.Page, Anchor: PdfAnchor });
+	}
+	if(Context.Pdf)
+	{
+		for(const Page of Context.Pdf.Pages)
+		{
+			const { Anchor: _Anchor, BlockId: _BlockId, Range: _Range, ...ImageBase } = Base;
+			Values.push({ ...ImageBase, Kind: "pdf", VersionKind: "pdf-bytes", Page: Page.Number, ImageKind: Page.Kind ?? "page", Mapping: "PDF页图", ...(Target?.Kind === "text" ? { Purpose: "capture" } : {}),
+				...(Page.Region ? { Region: structuredClone(Page.Region) } : {}), ...(Target?.Kind === "rect" && Target.Page === Page.Number && Page.Kind === "region" ? { Anchor: PdfAnchor } : {}) });
+		}
+	}
+	else if(!Target) { Values.push({ ...Base, Kind: "markdown", VersionKind: "file-text" }); }
 	if(Context.Explanation && !Context.Pdf && !Target)
 	{
 		const E = Context.Explanation;
@@ -103,8 +113,25 @@ export function tool_read_reference(Input: unknown, Result: unknown, Host: Sourc
 export function answer_sources(Messages: readonly SourceMessage[], Message: SourceMessage): SourceReference[]
 {
 	const User = Message.Role === "user" ? Message : Messages.find(Value => Value.Role === "user" && !!Message.TurnId && Value.TurnId === Message.TurnId);
-	const Sources = [...(User?.Context ? source_reference(User.Context) : User?.Task?.Source ? source_reference(User.Task.Source) : []), ...usable_sources(User?.Quote?.SourceReferences), ...usable_sources(User?.Sources), ...usable_sources(Message.Sources)];
+	const Saved = [...usable_sources(User?.Quote?.SourceReferences), ...usable_sources(User?.Sources), ...usable_sources(Message.Sources)];
+	const Derived = User?.Context ? source_reference(User.Context) : User?.Task?.Source ? source_reference(User.Task.Source) : [];
+	const Sources = [...Derived.map(Ref =>
+	{
+		if(Ref.Kind !== "pdf") { return Ref; }
+		// Older combined snapshots already saved image sources. Keep their identities
+		// and observed moves while deriving the missing text source from the snapshot.
+		const Existing = Saved.find(Value => same_pdf_source(Ref, Value));
+		if(Existing) { return Existing; }
+		const Paths = [...new Set(Saved.filter(Value => Value.Kind === "pdf" && Value.Path === Ref.Path && !!Ref.Version && Value.Version === Ref.Version && Value.CurrentPath).map(Value => Value.CurrentPath!))];
+		return Paths.length === 1 ? { ...Ref, CurrentPath: Paths[0] } : Ref;
+	}), ...Saved];
 	return [...new Map(Sources.map(Source => [Source.Id, structuredClone(Source)])).values()];
+}
+
+function same_pdf_source(A: SourceReference, B: SourceReference): boolean
+{
+	if(B.Kind !== "pdf" || A.PathExact === false || B.PathExact === false || A.Path !== B.Path || A.Version !== B.Version || A.VersionKind !== B.VersionKind || A.CapturedAt !== B.CapturedAt || A.Page !== B.Page || A.ImageKind !== B.ImageKind) { return false; }
+	return A.ImageKind ? ["X", "Y", "Width", "Height", "PageWidth", "PageHeight", "Scale", "Rotation"].every(Key => A.Region?.[Key as keyof NonNullable<SourceReference["Region"]>] === B.Region?.[Key as keyof NonNullable<SourceReference["Region"]>]) : A.Anchor === B.Anchor;
 }
 export const message_sources = answer_sources;
 export function source_path_for_answer(Messages: readonly SourceMessage[], Message: SourceMessage): string
@@ -187,8 +214,16 @@ export function render_sources(AppValue: App, Root: HTMLElement, Refs: readonly 
 	const Status = Details.createDiv({ attr: { role: "status" } });
 	for(const Ref of Refs)
 	{
-		const Row = Details.createDiv(), Label = [Ref.CurrentPath ?? Ref.Path, Ref.Page ? `PDF 第 ${Ref.Page} 页${Ref.ImageKind === "region" ? " 局部图" : ""}` : Ref.LineStart !== null && Ref.LineStart !== undefined ? `第 ${Ref.LineStart + 1}-${(Ref.LineEnd ?? Ref.LineStart) + 1} 行` : Ref.Range ? `已读字符 ${Ref.Range.From + 1}-${Ref.Range.To}` : "原始位置未知", Ref.Purpose === "explanation" ? "解释背景" : Ref.Purpose === "selection" ? "原选区" : Ref.Purpose === "read" ? "实际补读" : "", Ref.Mapping, Ref.Host === "windows-copy" ? "Windows 副本" : Ref.Host === "client-snapshot" ? "客户端当时快照" : Ref.Host === "desktop-read" ? "桌面读取" : "宿主未知", Ref.Truncated ? "部分内容" : ""].filter(Boolean).join(" · ");
+		const Row = Details.createDiv(), Label = source_label(Ref, Refs);
 		const Button = Row.createEl("button", { text: Label, attr: { type: "button" } });
 		Button.addEventListener("click", () => { Button.disabled = true; void open_source(AppValue, Ref).then(Target => Status.setText(Target.Message)).catch(ErrorValue => Status.setText(String(ErrorValue))).finally(() => { Button.disabled = false; }); });
 	}
+}
+
+export function source_label(Ref: SourceReference, Refs: readonly SourceReference[] = []): string
+{
+	const Parsed = Ref.Kind === "pdf" && !Ref.ImageKind ? parse_pdf_anchor(Ref.Anchor) : null, Target = Parsed?.Page === Ref.Page ? Parsed : null;
+	const Supplement = Ref.Kind === "pdf" && !!Ref.ImageKind && Refs.some(Value => Value.Kind === "pdf" && !Value.ImageKind && Value.Path === Ref.Path && Value.Version === Ref.Version && Value.Page === Ref.Page && Value.CapturedAt === Ref.CapturedAt && parse_pdf_anchor(Value.Anchor)?.Kind === "text");
+	const Purpose = Target?.Kind === "text" ? "原文字选区" : Supplement ? "补充图像" : Ref.Kind === "pdf" && Ref.ImageKind && Ref.Purpose === "selection" ? "原图像选区" : Ref.Purpose === "explanation" ? "解释背景" : Ref.Purpose === "selection" ? "原选区" : Ref.Purpose === "read" ? "实际补读" : "";
+	return [Ref.CurrentPath ?? Ref.Path, Ref.Page ? `PDF 第 ${Ref.Page} 页${Ref.ImageKind === "region" ? " 局部图" : Ref.ImageKind === "page" ? " 整页图" : ""}` : Ref.LineStart !== null && Ref.LineStart !== undefined ? `第 ${Ref.LineStart + 1}-${(Ref.LineEnd ?? Ref.LineStart) + 1} 行` : Ref.Range ? `已读字符 ${Ref.Range.From + 1}-${Ref.Range.To}` : "原始位置未知", Purpose, Ref.Region ? `旋转 ${Ref.Region.Rotation}°` : "", Ref.Mapping, Ref.Host === "windows-copy" ? "Windows 副本" : Ref.Host === "client-snapshot" ? "客户端当时快照" : Ref.Host === "desktop-read" ? "桌面读取" : "宿主未知", Ref.Truncated ? "部分内容" : ""].filter(Boolean).join(" · ");
 }

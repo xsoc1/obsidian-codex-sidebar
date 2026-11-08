@@ -48,7 +48,7 @@ async function wait_for_edit(Instance: any): Promise<void>
 	for(let Index = 0; Index < 400 && !Instance.Edits.Store.Data.Writes.length; Index++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
 }
 
-async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Files?: Map<string, string>; Local?: Map<string, string> }, Desktop?: { spawn(Cli: string, Args: string[], Options: any): unknown })
+async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Files?: Map<string, string>; Local?: Map<string, string>; Clone?: typeof structuredClone; Fetch?: typeof fetch; Vault?: string }, Desktop?: { spawn(Cli: string, Args: string[], Options: any): unknown })
 {
 	const Required: string[] = []; const Files = Saved?.Files ?? new Map<string, string>(); const Local = Saved?.Local ?? new Map<string, string>();
 	if(!Databases.has(Local)) { Databases.set(Local, new IDBFactory()); }
@@ -98,7 +98,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 		app = {
 			vault: {
 				on: () => {},
-				getName: () => "test", adapter: Object.assign(new FileSystemAdapter(), {
+				getName: () => Saved?.Vault ?? "test", adapter: Object.assign(new FileSystemAdapter(), {
 					exists: async (Path: string) => Files.has(Path), read: async (Path: string) => Files.get(Path), write: async (Path: string, Text: string) =>
 					{
 						Files.set(Path, Text);
@@ -158,14 +158,14 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	const Define = () => ({});
 	let BrowserRequests = 0;
 	runInNewContext(readFileSync(process.env.CODEX_SIDEBAR_TEST_BUNDLE ?? "main.js", "utf8"), {
-		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, indexedDB: Databases.get(Local), DOMException, structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, atob, btoa, setTimeout, clearTimeout, setInterval, clearInterval,
+		module: Export, exports: Export.exports, crypto: { subtle: webcrypto.subtle, randomUUID }, indexedDB: Databases.get(Local), DOMException, structuredClone: Saved?.Clone ?? structuredClone, URL, Error, AbortController, TextEncoder, TextDecoder, atob, btoa, setTimeout, clearTimeout, setInterval, clearInterval,
 		...(Desktop ? { process: { execPath: "C:/fixture/Obsidian.exe", env: { OPENAI_API_KEY: "inherited-fixture", CODEX_ACCESS_TOKEN: "inherited-fixture", SystemRoot: "C:/Windows" } } } : {}),
-		fetch: async (Url: string, Params: any) =>
+		fetch: Saved?.Fetch ?? (async (Url: string, Params: any) =>
 		{
 			BrowserRequests++;
 			const Response = await Http?.({ ...Params, url: Url });
 			return { status: Response.status, json: async () => Response.json };
-		},
+		}),
 		localStorage: { getItem: (Key: string) => Local.get(Key), setItem: (Key: string, Value: string) => Local.set(Key, Value) },
 		require(Name: string)
 		{
@@ -196,7 +196,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	// This fixture implements native JSON transport, not SSE or function-call responses.
 	const Activate=Instance.start_backend.bind(Instance);
 	Instance.start_backend=(Profile:any,Key:string,Catalog?:any[])=>Activate(Profile.Kind==="api"?{...Profile,Stream:"buffered",HistoryTools:false}:Profile,Key,Catalog);
-	return { Instance, Files, Required, Local, Tabs, Settings, Notices, Modals, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
+	return { Instance, activate_backend: Activate, Files, Required, Local, Tabs, Settings, Notices, Modals, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
 }
 
 function bootstrap_http(Before?: (Params: any) => Promise<void>)
@@ -1883,4 +1883,246 @@ test("syntactically valid but partial edit JSON never creates an applicable prev
 		assert.equal(P.Session.Messages.at(-1).CompletionStatus,"partial");assert.equal(P.Edits.Store.Data.Writes.length,0);assert.equal(Writes,0);assert.match(P.Edits.Error,/中断|失败/);
 	}
 	finally{P.onunload();}
+});
+
+test("R01 final backend staging failure retries storage without any new delta and survives cold restart",async()=>
+{
+ let Posts=0,Attempts=0,SessionId="";
+ const F=await mobile_fixture(async Params=>Params.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:(Posts++,{status:200,json:{id:"original-receipt",choices:[{finish_reason:"stop",message:{content:"原创证明：由三角不等式得到 $|x|-|y|\\le |x-y|$."}}],usage:{prompt_tokens:21,completion_tokens:13}}})),P=F.Instance;
+ try
+ {
+  await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"fixture-only");SessionId=P.Session.Id;
+  const Write=P.app.vault.adapter.write;
+  P.app.vault.adapter.write=async(Path:string,Text:string)=>
+  {
+   if(Path.endsWith(".save.stage.json")&&JSON.parse(Text).Sessions?.some((S:any)=>S.Messages.some((M:any)=>M.Role==="assistant"&&M.CompletionStatus==="completed"))){Attempts++;if(Attempts===1){await new Promise(R=>setTimeout(R,2));throw Error("original once-only final staging failure");}}
+   return Write(Path,Text);
+  };
+  assert.equal(await P.send_message("解释逆三角不等式",null),true);
+  for(let I=0;I<800&&!P.Session.Messages.some((M:any)=>M.Role==="assistant"&&M.CompletionStatus==="completed");I++){await new Promise(R=>setTimeout(R,5));}
+  assert.ok(Attempts>=2,`final save attempts=${Attempts}, pending=${P.Checkpoints.pending}, busy=${P.Busy}`);
+  const Reply=P.Session.Messages.find((M:any)=>M.Role==="assistant"&&M.CompletionStatus==="completed");assert.ok(Reply);assert.equal(P.Busy,false);assert.equal(Posts,1);assert.equal(P.CompletedTurns.size,1);assert.equal(Reply.BackendResult.Metadata.Usage[0].InputTokens,21);
+  await P.SaveQueue;
+ }
+ finally{P.onunload();await P.SaveQueue?.catch(()=>{});}
+ const G=await mobile_fixture(undefined,{Files:F.Files,Local:F.Local});
+ try{const S=G.Instance.State.Sessions.find((S:any)=>S.Id===SessionId);assert.ok(S?.Messages.some((M:any)=>M.Role==="assistant"&&M.CompletionStatus==="completed"));assert.ok(G.Instance.State.Sync.Operations[0].Result.backend.result.Metadata.Receipts.length);assert.equal(Posts,1);}finally{G.Instance.onunload();}
+});
+
+test("R04 a hundred unflushed host deltas do not clone whole 10000-message history",async()=>
+{
+ let Copies=0;const F=await mobile_fixture(bootstrap_http(),{Clone:((V:any)=>{if(V?.Sessions&&V?.Settings){Copies++;}return structuredClone(V);}) as typeof structuredClone}),P=F.Instance;
+ try
+ {
+  const S=P.Session;S.ThreadId="original-perf-thread";S.Messages=Array.from({length:10000},(_,I)=>({Id:"history-"+I,Role:I%2?"assistant":"user",Text:"原创相近引理 "+I}));
+  S.Messages.push({Id:"stream",Role:"assistant",Text:"",TurnId:"original-perf-turn"});P.MessagesById.invalidate?.(S);Copies=0;
+  for(let I=0;I<100;I++){P.handle_message({method:"item/agentMessage/delta",params:{threadId:S.ThreadId,turnId:"original-perf-turn",itemId:"stream",delta:"x"}});}
+  assert.equal(P.Checkpoints.pending,1);assert.equal(Copies,0,`100 unflushed deltas copied the whole state ${Copies} times`);
+  await P.Checkpoints.flush();assert.ok(Copies<=2,`one checkpoint cloned state ${Copies} times`);
+ }
+ finally{P.onunload();}
+});
+
+test("R04 host benchmark records clones CPU memory and persistence at 100 and 10000 messages",{skip:process.env.CODEX_R04_BENCH!=="1"},async()=>
+{
+ for(const Size of [100,10000])
+ {
+  let Copies=0,Bytes=0,Saves=0;const F=await mobile_fixture(bootstrap_http(),{Clone:((V:any)=>{if(V?.Sessions&&V?.Settings){Copies++;}return structuredClone(V);}) as typeof structuredClone}),P=F.Instance;
+  try
+  {
+   const S=P.Session;S.ThreadId="bench-thread";S.Messages=Array.from({length:Size},(_,I)=>({Id:"bench-"+I,Role:I%2?"assistant":"user",Text:"原创计算 "+I+" $[H,E]=2E$.".repeat(24)}));S.Messages.push({Id:"bench-stream",Role:"assistant",Text:"",TurnId:"bench-turn"});
+   const Write=P.app.vault.adapter.write;P.app.vault.adapter.write=async(Path:string,Text:string)=>{Saves++;Bytes+=Buffer.byteLength(Text);return Write(Path,Text);};
+   global.gc?.();const Heap=process.memoryUsage().heapUsed,CPU=process.cpuUsage(),Start=performance.now();Copies=0;
+   for(let I=0;I<100;I++){P.handle_message({method:"item/agentMessage/delta",params:{threadId:S.ThreadId,turnId:"bench-turn",itemId:"bench-stream",delta:"x"}});}
+   const UnflushedCopies=Copies,DeltaMs=performance.now()-Start,DeltaCPU=process.cpuUsage(CPU),Peak=process.memoryUsage().heapUsed;
+   await P.Checkpoints.flush();console.log("R04_BENCH "+JSON.stringify({size:Size,deltas:100,unflushedCopies:UnflushedCopies,totalCopies:Copies,checkpointExecutions:P.Checkpoints.Stats.attempts,successfulCheckpoints:P.Checkpoints.Stats.checkpoints,adapterWrites:Saves,writtenUtf8Bytes:Bytes,deltaMs:DeltaMs,cpuUserUs:DeltaCPU.user,cpuSystemUs:DeltaCPU.system,heapGrowthBytes:Peak-Heap,bundle:process.env.CODEX_R04_LABEL??"candidate"}));
+  }finally{P.onunload();await P.SaveQueue?.catch(()=>{});}
+ }
+});
+
+test("R01 persistent final storage failure keeps copyable evidence and manual retry settles once",async()=>
+{
+ let Posts=0,Fail=true,Attempts=0;const F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:(Posts++,{status:200,json:{id:"receipt-manual",choices:[{finish_reason:"stop",message:{content:"原创完整说明 $[H,E]=2E$."}}],usage:{completion_tokens:17}}})),P=F.Instance;
+ try
+ {
+  await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"fixture-key");const W=P.app.vault.adapter.write;
+  P.app.vault.adapter.write=async(Path:string,Text:string)=>{if(Fail&&Path.endsWith(".save.stage.json")&&Text.includes('"CompletionStatus":"completed"')){Attempts++;throw Error("original sustained storage failure");}return W(Path,Text);};
+  await P.send_message("证明交换子等式",null);for(let I=0;I<700&&Attempts<4;I++){await new Promise(R=>setTimeout(R,5));}
+  assert.equal(Attempts,4);assert.equal(P.Busy,false);assert.equal(P.Runtime.Stage,"idle");assert.equal(P.PendingBackendSaves.length,1);assert.match(P.PendingBackendSaves[0].Text,/原创完整说明/);assert.equal(P.CompletedTurns.size,0);assert.equal(await P.send_message("不能掩盖未保存结果的新推理",null),false);assert.equal(Posts,1);
+  const OriginalId=P.State.ActiveId;P.State.Sessions.push({Id:"other-session",Title:"另一会话",Messages:[]});P.State.ActiveId="other-session";assert.equal(P.BackendSaveBlocked,false);assert.equal(P.PendingBackendSaves.length,0);await assert.rejects(P.export_conversations(),/尚未保存/);P.State.ActiveId=OriginalId;assert.equal(P.BackendSaveBlocked,true);
+  const E=structuredClone(P.BackendSaves.values[0].Value.Event);P.Session.Messages.push({Id:"later-local-message",Role:"user",Text:"后来保留的本机内容"});Fail=false;await P.retry_backend_saves();
+  assert.equal(P.PendingBackendSaves.length,0);assert.equal(P.CompletedTurns.size,1);assert.ok(P.Session.Messages.some((M:any)=>M.Id==="later-local-message"));assert.equal(P.Session.Messages.filter((M:any)=>M.Id===E.itemId).length,1);
+  P.handle_message({method:"backend/result",params:E});await P.retry_backend_saves();assert.equal(P.CompletedTurns.size,1);assert.equal(Posts,1);
+ }finally{Fail=false;P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+test("R01 final staging readback failure retries the original evidence without inference",async()=>
+{
+ let Posts=0,Failed=false;const F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:(Posts++,{status:200,json:{id:"readback-receipt",choices:[{finish_reason:"stop",message:{content:"原创 $x^2\\ge0$."}}]}})),P=F.Instance;
+ try
+ {
+  await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"fixture-key");const Read=P.app.vault.adapter.read;
+  P.app.vault.adapter.read=async(Path:string)=>{const Text=await Read(Path);if(!Failed&&Path.endsWith(".save.stage.json")&&Text?.includes('"CompletionStatus":"completed"')){Failed=true;throw Error("original asynchronous readback failure");}return Text;};
+  await P.send_message("说明平方非负",null);for(let I=0;I<400&&!P.Session.Messages.some((M:any)=>M.CompletionStatus==="completed");I++){await new Promise(R=>setTimeout(R,5));}
+  assert.equal(Failed,true);assert.equal(Posts,1);assert.equal(P.CompletedTurns.size,1);assert.equal(P.BackendSaves.pending,0);
+ }finally{P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+test("R01 retry after deleting the original session retains operation evidence without resurrection",async()=>
+{
+ let Fail=true;const F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:{status:200,json:{id:"deleted-receipt",choices:[{finish_reason:"stop",message:{content:"不得复活的原答案"}}]}}),P=F.Instance;
+ try
+ {
+  await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"fixture-key");const W=P.app.vault.adapter.write;
+  P.app.vault.adapter.write=async(Path:string,Text:string)=>{if(Fail&&Path.endsWith(".save.stage.json")&&Text.includes('"CompletionStatus":"completed"'))throw Error("original fail before deletion");return W(Path,Text);};
+  await P.send_message("原问题",null);for(let I=0;I<100&&!P.PendingBackendSaves.length;I++){await new Promise(R=>setTimeout(R,5));}
+  const Id=P.Session.Id;P.State.DeletedSessionIds=[Id];P.State.Sessions=[{Id:"kept-new-session",Title:"保留的新会话",ThreadId:null,Messages:[]}];P.State.ActiveId="kept-new-session";Fail=false;await P.retry_backend_saves();
+  assert.equal(P.State.Sessions.some((S:any)=>S.Id===Id),false);assert.equal(P.State.Sync.Operations[0].SessionDeleted,true);assert.match(P.State.Sync.Operations[0].Result.backend.result.Text,/原答案/);assert.equal(P.CompletedTurns.size,0);
+ }finally{Fail=false;P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+test("R01 changing backend archives the pending answer only under its original binding",async()=>
+{
+ let Fail=true,Posts=0;const F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:(Posts++,{status:200,json:{id:"original-scope",choices:[{finish_reason:"stop",message:{content:"原作用域的答案"}}]}})),P=F.Instance;
+ try
+ {
+  const A={Kind:"api",Provider:"compatible",Base:"https://one.invalid/v1",Model:"original"},B={...A,Base:"https://two.invalid/v1"};await P.start_backend(A,"fixture-key");const W=P.app.vault.adapter.write;
+  P.app.vault.adapter.write=async(Path:string,Text:string)=>{if(Fail&&Path.endsWith(".save.stage.json")&&Text.includes('"CompletionStatus":"completed"'))throw Error("original scope final failure");return W(Path,Text);};
+  await P.send_message("保留原作用域",null);for(let I=0;I<100&&!P.PendingBackendSaves.length;I++)await new Promise(R=>setTimeout(R,5));const Original=P.Session.Id;
+  await P.start_backend(B,"fixture-key-two");Fail=false;await P.retry_backend_saves();assert.equal(P.Session.Messages.length,0);assert.equal(Posts,1);assert.equal(P.CompletedTurns.size,0);assert.ok([...F.Files.keys()].some(K=>K.includes(".receipt-")));
+  await P.start_backend(A,"");assert.equal(P.Session.Id,Original);assert.ok(P.Session.Messages.some((M:any)=>M.Role==="assistant"&&/原作用域/.test(M.Text)&&M.ArchivedOnly));assert.equal(Posts,1);
+ }finally{Fail=false;P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+for(const Point of ["canonical","backup","committed-journal"])
+{
+ test("R01 final persistence resumes after "+Point+" failure",async()=>
+ {
+  let Failed=false,Armed=false,Posts=0;const F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:(Posts++,{status:200,json:{id:"transaction-"+Point,choices:[{finish_reason:"stop",message:{content:"原创事务完整回答"}}]}})),P=F.Instance;
+  try
+  {
+   await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"fixture-key");const W=P.app.vault.adapter.write;
+   P.app.vault.adapter.write=async(Path:string,Text:string)=>
+   {
+    if(Path.endsWith(".save.stage.json")&&Text.includes('"CompletionStatus":"completed"'))Armed=true;
+    if(Armed&&!Failed&&((Point==="canonical"&&Path.endsWith("-state-v2.json"))||(Point==="backup"&&Path.endsWith(".last-committed.json")&&Text.includes('"CompletionStatus":"completed"'))||(Point==="committed-journal"&&Path.endsWith(".save.journal.json")&&JSON.parse(Text).Status==="committed"))){Failed=true;throw Error("original transaction failure at "+Point);}
+    return W(Path,Text);
+   };
+   await P.send_message("原始事务问题",null);for(let I=0;I<450&&!P.Session.Messages.some((M:any)=>M.CompletionStatus==="completed");I++)await new Promise(R=>setTimeout(R,5));
+   assert.equal(Failed,true);assert.equal(P.BackendSaves.pending,0);assert.equal(P.CompletedTurns.size,1);assert.equal(Posts,1);
+   assert.ok(JSON.parse(F.Files.get(P.state_path())!).Sessions.some((S:any)=>S.Messages.some((M:any)=>M.Text==="原创事务完整回答")));
+  }finally{P.onunload();await P.SaveQueue?.catch(()=>{});}
+ });
+}
+
+test("R04 slow checkpoint and terminal takeover cannot discard a newer delta or replay an old snapshot",async()=>
+{
+ let ReleaseHttp!:(V:any)=>void,Posts=0,ReleaseWrite!:()=>void,Writing!:()=>void,Held=false;
+ const Started=new Promise<void>(R=>Writing=R),F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:(Posts++,await new Promise(R=>ReleaseHttp=R))),P=F.Instance;
+ try
+ {
+  await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"fixture-key");await P.send_message("流式原证明",null);
+  const O=P.State.Sync.Operations[0],Item="synthetic-stream",W=P.app.vault.adapter.write;
+  P.app.vault.adapter.write=async(Path:string,Text:string)=>{if(!Held&&Path.endsWith(".save.stage.json")&&Text.includes('"Text":"first"')){Held=true;Writing();await new Promise<void>(R=>ReleaseWrite=R);}return W(Path,Text);};
+  P.handle_message({method:"item/agentMessage/delta",params:{threadId:O.ThreadId,turnId:O.TurnId,itemId:Item,delta:"first"}});const Flush=P.Checkpoints.flush();await Started;
+  P.handle_message({method:"item/agentMessage/delta",params:{threadId:O.ThreadId,turnId:O.TurnId,itemId:Item,delta:" second"}});P.Session.Messages.push({Id:"unrelated-new",Role:"user",Text:"最新本地消息"});ReleaseWrite();await Flush;
+  assert.equal(P.Session.Messages.find((M:any)=>M.Id===Item).Text,"first second");assert.ok(JSON.parse(F.Files.get(P.state_path())!).Sessions[0].Messages.some((M:any)=>M.Text==="first second"));
+  ReleaseHttp({status:200,json:{id:"terminal-receipt",choices:[{finish_reason:"stop",message:{content:"最终完整原说明"}}]}});for(let I=0;I<150&&P.CompletedTurns.size!==1;I++)await new Promise(R=>setTimeout(R,5));
+  await P.Checkpoints.flush();assert.equal(P.CompletedTurns.size,1);assert.equal(Posts,1);assert.ok(P.Session.Messages.some((M:any)=>M.Id==="unrelated-new"));assert.ok(JSON.parse(F.Files.get(P.state_path())!).Sessions[0].Messages.some((M:any)=>M.Text==="最终完整原说明"));
+ }finally{ReleaseWrite?.();P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+test("R01 R03 actual host SSE signed history continuation persists terminal retry with exactly two inference requests",async()=>
+{
+ const Requests:any[]=[],Signature="original-opaque-数学==",Enc=new TextEncoder();let Failed=false;
+ const Frame=(V:unknown)=>`data: ${typeof V==="string"?V:JSON.stringify(V)}\n\n`;
+ const Stream=(Values:unknown[])=>new Response(new ReadableStream({start(C){const B=Enc.encode(Values.map(Frame).join(""));for(let I=0;I<B.length;I+=3)C.enqueue(B.slice(I,I+3));C.close();}}),{headers:{"content-type":"text/event-stream","x-request-id":"original-http-receipt"}});
+ const Fetch:typeof fetch=async(_Url,Init)=>
+ {
+  Requests.push(JSON.parse(String(Init?.body)));
+  if(Requests.length===1)return Stream([
+   {id:"first-signed",choices:[{index:0,delta:{tool_calls:[{index:0,id:"original-call",type:"function",function:{name:"obsidian_history_read",arguments:JSON.stringify({command:"read",message_id:"original-lemma",field:"text",offset:0,length:2000})}}]},finish_reason:null}]},
+   {choices:[{index:0,delta:{tool_calls:[{index:0,extra_content:{google:{thought_signature:Signature}}}]},finish_reason:"tool_calls"}]},"[DONE]"
+  ]);
+  assert.equal(Requests[1].messages.at(-2).tool_calls[0].extra_content.google.thought_signature,Signature);assert.match(Requests[1].messages.at(-1).content,/原有证明条件/);
+  return Stream([{id:"second-signed",choices:[{index:0,delta:{content:"完整的新说明：沿用原有证明条件得到 $x=x$."},finish_reason:"stop"}]},{choices:[],usage:{prompt_tokens:31,completion_tokens:19}},"[DONE]"]);
+ };
+ const F=await mobile_fixture(async()=>{throw Error("No native fallback or directory query");},{Fetch}),P=F.Instance;
+ try
+ {
+  await F.activate_backend({Kind:"api",Provider:"google",Model:"gemini-2.5-flash",HistoryTools:true},"fixture-only",[{Id:"gemini-2.5-flash",Vision:true}]);
+  P.Session.Messages.push({Id:"original-lemma",Role:"assistant",Text:"原有证明条件：x 是实数，故 x=x。",CompletionStatus:"completed"});const W=P.app.vault.adapter.write;
+  P.app.vault.adapter.write=async(Path:string,Text:string)=>{if(!Failed&&Path.endsWith(".save.stage.json")&&Text.includes('"ResponseId":"second-signed"')){Failed=true;throw Error("final signed result first staging failed");}return W(Path,Text);};
+  await P.send_message("补读原引理然后整合说明",null);for(let I=0;I<500&&P.CompletedTurns.size!==1;I++)await new Promise(R=>setTimeout(R,5));
+  assert.equal(Failed,true);assert.equal(Requests.length,2);assert.equal(P.CompletedTurns.size,1);assert.equal(P.BackendSaves.pending,0);assert.ok(P.Session.Messages.some((M:any)=>M.BackendResult?.Metadata.Usage?.some((U:any)=>U.OutputTokens===19)));assert.ok(!JSON.stringify([...F.Files.values()]).includes(Signature));
+ }finally{P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+test("R05 actual compiled host complete export hydrates saved Input Request and missing Result without operation_status",async()=>
+{
+ const {operation_evidence_fixture}=await import("./fixtures/r05-operation-evidence"),R=await operation_evidence_fixture();
+ const F=await mobile_fixture(async Q=>{const U=new URL(Q.url),V=await R.Http(U.pathname+U.search,Q.method,Q.body?JSON.parse(Q.body):undefined);return{status:200,json:V};},{Vault:"Original"}),P=F.Instance;
+ try
+ {
+  const S=await R.load();P.State={...S,Settings:{...P.State.Settings,...S.Settings}};P.Remote.Url="https://fixture.invalid";P.Remote.Token="fixture-in-memory";await P.ensure_connection();
+  assert.equal(P.State.Sync.Operations[0].Evidence.ResultBlob,R.ResultBlob);assert.equal(R.counts().ResultReads,0);
+  const Full=JSON.parse(await P.export_conversations());assert.deepEqual(Full.Sync.Operations[0].Result,R.Result);assert.equal(Full.Sync.Operations[0].Evidence,undefined);assert.ok(R.counts().ResultReads>0);assert.equal(R.counts().StatusReads,0);assert.equal(R.counts().InferencePosts,0);assert.equal(R.counts().InferenceCalls,0);
+  assert.deepEqual(P.State.Sync.Operations[0].Input,R.Operation.Input);assert.deepEqual(P.State.Sync.Operations[0].Request,R.Operation.Request);
+ }finally{P.onunload();await P.SaveQueue?.catch(()=>{});await R.close();}
+});
+
+test("R05 failed actual complete export persists missing field locators and retries only downloads",async()=>
+{
+ const {operation_evidence_fixture}=await import("./fixtures/r05-operation-evidence"),R=await operation_evidence_fixture();
+ const F=await mobile_fixture(async Q=>{const U=new URL(Q.url),V=await R.Http(U.pathname+U.search,Q.method,Q.body?JSON.parse(Q.body):undefined);return{status:200,json:V};},{Vault:"Original"}),P=F.Instance;
+ try
+ {
+  const S=await R.load();P.State={...S,Settings:{...P.State.Settings,...S.Settings}};P.Remote.Url="https://fixture.invalid";P.Remote.Token="fixture-in-memory";await P.ensure_connection();R.fail_result(true);
+  await assert.rejects(P.export_conversations(),/Result/);assert.equal(P.State.Sync.Operations[0].Evidence.ResultBlob,R.ResultBlob);assert.equal(JSON.parse(F.Files.get(P.state_path())!).Sync.Operations[0].Evidence.ResultBlob,R.ResultBlob);
+  R.fail_result(false);const Full=JSON.parse(await P.export_conversations());assert.deepEqual(Full.Sync.Operations[0].Result,R.Result);assert.equal(R.counts().InferencePosts,0);assert.equal(R.counts().StatusReads,0);
+ }finally{R.fail_result(false);P.onunload();await P.SaveQueue?.catch(()=>{});await R.close();}
+});
+
+test("R02 compiled host preserves quote PDF draft across image text unknown and manual-confirmed model switching",async()=>
+{
+	 const Posts:any[]=[],Catalog:import("../src/backend-profile").ApiCatalogModel[]=[{Id:"image",Vision:true,Protocol:"chat"},{Id:"text",Vision:false,Protocol:"chat"},{Id:"unknown"}];
+ const F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[]}}:(Posts.push(JSON.parse(Q.body)),{status:200,json:{choices:[{finish_reason:"stop",message:{content:"原创图文解释"}}]}})),P=F.Instance;
+ try
+ {
+  await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"image",Vision:false},"fixture-only",Catalog);
+  P.Session.Messages.push({Id:"proof-quote",Role:"assistant",Text:"原引理说明",CompletionStatus:"completed"});P.AnswerQuote=answer_quote(P.Session.Id,"proof-quote","原引理","原引理说明","completed");const Quote=structuredClone(P.AnswerQuote);
+  const Data="data:image/jpeg;base64,"+readFileSync("examples/pdf/scanned-page.jpg").toString("base64"),Image=await P.PdfImages.put(Data);
+  const Context:any={Path:"original.pdf",Mode:"阅读",Kind:"选区",Text:"PDF条件",SelectedText:"PDF条件",Mapping:"PDF文本层",Heading:"条件",CapturedAt:"original",LineStart:null,LineEnd:null,Truncated:false,Version:"a".repeat(64),PdfTarget:{Kind:"text",Page:1,Values:[0,0,0,5]},Pdf:{schemaVersion:1,ReadOnly:true,PageCount:1,Pages:[{Number:1,Image,TextLayer:true}]}};P.Capture.Snapshot=Context;
+  await P.update_run_settings("text","",false);assert.equal(P.Backend.Vision,false);assert.equal(P.Connection.Capabilities.Images,false);assert.deepEqual(P.AnswerQuote,Quote);assert.equal(P.Capture.Snapshot,Context);
+  assert.equal(await P.send_chat("保留图文材料",Context,P.AnswerQuote),false);assert.equal(Posts.length,0);assert.equal(Context.Pdf.Pages.length,1);
+  await P.update_run_settings("unknown","",false);assert.equal(P.Connection.Capabilities.Images,"unknown");assert.equal(P.Backend.Vision,false);assert.equal(await P.send_chat("未确认不能偷发图像",Context,P.AnswerQuote),false);assert.equal(Context.Pdf.Pages.length,1);
+  const {select_api_model}=await import("../src/backend-profile"),Manual=select_api_model(P.Backend,"unknown",Catalog,"",{Vision:true});await P.start_backend(Manual.Profile,"",Catalog);
+  assert.equal(P.Connection.Capabilities.Images,true);assert.deepEqual(P.AnswerQuote,Quote);assert.equal(await P.send_chat("确认后解释图中条件",Context,P.AnswerQuote),true);for(let I=0;I<150&&P.Busy;I++)await new Promise(R=>setTimeout(R,5));await P.BackendSaves.retry();
+  assert.equal(Posts.length,1);assert.equal(Posts[0].model,"unknown");assert.equal(Posts[0].messages.at(-1).content.filter((V:any)=>V.type==="image_url").length,1);assert.deepEqual(JSON.parse(JSON.stringify(P.Session.Messages.findLast((M:any)=>M.Role==="user").Context)),JSON.parse(JSON.stringify(Context)));
+  const Sent=P.Session.Messages.findLast((M:any)=>M.Role==="user");const {parse_pdf_anchor}=await import("../src/pdf/target");assert.ok(Sent.Sources.some((S:any)=>parse_pdf_anchor(S.Anchor)?.Kind==="text"));assert.equal(Sent.Sources.filter((S:any)=>S.Kind==="pdf").length,2);
+ }finally{P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+test("R01 connection switch queued during terminal staging preserves the newly durable answer",async()=>
+{
+ let Release!:()=>void,Reached!:()=>void,Held=false;const Started=new Promise<void>(R=>Reached=R),F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:{status:200,json:{choices:[{finish_reason:"stop",message:{content:"已可靠保存的新终态正文"}}]}}),P=F.Instance;
+ try
+ {
+  const A={Kind:"api",Provider:"compatible",Base:"https://one.invalid/v1",Model:"original"},B={...A,Base:"https://two.invalid/v1"};await P.start_backend(A,"fixture-a");const W=P.app.vault.adapter.write;
+  P.app.vault.adapter.write=async(Path:string,Text:string)=>{if(!Held&&Path.endsWith(".save.stage.json")&&Text.includes('"CompletionStatus":"completed"')){Held=true;Reached();await new Promise<void>(R=>Release=R);}return W(Path,Text);};
+  await P.send_message("切换保存不能丢回答",null);await Started;const Switch=P.start_backend(B,"fixture-b");for(let I=0;I<100&&P.Writes.pending<2;I++)await new Promise(R=>setTimeout(R,2));Release();await Switch;await P.BackendSaves.retry();await P.start_backend(A,"");
+  assert.ok(P.Session.Messages.some((M:any)=>M.Text==="已可靠保存的新终态正文"));assert.ok(JSON.parse(F.Files.get(P.state_path())!).Sessions.some((S:any)=>S.Messages.some((M:any)=>M.Text==="已可靠保存的新终态正文")));
+ }finally{Release?.();P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+test("R01 returning to a session with received unsaved evidence never restores fake generating state",async()=>
+{
+ let Fail=true;const F=await mobile_fixture(async Q=>Q.method==="GET"?{status:200,json:{data:[{id:"original"}]}}:{status:200,json:{choices:[{finish_reason:"stop",message:{content:"已经收到但存储失败的答案"}}]}}),P=F.Instance;
+ try
+ {
+  await P.start_backend({Kind:"api",Provider:"compatible",Base:"https://fixture.invalid/v1",Model:"original"},"fixture-key");const W=P.app.vault.adapter.write;
+  P.app.vault.adapter.write=async(Path:string,Text:string)=>{if(Fail&&Path.endsWith(".save.stage.json")&&Text.includes('"CompletionStatus":"completed"'))throw Error("original pending state failure");return W(Path,Text);};
+  await P.send_message("不能误报生成中",null);for(let I=0;I<100&&!P.BackendSaves.pending;I++)await new Promise(R=>setTimeout(R,5));const Id=P.Session.Id;await P.choose_session();await P.choose_session(Id);
+  assert.equal(P.Busy,false);assert.equal(P.Runtime.Stage,"idle");assert.match(P.PendingBackendSaves[0].Text,/已经收到/);assert.doesNotMatch(P.Activity,/运行.*回合/);
+ }finally{Fail=false;await P.retry_backend_saves();P.onunload();await P.SaveQueue?.catch(()=>{});}
 });

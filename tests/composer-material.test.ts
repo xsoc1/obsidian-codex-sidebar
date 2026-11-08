@@ -8,6 +8,7 @@ import { build_prompt } from "../src/prompt";
 import { resolve_material, combine_pdf_image } from "../src/composer-material";
 import { message_pdf_refs } from "../src/pdf/inputs";
 import { markdown_blocks, text_identity } from "../src/markdown-blocks";
+import { ReadingNavigation } from "../src/reading-navigation";
 
 const Snapshot: ContextSnapshot = { Path: "conditions.pdf", Mode: "阅读", Kind: "选区", Mapping: "PDF页图", Text: "new conditions", SelectedText: "", LineStart: null, LineEnd: null, Heading: "", CapturedAt: "capture", Truncated: false, Version: "v1" };
 const Quote = answer_quote("session", "answer", "x", "Original $x$ argument");
@@ -22,6 +23,7 @@ function fixture(Data = new Map<string, string>())
 	V.Owner.clear_context = () => V.Owner.Capture.clear();
 	V.refresh = () => {}; V.refresh_quote = () => {}; V.refresh_draft_status = () => {};
 	V.Input = { value: "" }; V.DraftStore = null; V.DraftRevision = 0; V.DraftMaterial = { Context: null, Quote: null };
+	V.ReadingNavigation = new ReadingNavigation(); V.RenderingDone = Promise.resolve(); V.MountedReading = null;
 	return { V, Notices, Data };
 }
 
@@ -111,7 +113,7 @@ test("connection picker preserves options and the active selection when activati
 test("quote navigation checks scope again after history hydration and after rendering", async () =>
 {
 	const { V } = fixture(); let Resume!: () => void, Focused = 0;
-	V.Opened = true; V.Owner.ensure_session_history = () => new Promise<void>(R => Resume = R); V.HistoryWindow = { focus: () => { Focused++; return true; } };
+	V.Opened = true; V.Owner.ensure_session_history = () => new Promise<void>(R => Resume = R); V.HistoryWindow = { focus: () => { Focused++; return true; }, snapshot: () => undefined, restore() {} };
 	const Loading = V.reveal_message("answer", Quote); V.Owner.draft_scope = () => "new-scope"; Resume(); await Loading; assert.equal(Focused, 0);
 	V.Owner.draft_scope = () => "scope"; V.Owner.ensure_session_history = async () => {}; V.render_messages = async () => { V.Owner.draft_scope = () => "switched-during-render"; };
 	let Lookups = 0; V.MessagesElement = { querySelectorAll: () => { Lookups++; return []; } }; await V.reveal_message("answer", Quote); assert.equal(Focused, 1); assert.equal(Lookups, 0);
@@ -126,7 +128,8 @@ test("branch quote navigation locates only the version-verified copied ancestor 
 	const Node = { dataset: { codexAnswerBlock: Block.Id, codexAnswerFrom: String(Block.From), codexAnswerTo: String(Block.To) }, scrollIntoView: () => BlocksScrolled++, animate() {} };
 	const Body = { dataset: { codexAnswerVersion: text_identity(Text), codexAnswerMessage: JSON.stringify(["desktop", "branch"]) + ":answer" }, querySelectorAll: () => [Node] };
 	const Card = { dataset: { messageId: "answer" }, querySelector: () => Body, scrollIntoView: () => CardsScrolled++ };
-	V.MessagesElement = { querySelectorAll: () => [Card] }; V.Owner.ensure_session_history = async () => {}; V.HistoryWindow = { focus: () => true }; V.render_messages = async () => {};
+	V.MessagesElement = { clientHeight: 400, querySelectorAll: (Selector: string) => Selector === "[data-message-id]" ? [Card] : [] }; V.Owner.ensure_session_history = async () => {}; V.HistoryWindow = { focus: () => true, snapshot: () => undefined, restore() {} }; V.render_messages = async () => {};
+	V.MessageList = { reveal: (_Id: string, Resolve: (Element: typeof Card) => any) => { const Element = Resolve(Card); if(!Element) { return false; } Element.scrollIntoView(); return true; }, reanchor() {} };
 	await V.reveal_message("answer", Q); assert.equal(BlocksScrolled, 1); assert.equal(CardsScrolled, 0);
 	V.Owner.Session.Messages[0].Text += " changed"; await V.reveal_message("answer", Q); assert.equal(BlocksScrolled, 1); assert.equal(CardsScrolled, 1); assert.match(Notices.at(-1)!, /已返回原消息/);
 	await V.reveal_message("answer", { ...Q, SessionId: "unrelated" }); assert.equal(CardsScrolled, 1); assert.match(Notices.at(-1)!, /未跳到当前会话/);

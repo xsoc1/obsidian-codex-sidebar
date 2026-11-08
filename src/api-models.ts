@@ -57,7 +57,11 @@ export async function list_api_models(Provider: ApiProvider, CustomBase: string,
 		if(!valid_backend_model_id(Id) || Secret && Id.includes(Secret) || Models.has(Id)) { continue; }
 		const Reasoning = Public ? go_reasoning(Item) : Provider === "deepseek" ? deepseek_reasoning(Item) : undefined;
 		const Protocol = Public ? Item.api?.["chat-completions"] ? "chat" as const : Item.api?.responses ? "responses" as const : undefined : Provider === "openai" ? "responses" as const : Provider === "compatible" ? undefined : "chat" as const;
-		Models.set(Id, { Id, ...(Reasoning ? { Reasoning } : {}), ...(Protocol ? {Protocol}: {}) });
+		// Go's public schema declares the complete accepted input MIME list. Missing is unknown.
+		const Inputs = Public ? Item.modalities?.input : undefined;
+		const Vision = Array.isArray(Inputs) && Inputs.length && Inputs.every(M => typeof M === "string") ? Inputs.some(M => M === "image" || M.startsWith("image/")) : undefined;
+		const ContextWindow = Public && Number.isSafeInteger(Item.limit?.context) && Item.limit.context > 0 ? Item.limit.context : undefined;
+		Models.set(Id, { Id, ...(Reasoning ? { Reasoning } : {}), ...(Protocol ? {Protocol}: {}), ...(typeof Vision === "boolean" ? { Vision } : {}), ...(ContextWindow ? { ContextWindow } : {}) });
 	}
 	return [...Models.values()].sort((A, B) => A.Id < B.Id ? -1 : 1);
 }
