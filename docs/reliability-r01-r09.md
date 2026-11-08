@@ -1,4 +1,4 @@
-# 最终保存、材料能力与阅读返回：beta.14
+# 最终保存、材料能力与阅读返回：beta.15
 
 2026-11-09。用户要求完成 R01—R09 并安装、发布。起点 `191a776f8a61209e7b84868e639c00dfb84ecce9`，起始工作树干净，已 fetch；设计参考不代替当前源码。Node 24.17.0 下 `npm ci`、构建及原 426 项测试通过。本轮完整构建和测试：526 通过、0 失败、1 项性能基准跳过；该基准已另外显式运行。T01—T12/beta.13 的验证属于历史。
 
@@ -69,3 +69,7 @@ node tests/r06-pdf-sources-browser.mjs
 性能显式设置 `CODEX_R04_BENCH=1` 后执行 `node --expose-gc --import tsx --test --test-name-pattern="R04 host benchmark" tests/mobile-load.test.ts`；`CODEX_SIDEBAR_TEST_BUNDLE` 可指定原公开 bundle。真实脚本 `scripts/reliability-r09-live.ts`、`scripts/reliability-round2-live.ts` 必须 opt-in 和独立 TEMP 账本，已有提交只允许只读恢复。原生探针 `scripts/r06-native-probe.ts`、`scripts/reading-native-probe.ts` 使用独占资源并恢复原视图。
 
 日志、截图、响应、备份、本机路径仅在仓库外/ignored LOCAL_DEV。原生探针已卸载，日常状态未变；清除独占测试代码目录被策略拒绝，禁用目录留于本机记录，不绕过拒绝。公开包不含私人笔记、技能、配对凭据和原聊天。
+
+## 发布检查发现的等待竞态
+
+beta.14 的本机 526 项通过，但远端 Windows/Ubuntu 及 release CI 的旧端到端用例在模型 idle 后立即请求预览，早于新结果保存屏障完成。产品正确拒绝了提交。用例改为同样有界等待 Busy 或 BackendSaveBlocked，保留所有预览、零提前写入、确认和安全撤销断言，不扩大超时。beta.14 标签保留、不移动且不发布；最终采用 beta.15，实际 CI 收据另记。

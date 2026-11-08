@@ -1760,11 +1760,11 @@ test("original end-to-end: PDF text plus image and long-tail quote survive draft
 		Store.save("附上新条件，解释最后一步",{Context,Quote,ContextOrigin:"explicit"},0);
 		const Restored=Store.load()!;assert.deepEqual(Restored.Context,Context);assert.deepEqual(Restored.Quote,Quote);
 		assert.equal(await P.send_chat(Restored.Text,Restored.Context,Restored.Quote,{MaterialOrigin:Restored.ContextOrigin}),true,P.Status);
-		for(let I=0;I<200&&P.Busy;I++){await new Promise(R=>setTimeout(R,5));}
+		for(let I=0;I<200&&(P.Busy||P.BackendSaveBlocked);I++){await new Promise(R=>setTimeout(R,5));}
 		const Partial=P.Session.Messages.at(-1);assert.equal(Partial.CompletionStatus,"partial");assert.equal(Partial.Phase,"commentary");assert.equal(Writes,0);assert.equal(P.CompletedTurns.size,0);
 		const Sent=P.Session.Messages.findLast((M:any)=>M.Role==="user");assert.deepEqual(Sent.Context,Context);assert.deepEqual(Sent.Quote,Quote);assert.match(Sent.Prompt,/设 H 是对角矩阵/);
 		const Wire=Requests[0].messages.at(-1).content;assert.equal(Wire.filter((C:any)=>C.type==="image_url").length,1);assert.equal(Wire[0].text,Sent.Prompt);
-		assert.equal(await P.continue_answer(Partial.Id),true);for(let I=0;I<200&&P.Busy;I++){await new Promise(R=>setTimeout(R,5));}
+		assert.equal(await P.continue_answer(Partial.Id),true);for(let I=0;I<200&&(P.Busy||P.BackendSaveBlocked);I++){await new Promise(R=>setTimeout(R,5));}
 		const Continued=P.Session.Messages.findLast((M:any)=>M.Role==="user");assert.equal(Continued.ContinuesMessageId,Partial.Id);assert.equal(P.State.Sync.Operations.find((O:any)=>O.Id===Continued.OperationId).Input.ContinuesMessageId,Partial.Id);assert.notEqual(Continued.OperationId,Sent.OperationId);assert.equal(P.Session.Messages.find((M:any)=>M.Id===Partial.Id).CompletionStatus,"partial");
 		const Source:any={Path:"original.md",Mode:"编辑",Kind:"选区",Text:Before,SelectedText:Before,Selection:{From:0,To:Before.length},Mapping:"源文本",Heading:"",LineStart:0,LineEnd:2,Truncated:false,CapturedAt:"original-time",Version:await version_of(Before)};
 		assert.equal(await P.send_chat("最小修正积分",Source,null,{Mode:"edit",Scope:"captured"}),true);await wait_for_edit(P);assert.equal(Writes,0);

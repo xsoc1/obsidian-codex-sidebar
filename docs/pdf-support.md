@@ -1,6 +1,6 @@
 # PDF 伴读与区域放大
 
-当前 beta.14 的结果保存、模型依据、签名续轮、字段导出、PDF 来源及阅读返回见 [R01—R09 验证与兼容说明](reliability-r01-r09.md)。真实厂商 Key 与 iPad 验收边界以该表为准。
+当前 beta.15 的结果保存、模型依据、签名续轮、字段导出、PDF 来源及阅读返回见 [R01—R09 验证与兼容说明](reliability-r01-r09.md)。真实厂商 Key 与 iPad 验收边界以该表为准。
 
 PDF 文字、页图和公式区域进入现有聊天、回答追问及审核后 Markdown 修改流程. 升级顺序见 [迁移说明](migration.md). 历史行为与验证记录保存在 [旧指南](history/pdf-support-through-1.1.0.md).
 
