@@ -73,3 +73,11 @@ node tests/r06-pdf-sources-browser.mjs
 ## 发布检查发现的等待竞态
 
 beta.14 的本机 526 项通过，但远端 Windows/Ubuntu 及 release CI 的旧端到端用例在模型 idle 后立即请求预览，早于新结果保存屏障完成。产品正确拒绝了提交。用例改为同样有界等待 Busy 或 BackendSaveBlocked，保留所有预览、零提前写入、确认和安全撤销断言，不扩大超时。beta.14 标签保留、不移动且不发布；最终采用 beta.15，实际 CI 收据另记。
+
+## beta.15 安装与发布收据
+
+2026-11-09：最终源码/标签 `63c169c4047ce75122440ef208bec935065c9661`。Windows 与 Ubuntu [CI 42501841117](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/42501841117) 成功；[发布流程 42501976347](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/42501976347) 成功。[GitHub beta.15](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.15) 为预发布，稳定 latest 仍为 1.1.0；beta.14 未发布，标签保留。
+
+Windows 日常库与独立隐藏桥均已升级 beta.15，本机 Codex 已连接。原会话/消息/来源、修改数据库、选择设置、编辑器和输入草稿、设备存储与配对身份均读回一致。桥配置、状态目录已有文件和 Tailscale 路由不变；升级前远端 0 个运行操作。8 个模型、math-writing 0.3.0-candidate.4、协议 2 和已有能力返回正常。没有部署推理。
+
+公开 7 项资产 SHA-256 与 GitHub digest、候选清单、标签源码一致；插件 ZIP 4 项、桥 ZIP 20 项白名单逐项核对。安装的 4+20 项文件与公开包逐字节一致。只对等价源码映射/文档换行做公开文件对齐，无代码重启。独立代码回退脚本及完整私有备份在 LOCAL_DEV 指向的仓库外目录。
