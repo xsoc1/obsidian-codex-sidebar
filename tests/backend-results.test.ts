@@ -17,6 +17,25 @@ function profile(Extra: object = {}): Extract<BackendProfile, { Kind: "api" }>
 const chat = (Text: string | null, Reason = "stop", Extra: object = {}) => ({ id: "chat-original", model: "actual-model", choices: [{ finish_reason: Reason, message: { content: Text } }], ...Extra });
 const response = (Text: string, Status = "completed", Extra: object = {}) => ({ id: "response-original", model: "actual-model", status: Status, output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: Text }] }], ...Extra });
 
+test("native buffered diagnostics retain the HTTP result when the response cannot be parsed as JSON", async () =>
+{
+	let Posts = 0;
+	for(const Status of [403, 200])
+	{
+		const Run = direct_api(profile({ Provider: "opencode" }), Key, async () =>
+		{
+			Posts++;
+			return { status: Status, get json(): never { throw new Error("not-json and do not expose the raw response"); } };
+		});
+		const Result = await Run(Input, new AbortController().signal);
+		assert.equal(Result.Status, Status === 403 ? "failed" : "unknown");
+		assert.equal(Result.Metadata.Transport, "buffered");
+		assert.match(Result.Metadata.Reason!, new RegExp(`HTTP ${Status}`));
+		assert.doesNotMatch(Result.Metadata.Reason!, /raw response/);
+	}
+	assert.equal(Posts, 2);
+});
+
 for(const Case of [
 	{ Protocol: "chat", Value: chat("proof", "length"), Status: "partial", Text: "proof", Reason: "length" },
 	{ Protocol: "chat", Value: chat("safe text", "content_filter"), Status: "refused", Text: "safe text", Reason: "content_filter" },

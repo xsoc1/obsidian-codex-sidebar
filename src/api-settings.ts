@@ -1,9 +1,10 @@
-import { Setting, requestUrl, type ButtonComponent, type DropdownComponent, type TextComponent, type ToggleComponent } from "obsidian";
-import { ApiProviders, api_image_status, backend_profile, select_api_model, type ApiCatalogModel, type ApiProvider, type BackendProfile, type ApiProfile, type ApiSelectionOverrides } from "./backend-profile";
+import { SecretComponent, Setting, requestUrl, type App, type ButtonComponent, type DropdownComponent, type TextComponent, type ToggleComponent } from "obsidian";
+import { ApiProviders, api_base, api_image_status, backend_identity, backend_profile, select_api_model, type ApiCatalogModel, type ApiCredentialScope, type ApiProvider, type BackendProfile, type ApiProfile, type ApiSelectionOverrides } from "./backend-profile";
 import { list_api_models } from "./api-models";
 import { error_text } from "./ui-helpers";
+import type { ApiSecretBindings } from "./api-secret-bindings";
 
-export function api_settings(Root: HTMLElement, Current: BackendProfile | null, Activate: (Profile: unknown, Key: string, Catalog?: ApiCatalogModel[]) => Promise<void>, Save?: (Profile: unknown, Name: string, Catalog?: ApiCatalogModel[]) => void): () => void
+export function api_settings(Root: HTMLElement, Current: BackendProfile | null, Activate: (Profile: unknown, Key: string, Catalog?: ApiCatalogModel[], SecretLink?: string) => Promise<void | string>, Save?: (Profile: unknown, Name: string, Catalog?: ApiCatalogModel[]) => void, Secrets?: { App: App; Bindings: ApiSecretBindings }): () => void
 {
 	const Active = Current?.Kind === "api" ? Current : null;
 	let Provider: ApiProvider = Active?.Provider ?? "openai";
@@ -15,6 +16,23 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 	let HistoryTools = Active?.HistoryTools ?? (Provider !== "compatible");
 	let ApiInput: HTMLInputElement, Picker: DropdownComponent, Manual: TextComponent, Load: ButtonComponent;
 	let Models: ApiCatalogModel[] = [], ReasoningCatalog: ApiCatalogModel[] | undefined, Revision = 0, Closed = false;
+	let SecretPicker: SecretComponent | undefined, ForgetSecret: ButtonComponent | undefined, SecretAlias = "", LastScope = "";
+	const Scope = (): ApiCredentialScope | undefined =>
+	{
+		const Label = Identity.trim();
+		try { return { Kind: "api", Provider, Base: api_base(Provider, Base), Identity: Label === "default" ? "" : Label }; }
+		catch { return; }
+	};
+	const ResetCredential = () =>
+	{
+		const Next = Scope(), Id = Next ? backend_identity(Next) : "";
+		if(Id === LastScope) { return; }
+		LastScope = Id;
+		ApiInput.value = "";
+		SecretAlias = Next && Secrets ? Secrets.Bindings.alias(Next) : "";
+		SecretPicker?.setValue(SecretAlias);
+		ForgetSecret?.setDisabled(!SecretAlias);
+	};
 	const UpdateSelection = (Overrides: ApiSelectionOverrides = {}): ApiProfile =>
 	{
 		const Previous = Selected;
@@ -63,21 +81,51 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		Catalog.setDesc(Initial);
 		Load.setDisabled(false).setButtonText("加载模型");
 	};
-	new Setting(Root).setName("API 直连").setDesc("Windows、iPad 等端可单独连接服务商. 每次插件重载后重新输入 Key, 发送时所附笔记内容交给所选服务商.")
+	new Setting(Root).setName("API 直连").setDesc("设备可单独连接服务商；发送时附带的笔记内容交给所选服务商。")
 		.addDropdown(Dropdown =>
 		{
 			for(const [Id, Entry] of Object.entries(ApiProviders)) { Dropdown.addOption(Id, Entry.Label); }
-			Dropdown.setValue(Provider).onChange(Value => { Provider = Value as ApiProvider; HistoryTools=Provider!=="compatible"; ToolsToggle?.setValue(HistoryTools); ApiInput.value = ""; Invalidate(); });
+			Dropdown.setValue(Provider).onChange(Value => { Provider = Value as ApiProvider; HistoryTools=Provider!=="compatible"; ToolsToggle?.setValue(HistoryTools); ResetCredential(); Invalidate(); });
 		});
 	new Setting(Root).setName("自定义 HTTPS 基础地址").setDesc("仅自定义 OpenAI 兼容模式使用, 如 https://example.com/v1.")
-		.addText(Text => Text.setValue(Base).onChange(Value => { Base = Value; if(Provider === "compatible") { Invalidate(); } }));
-	new Setting(Root).setName("直连 API Key")
+		.addText(Text => Text.setValue(Base).onChange(Value => { Base = Value; if(Provider === "compatible") { ResetCredential(); Invalidate(); } }));
+	new Setting(Root).setName("直连 API Key").setDesc("临时使用；重开 Obsidian 后需重填。")
 		.addText(Text =>
 		{
 			ApiInput = Text.inputEl;
 			ApiInput.type = "password"; ApiInput.autocomplete = "off"; ApiInput.spellcheck = false;
-			ApiInput.addEventListener("input", () => { if(Provider !== "opencode") { Invalidate(); } });
+			ApiInput.addEventListener("input", () =>
+			{
+				if(ApiInput.value && SecretAlias) { SecretAlias = ""; SecretPicker?.setValue(""); }
+				if(Provider !== "opencode") { Invalidate(); }
+			});
 		});
+	if(Secrets && typeof SecretComponent === "function")
+	{
+		const Remember = new Setting(Root).setName("记住 API Key（可选）").setDesc("选择或新建 Obsidian 密钥，再点启用。关联只用于本设备的当前服务商、端点和身份。");
+		Remember.addComponent(El =>
+		{
+			SecretPicker = new SecretComponent(Secrets.App, El);
+			return SecretPicker.onChange(Value => { SecretAlias = Value ?? ""; if(SecretAlias) { ApiInput.value = ""; } if(Provider !== "opencode") { Invalidate(); } });
+		});
+		Remember.addButton(B =>
+		{
+			ForgetSecret = B;
+			B.setButtonText("取消关联").setDisabled(true).onClick(() =>
+			{
+				const CurrentScope = Scope();
+				if(!CurrentScope) { return; }
+				try
+				{
+					Secrets.Bindings.set(CurrentScope, null);
+					SecretAlias = ""; SecretPicker?.setValue(""); B.setDisabled(true); Invalidate();
+					Remember.setDesc("已取消关联；共享密钥未删除。当前连接仍可用，重开后不再使用该关联。");
+				}
+				catch { Remember.setDesc("未能取消关联，请检查本机设置存储。"); }
+			});
+		});
+	}
+	ResetCredential();
 	const Catalog = new Setting(Root).setClass("codex-api-catalog").setName("上游模型").setDesc(Initial);
 	Catalog.nameEl.id = `codex-api-catalog-${crypto.randomUUID()}`;
 	Catalog.descEl.setAttribute("aria-live", "polite");
@@ -96,11 +144,12 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		Load = Button;
 		Button.setButtonText("加载模型").onClick(async () =>
 		{
-			const Request = ++Revision, Key = ApiInput.value;
+			const Request = ++Revision;
 			Button.setDisabled(true).setButtonText("加载中…");
 			Catalog.setDesc("正在读取模型列表…");
 			try
 			{
+				const Key = Provider === "opencode" ? "" : ApiInput.value || (SecretAlias ? Secrets!.Bindings.read(SecretAlias) : "");
 				const Items = await list_api_models(Provider, Base, Key, Value => requestUrl({ ...Value, throw: false }));
 				if(Request !== Revision) { return; }
 				if(Provider === "opencode" || Provider === "deepseek") { ReasoningCatalog = Items; }
@@ -133,10 +182,10 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		.addButton(Button => Button.setButtonText("清除人工确认").onClick(() => PreviewSelection({ Vision: "unknown" })));
 	new Setting(Root).setName("请求协议").setDesc("与思考档次独立；默认根据服务商或模型目录选择，不会因错误自动换协议重发。")
 		.addDropdown(D => { ProtocolPicker = D; D.addOption("", "服务商或模型目录").addOption("chat", "Chat Completions").addOption("responses", "Responses").setValue("").onChange(V => PreviewSelection({ Protocol: V === "chat" || V === "responses" ? V : "auto" })); });
-	new Setting(Root).setName("响应传输").setDesc("自动使用真实流式请求；若设备或端点阻止 Fetch，可明确选择原生整段响应。")
+	new Setting(Root).setName("响应传输").setDesc(`更改后须点「启用 API 直连」。${Active ? `打开设置时：${Active.Stream === "buffered" ? "原生整段" : "自动流式"}。` : ""}iPad 直连 OpenCode Go 建议选原生整段。`)
 		.addDropdown(D=>D.addOption("auto","自动流式").addOption("buffered","原生整段").setValue(Stream).onChange(V=>{Stream=V as typeof Stream;}));
-	new Setting(Root).setName("身份标签").setDesc("同一端点使用不同账号时填写不同标签。只保存标签，密钥不落盘。")
-		.addText(T=>T.setValue(Identity).onChange(V=>{Identity=V;}));
+	new Setting(Root).setName("身份标签").setDesc("同一端点使用不同账号时填写不同标签。")
+		.addText(T=>T.setValue(Identity).onChange(V=>{Identity=V;ResetCredential();Invalidate();}));
 	new Setting(Root).setName("允许受限历史读取工具").setDesc("只允许读取当前会话的版本化原文。不支持工具的模型请关闭，改用宿主预算预取。").addToggle(T=>{ToolsToggle=T;T.setValue(HistoryTools).onChange(V=>{HistoryTools=V;});});
 	const Profile = () => UpdateSelection();
 	const SelectedCatalog = () => CatalogKnown ? ReasoningCatalog ?? Models : undefined;
@@ -159,10 +208,14 @@ export function api_settings(Root: HTMLElement, Current: BackendProfile | null, 
 		try
 		{
 			const Candidate = Profile();
-			await Activate(Candidate, Key, SelectedCatalog());
+			const Alias = SecretAlias || undefined;
+			if(SecretPicker && !Alias && !Key.trim() && Secrets?.Bindings.alias(Candidate)) { throw new Error("请重新选择已关联的密钥，或填写临时 API Key"); }
+			const Status = await Activate(Candidate, Key, SelectedCatalog(), Alias);
 			if(Closed) { return; }
 			if(Provider === Candidate.Provider && Selected?.Base === Candidate.Base && Selected.Model === Candidate.Model && ApiInput.value === Key) { ApiInput.value = ""; }
-			Setup.setDesc(`已启用 ${ApiProviders[Candidate.Provider].Label} · ${Candidate.Model.trim()}. 回侧栏发一条短问题验证权限.`);
+			const CurrentScope = Scope();
+			if(CurrentScope && backend_identity(CurrentScope) === backend_identity(Candidate)) { ForgetSecret?.setDisabled(!Secrets?.Bindings.alias(Candidate)); }
+			Setup.setDesc(`已启用 ${Status || `${ApiProviders[Candidate.Provider].Label} · ${Candidate.Model.trim()}`} · ${Candidate.Stream === "buffered" ? "原生整段" : "自动流式"}。回侧栏发一条短问题验证权限。`);
 		}
 		catch(ErrorValue)
 		{

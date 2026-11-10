@@ -58,6 +58,23 @@ test("Chat stream emits actual provider chunks, final cumulative usage once and 
 	assert.equal(Result.Metadata.Model, "effective-model"); assert.equal(Result.Metadata.Transport, "streaming");
 });
 
+test("Chat SSE frames sharing one cursor still deliver text and finish after reasoning", async () =>
+{
+	let Posts = 0;
+	const Deltas: string[] = [], Cursor = (V: object) => "id: same-turn\n" + frame(V);
+	const Fetch: typeof fetch = async (Url, Init) =>
+	{
+		Posts++;
+		return fixture_fetch([
+			Cursor({ id: "chat-receipt", choices: [{ index: 0, delta: { reasoning_content: "reasoning only" }, finish_reason: null }] }),
+			Cursor(chat("正")), Cursor(chat("文")), Cursor(chat("文")), Cursor(chat("", "stop")), frame("[DONE]")
+		])(Url, Init);
+	};
+	const Result = await direct_api(profile(), Key, NoNative, undefined, { Fetch })({ ...Input, OnDelta: T => Deltas.push(T) }, new AbortController().signal);
+	assert.equal(Posts, 1);
+	assert.equal(Result.Text, "正文文"); assert.deepEqual(Deltas, ["正", "文", "文"]); assert.equal(Result.Status, "completed");
+});
+
 test("Responses terminal sequence is deduplicated and incomplete body survives full final envelope", async () =>
 {
 	const Deltas: string[] = [];
@@ -108,6 +125,7 @@ test("fetch rejection, HTTP errors and non-SSE response never fall back to a sec
 		const Fetch: typeof fetch = async () => { Posts++; if(Mode === "cors") { throw TypeError("CORS"); } return new Response("{}", { status: Mode === "http" ? 401 : 200, headers: { "content-type": "application/json" } }); };
 		const Result = await direct_api(profile(), Key, async () => { Native++; throw Error("must not re-POST"); }, undefined, { Fetch })(Input, new AbortController().signal);
 		assert.equal(Posts, 1); assert.equal(Native, 0); assert.equal(Result.Status, Mode === "http" ? "failed" : "unknown");
+		if(Mode === "cors") { assert.match(Result.Metadata.Reason!, /流式.*原生整段.*启用 API 直连/); }
 	}
 });
 

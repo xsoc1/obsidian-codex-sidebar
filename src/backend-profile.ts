@@ -30,6 +30,7 @@ export type BackendProfile =
 	| { Kind: "api"; Provider: ApiProvider; Base: string; Model: string; Vision: boolean; Protocol?: ApiProtocol; Selection?: ApiModelSelection; Identity?: string; Stream?: "auto" | "buffered"; HistoryTools?: boolean }
 	| { Kind: "agent"; Agent: LocalAgent; Path: string; Model: string };
 export type ApiProfile = Extract<BackendProfile, { Kind: "api" }>;
+export type ApiCredentialScope = Pick<ApiProfile, "Kind" | "Provider" | "Base" | "Identity">;
 
 export function valid_backend_model_id(Value: unknown): Value is string
 {
@@ -155,7 +156,7 @@ export function backend_name(Profile: BackendProfile): string
 	return Profile.Kind === "api" ? ApiProviders[Profile.Provider].Label : AgentNames[Profile.Agent];
 }
 
-export function backend_identity(Profile: BackendProfile): string
+export function backend_identity(Profile: ApiCredentialScope | Pick<Extract<BackendProfile, { Kind: "agent" }>, "Kind" | "Agent" | "Path">): string
 {
 	return JSON.stringify(Profile.Kind === "api" ? [Profile.Provider, Profile.Base, ...(Profile.Identity ? [Profile.Identity] : [])] : [Profile.Agent, Profile.Path.toLowerCase()]);
 }

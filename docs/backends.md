@@ -28,7 +28,9 @@ OpenCode Go 的工作区、套餐、模型与客户端用量限制仍适用. 自
 
 **加载模型** 只发目录 GET, 不发问题、笔记或会话. [OpenCode Go](https://opencode.ai/v2/docs/console/go/#models) 使用独立公开目录, 不发送 Key, 因此可在填 Key 前加载; 目录不检查工作区权限. [OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list)、[DeepSeek](https://api-docs.deepseek.com/zh-cn/api/list-models/) 和 [Google AI Studio](https://aistudio.google.com/docs/openai#list-models) 用各自的模型列表接口. 自定义服务用所填基础地址下的 `GET /models` 和 `data[].id` 返回格式. 列出模型不代表它支持聊天或图片, 也不代表当前 Key 有权调用; 加载不会更改已填 ID 或激活连接.
 
-Key 仅保留在本次插件运行的内存中；同可信端点与身份标签下切换模型可复用，换端点、服务商或身份不复用，重载后需重新输入。 API 直连需要在客户端使用长期密钥, 适用于自己信任的设备和服务. 请求附带选区、来源快照和有限的对话历史, 服务商按其数据条款处理. 官方对密钥的安全建议见 [OpenAI API 认证](https://developers.openai.com/api/reference/overview#authentication).
+**重开后继续使用。** 在支持 SecretStorage 的 Obsidian（1.11.4 起），展开 **记住 API Key（可选）**，选择或新建一个 [Obsidian 密钥](https://docs.obsidian.md/plugins/guides/secret-storage)，再点 **启用 API 直连**。应用重开后，插件为当前连接读取该密钥；无需重填，也不会重发上次问题。插件只在设备本地保存关联名称，不将密钥写入插件配置、会话或导出。密钥本身由 Obsidian 存在当前设备和库的本地存储中，不是系统钥匙串。
+
+仅填 **直连 API Key** 时仍为临时使用，不自动保存。关联按服务商、规范化 HTTPS 端点和身份标签隔离；同账号换模型可复用。**取消关联** 不删除 Obsidian 的共享密钥，当前连接仍可用。密钥被删除或不可读时，重新选择密钥或填写临时 Key。只在信任的设备使用直连；附带材料会发送给所选服务商。
 
 默认自动模式使用 Fetch 真正 SSE 增量显示，响应详情标明实际传输。Fetch/CORS 不可用时可明确改为“原生整段”，不会为重试而自动重复 POST。停止按钮停止客户端等待，底层请求可能已抵达服务端。 没有收到可确认的结果时保留原问题与状态, 由用户决定是否另行重发. 自动行内补全在新后端默认关闭, 可以在设置中开启.
 
@@ -40,7 +42,21 @@ Key 仅保留在本次插件运行的内存中；同可信端点与身份标签�
 - **DeepSeek** 读取 [模型目录](https://api-docs.deepseek.com/api/list-models/) 的 `effort.supported_levels`. 选择档次时发送 `thinking.type=enabled` 和 `reasoning_effort`; 对提供档次的模型, `none` 发送 `thinking.type=disabled`. 见 [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/).
 - **Google AI Studio** 按 [Google 思考档次表](https://aistudio.google.com/docs/thinking#thinking-levels) 和 [兼容接口说明](https://aistudio.google.com/docs/openai#thinking) 匹配具体聊天模型 ID, 不猜测 `*-latest` 别名. Gemini 3/4 使用兼容接口的 `extra_body.google.thinking_config.thinking_level`, Gemini 2.5 使用 `reasoning_effort`. 2.5 Pro 不提供关闭思考.
 
-**使用服务商默认** 不发档次参数, 沿用原接口. 未确认的模型和其他直连预设显示默认, 不套用 Codex 的档次或 Fast. Go 和 DeepSeek 重连会核对目录; 如果原档次已不再提供, 重新选择可用档次或默认后再发. 重载插件需要再次输入 Key, 已保存档次不因重输 Key 丢失.
+**使用服务商默认** 不发档次参数, 沿用原接口. 未确认的模型和其他直连预设显示默认, 不套用 Codex 的档次或 Fast. Go 和 DeepSeek 重连会核对目录; 如果原档次已不再提供, 重新选择可用档次或默认后再发. 已保存档次不因重输临时 Key 丢失.
+
+### iPad 只显示“思考中”
+
+“已启用”只表示直连配置已生效；“思考中”表示插件正在等回答。先看原问题下的 **操作详情**（失败或结果未知时显示），不要把没有正文的原请求反复提交。
+
+如果使用 **响应传输 → 自动流式**，可以改为 **原生整段**，再点 **启用 API 直连**。用同一模型开新会话，发一条不附笔记或图片的短问题。这次对照只换传输；正文完成后才一次显示。若整段能回答，优先排查浏览器 Fetch、跨域预检和流式解析；两种都失败时，以原生请求返回的 HTTP 状态或操作详情核对权限、模型和端点。不要分享密钥或完整请求。
+
+2026-11-10 用户确认使用 OpenCode Go 的 DeepSeek V4.1。Go 实时目录与[端点表](https://opencode.ai/docs/console/go/#endpoints)均显示 `deepseek-v4.1-flash` 使用 Chat Completions，选择该上游模型即可，保留 Go 预设。本机向这一推理端点发起不含密钥的浏览器式 `OPTIONS` 预检，返回 404，没有允许跨域的响应头；该路线上的 Fetch 无法提交带这些头的 POST。[Obsidian 原生请求](https://docs.obsidian.md/Reference/TypeScript%20API/requestUrl)不受浏览器 CORS 限制。若整段响应提示模型因地区策略不可用，按 [Go 的工作区说明](https://opencode.ai/docs/console/go/#enable-restricted-models)检查 `Settings → Privacy → Regions` 的 `Global` 是否获准；不因目录可见就认定有推理权限。
+
+**同模型的 Windows 对照已通过。** 用户在 beta.15 使用 Go `deepseek-v4.1-flash`、原生整段完成了一轮真实请求。运行中和磁盘中的原操作均为 `completed`，实际模型及 `buffered` 一致，有服务商回执与完整正文（1693 个 UTF-16 码元、约 16.4 秒）。只读核对已有回执，没有发起新推理。随后按用户要求切回本机 Codex，确认 ChatGPT 登录与模型列表可用，Go 回答仍在原会话存储中。
+
+**iPad 真机也已通过原生整段。** 用户提供的失败操作文案 `API 网络请求失败; 结果待核对, 未自动重发` 来自旧版 Fetch 流式分支，随后确认切换为原生整段确实可用。建议在 Go 的 iPad 配置保持 **原生整段**；改动后须点 **启用 API 直连**，启用结果会显示实际传输。新版区分流式未建立和原生整段错误，保留已收到的 HTTP 状态，不自动换传输或重发。密钥关联跨重启的验收是另一项，已有受控重开回归，待新包上 iPad 复验。
+
+另在受控流中复现并修正：SSE `id` 重用时，旧解析器误丢正文和终态。按 [SSE 标准](https://html.spec.whatwg.org/multipage/server-sent-events.html#the-last-event-id-header)，`id` 是重连游标；只按协议事件序号去重。这项修复不影响原生整段，也不能让不允许跨域的端点支持 Fetch。
 
 ## Windows 本机 Agent
 

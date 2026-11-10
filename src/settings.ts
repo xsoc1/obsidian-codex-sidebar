@@ -35,7 +35,7 @@ export class CodexSettings extends PluginSettingTab
 		const Saved = this.Owner.connection_choices();
 		if(Saved.length)
 		{
-			new Setting(this.containerEl).setName("已保存的连接").setDesc("配置不含密钥。当前进程内可复用同端点、同身份凭据；重载后重新输入。").addDropdown(D=>
+			new Setting(this.containerEl).setName("已保存的连接").setDesc("配置不含密钥。仅复用同服务商、端点和身份的临时凭据或 Obsidian 密钥关联。").addDropdown(D=>
 			{
 				for(const P of Saved) { D.addOption(P.Id,P.Label); }
 				D.setValue(Saved.find(P=>P.Active)?.Id ?? Saved[0].Id).onChange(async Id=>
@@ -47,11 +47,11 @@ export class CodexSettings extends PluginSettingTab
 				});
 			});
 		}
-		this.CloseApiSettings = api_settings(this.containerEl, Current, async (Profile, Key, Catalog) =>
+		this.CloseApiSettings = api_settings(this.containerEl, Current, async (Profile, Key, Catalog, SecretLink) =>
 		{
-			try { await this.Owner.start_backend(Profile, Key, Catalog); }
+			try { await this.Owner.start_backend(Profile, Key, Catalog, SecretLink); return this.Owner.Status; }
 			finally { UpdateConnection(); }
-		}, (Profile,Name,Catalog)=>this.Owner.save_connection_profile(Profile,Name,Catalog));
+		}, (Profile,Name,Catalog)=>this.Owner.save_connection_profile(Profile,Name,Catalog), this.Owner.ApiSecrets ? { App: this.app, Bindings: this.Owner.ApiSecrets } : undefined);
 		if(!Platform.isWin || Platform.isMobileApp) { return; }
 		let Agent: LocalAgent = Current?.Kind === "agent" ? Current.Agent : "claude";
 		let Path = Current?.Kind === "agent" ? Current.Path : "", AgentModel = Current?.Kind === "agent" ? Current.Model : "";

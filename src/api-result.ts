@@ -152,7 +152,8 @@ export class ApiStreamAccumulator
 		if(this.Done) { return; }
 		if(Frame.Data === "[DONE]") { this.Done = true; return; }
 		const V = JSON.parse(Frame.Data), Type = V.type ?? Frame.Event;
-		const Identity = typeof V.sequence_number === "number" ? `seq:${V.sequence_number}` : Frame.Id ? `id:${Frame.Id}` : undefined;
+		// The SSE id is a reconnect cursor, not a unique frame identity.
+		const Identity = typeof V.sequence_number === "number" ? `seq:${V.sequence_number}` : undefined;
 		if(Identity)
 		{
 			if(this.Seen.has(Identity)) { return; }

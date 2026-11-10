@@ -8,9 +8,10 @@ import { backend_capabilities } from "../src/backend-capabilities";
 import { backend_model_choices } from "../src/backend-models";
 import { ConnectionProfiles } from "../src/connection-profiles";
 import { direct_api } from "../src/direct-api";
+import { ApiSecretBindings } from "../src/api-secret-bindings";
 
 const Code = buildSync({ entryPoints: ["src/api-settings.ts"], bundle: true, platform: "browser", format: "cjs", external: ["obsidian"], write: false }).outputFiles[0].text;
-function settings_fixture(Http: (Request: any) => Promise<any>, Current: ApiProfile | null = null)
+function settings_fixture(Http: (Request: any) => Promise<any>, Current: ApiProfile | null = null, Bindings?: ApiSecretBindings)
 {
 	const Settings: any[] = [], Attempts: any[] = [], Saved: any[] = [];
 	let FailActivation = false;
@@ -39,19 +40,52 @@ function settings_fixture(Http: (Request: any) => Promise<any>, Current: ApiProf
 		addText(Build: any) { return this.control("text", Build); }
 		addToggle(Build: any) { return this.control("toggle", Build); }
 		addButton(Build: any) { return this.control("button", Build); }
+		addComponent(Build: any) { this.Controls.push(Build({})); return this; }
+	}
+	class SecretComponent
+	{
+		Type = "secret"; Value = "";
+		Change = (_Value: string | null) => {};
+		setValue(Value: string) { this.Value = Value; return this; }
+		onChange(Handler: (Value: string | null) => void) { this.Change = Value => { this.Value = Value ?? ""; Handler(Value); }; return this; }
 	}
 	const Export = { exports: {} as any };
-	runInNewContext(Code, { module: Export, exports: Export.exports, require: (Name: string) => { assert.equal(Name, "obsidian"); return { Setting, requestUrl: Http }; },
+	runInNewContext(Code, { module: Export, exports: Export.exports, require: (Name: string) => { assert.equal(Name, "obsidian"); return { Setting, SecretComponent, requestUrl: Http }; },
 		crypto: { randomUUID }, URL, AbortController, TextEncoder, TextDecoder, DOMException, setTimeout, clearTimeout, structuredClone });
-	const Close = Export.exports.api_settings({}, Current, async (Profile: any, Key: string, Catalog?: any[]) =>
+	const Close = Export.exports.api_settings({}, Current, async (Profile: any, Key: string, Catalog?: any[], Alias?: string) =>
 	{
-		Attempts.push({ Profile, Key, Catalog });
+		Attempts.push({ Profile, Key, Catalog, ...(Alias ? { Alias } : {}) });
 		if(FailActivation) { throw Error("original activation failure"); }
-	}, (Profile: any, Name: string, Catalog?: any[]) => Saved.push({ Profile, Name, Catalog }));
+	}, (Profile: any, Name: string, Catalog?: any[]) => Saved.push({ Profile, Name, Catalog }), Bindings ? { App: {}, Bindings } : undefined);
 	const Row = (Name: string) => { const Found = Settings.find(S => S.Name === Name); assert.ok(Found, Name); return Found; };
 	const Control = (Name: string, Type: string) => { const Found = Row(Name).Controls.find((C: any) => C.Type === Type); assert.ok(Found, Name + Type); return Found; };
 	return { Row, Control, Attempts, Saved, Close, fail_activation: (Value: boolean) => { FailActivation = Value; } };
 }
+
+test("API settings apply the chosen secret and transport explicitly, and changing scope clears the draft credential", async () =>
+{
+	const Profile = backend_profile({ Kind: "api", Provider: "opencode", Model: "deepseek-v4.1-flash", Stream: "auto" }) as ApiProfile;
+	const Values = new Map<string, string>(), Local = { getItem: (K: string) => Values.get(K) ?? null, setItem: (K: string, V: string) => { Values.set(K, V); }, removeItem: (K: string) => { Values.delete(K); } };
+	const Bindings = new ApiSecretBindings(Local, "fixture:", { getSecret: () => assert.fail("the public Go catalog and draft never read the secret") });
+	Bindings.set(Profile, "original-go");
+	const F = settings_fixture(async Request => { assert.equal(Request.headers.Authorization, undefined); return { status: 200, json: { data: [] } }; }, Profile, Bindings);
+	try
+	{
+		const Picker = F.Control("记住 API Key（可选）", "secret"), Input = F.Control("直连 API Key", "text").inputEl;
+		assert.equal(Picker.Value, "original-go");
+		await F.Control("上游模型", "button").Click();
+		F.Control("响应传输", "dropdown").Change("buffered");
+		assert.equal(F.Attempts.length, 0);
+		await F.Control("", "button").Click();
+		assert.equal(F.Attempts[0].Profile.Stream, "buffered"); assert.equal(F.Attempts[0].Alias, "original-go"); assert.equal(F.Attempts[0].Key, "");
+		assert.match(F.Row("").Desc, /原生整段/);
+		F.Control("身份标签", "text").Change("other"); assert.equal(Picker.Value, "");
+		Picker.Change("other-go"); Input.value = "fixture-temporary"; Input.input(); assert.equal(Picker.Value, "");
+		F.Control("身份标签", "text").Change(""); assert.equal(Picker.Value, "original-go"); assert.equal(Input.value, "");
+		F.Control("记住 API Key（可选）", "button").Click(); assert.equal(Picker.Value, ""); assert.equal(Bindings.alias(Profile), "");
+	}
+	finally { F.Close(); }
+});
 const GoCatalog = [
 	{ id: "original-image", modalities: { input: ["text", "image/jpeg"] }, api: { responses: {} } },
 	{ id: "original-text", modalities: { input: ["text"] }, api: { "chat-completions": {} } }, { id: "original-unknown" }

@@ -71,6 +71,7 @@ import { direct_api, direct_api_key } from "./direct-api";
 import { snapshot_instructions } from "./prompt";
 import { MathCompletionInstructions, completion_prompt, parse_completion } from "./completion-prompt";
 import { ConnectionProfiles, ConnectionCredentials } from "./connection-profiles";
+import { ApiSecretBindings } from "./api-secret-bindings";
 import { verify_quoted_body, quote_input_ready } from "./quote-input";
 import { preserve_terminal_messages } from "./runtime/terminal-messages";
 import { apply_backend_evidence, type BackendEvidence } from "./backend-events";
@@ -428,6 +429,7 @@ export default class CodexSidebarPlugin extends Plugin
 	private BackendKey = "";
 	private Profiles: ConnectionProfiles | null = null;
 	private readonly Credentials = new ConnectionCredentials();
+	ApiSecrets?: ApiSecretBindings;
 	private BackendCatalog: ApiCatalogModel[] = [];
 	private BackendReasoning = new Map<string, ApiCatalogModel["Reasoning"]>();
 	private HostInfo: { cwd: string; vault: string; cli: string; client: string; mathWritingVersion?: string; pdfPageImages?: number } | null = null;
@@ -500,6 +502,13 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		return backend_model_choices(Profile, this.BackendCatalog);
 	}
+	private backend_secret(Profile: BackendProfile): string
+	{
+		const Memory = this.Credentials.get(Profile);
+		if(Memory || Profile.Kind !== "api" || !this.ApiSecrets) { return Memory; }
+		const Alias = this.ApiSecrets.alias(Profile);
+		return Alias ? this.ApiSecrets.read(Alias) : "";
+	}
 
 	private async prepare_backend(Profile: BackendProfile, Secret: string, Catalog?: ApiCatalogModel[], Refresh=false): Promise<{ Profile: BackendProfile; Driver: BackendDriver; Catalog: ApiCatalogModel[]; Reasoning: Map<string, ApiCatalogModel["Reasoning"]>; Error: string }>
 	{
@@ -569,6 +578,7 @@ export default class CodexSidebarPlugin extends Plugin
 	{
 		this.RemoteKey = `codex-sidebar-remote:${this.app.vault.getName()}`;
 		this.BackendStorage = `codex-sidebar-backend:${this.app.vault.getName()}`;
+		if(typeof this.app.secretStorage?.getSecret === "function") { this.ApiSecrets = new ApiSecretBindings(localStorage, this.BackendStorage + ":secret:", this.app.secretStorage); }
 		try { this.Profiles = new ConnectionProfiles(localStorage, this.app.vault.getName()); }
 		catch(E) { new Notice(error_text(E)); }
 		const Device = localStorage.getItem(this.BackendStorage + ":device") ?? "";
@@ -1251,13 +1261,14 @@ export default class CodexSidebarPlugin extends Plugin
 		await this.persist();
 	}
 
-	async start_backend(Input: unknown, Key = "", Catalog?: ApiCatalogModel[]): Promise<void>
+	async start_backend(Input: unknown, Key = "", Catalog?: ApiCatalogModel[], SecretLink?: string): Promise<void>
 	{
 		let Profile = backend_profile(Input);
 		if(Profile.Kind === "agent" && Platform.isMobileApp) { throw new Error("本机 Agent 需要 Windows"); }
-		const Supplied = Key.trim() || this.Credentials.get(Profile);
+		if(SecretLink && (Profile.Kind !== "api" || !this.ApiSecrets || Key.trim())) { throw new Error("请选择 Obsidian 密钥或填写临时 API Key，不能同时使用"); }
+		const Supplied = Key.trim() || (SecretLink ? this.ApiSecrets!.read(SecretLink) : this.backend_secret(Profile));
 		const Secret = Profile.Kind === "api" || Supplied && Profile.Agent !== "claude" ? direct_api_key(Supplied) : "";
-		if(Secret && JSON.stringify(Profile).includes(Secret)) { throw new Error("请只在密钥栏输入 API Key"); }
+		if(Secret && (JSON.stringify(Profile).includes(Secret) || SecretLink?.includes(Secret))) { throw new Error("请只在密钥值栏输入 API Key"); }
 		this.check_connection_change();
 		this.ChatPreparing = true;
 		try
@@ -1296,6 +1307,11 @@ export default class CodexSidebarPlugin extends Plugin
 			this.Status = `${backend_name(Profile)} · ${backend_model(Profile)}`;
 			this.SkillStatus = "使用插件内置数学规则";
 			this.Credentials.set(Profile, Secret);
+			if(Profile.Kind === "api" && this.ApiSecrets && (SecretLink !== undefined || Key.trim() && this.ApiSecrets.alias(Profile)))
+			{
+				try { this.ApiSecrets.set(Profile, SecretLink ?? null); }
+				catch { this.Status += "；Obsidian 密钥关联未更新，请检查设置"; }
+			}
 			try { this.Profiles?.save(Profile, "", Prepared.Catalog); }
 			catch(E) { this.Status += "；连接可用，但配置尚未保存："+error_text(E); }
 		}
@@ -1409,7 +1425,7 @@ export default class CodexSidebarPlugin extends Plugin
 			const CliPath = this.Remote.Enabled || Backend ? "" : this.State.Settings.CliPath.trim() || await this.Desktop!.discover_cli();
 			const Send = (Value: BrowserRequest) => requestUrl({ ...Value, throw: false });
 			let Reasoning: ApiCatalogModel["Reasoning"], ReasoningError = "";
-			const Prepared = Backend ? await this.prepare_backend(Backend, this.BackendKey || this.Credentials.get(Backend), Catalog, true) : null;
+			const Prepared = Backend ? await this.prepare_backend(Backend, this.BackendKey || this.backend_secret(Backend), Catalog, true) : null;
 			if(Prepared) { this.BackendCatalog=Prepared.Catalog; this.BackendReasoning=Prepared.Reasoning; Reasoning=Prepared.Reasoning.get(Backend!.Model); ReasoningError=Prepared.Error; }
 			const Driver = Prepared?.Driver ?? null;
 			if(Generation !== this.Generation || this.Unloaded)

@@ -48,7 +48,7 @@ async function wait_for_edit(Instance: any): Promise<void>
 	for(let Index = 0; Index < 400 && !Instance.Edits.Store.Data.Writes.length; Index++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
 }
 
-async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Files?: Map<string, string>; Local?: Map<string, string>; Clone?: typeof structuredClone; Fetch?: typeof fetch; Vault?: string }, Desktop?: { spawn(Cli: string, Args: string[], Options: any): unknown })
+async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Files?: Map<string, string>; Local?: Map<string, string>; Secrets?: Map<string, string>; Clone?: typeof structuredClone; Fetch?: typeof fetch; Vault?: string }, Desktop?: { spawn(Cli: string, Args: string[], Options: any): unknown })
 {
 	const Required: string[] = []; const Files = Saved?.Files ?? new Map<string, string>(); const Local = Saved?.Local ?? new Map<string, string>();
 	if(!Databases.has(Local)) { Databases.set(Local, new IDBFactory()); }
@@ -96,6 +96,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	{
 		manifest = { id: "codex-sidebar", dir: ".obsidian/plugins/codex-sidebar" };
 		app = {
+			...(Saved?.Secrets ? { secretStorage: { getSecret: (Name: string) => Saved.Secrets!.get(Name) ?? null } } : {}),
 			vault: {
 				on: () => {},
 				getName: () => Saved?.Vault ?? "test", adapter: Object.assign(new FileSystemAdapter(), {
@@ -166,7 +167,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 			const Response = await Http?.({ ...Params, url: Url });
 			return { status: Response.status, json: async () => Response.json };
 		}),
-		localStorage: { getItem: (Key: string) => Local.get(Key), setItem: (Key: string, Value: string) => Local.set(Key, Value) },
+		localStorage: { getItem: (Key: string) => Local.get(Key), setItem: (Key: string, Value: string) => Local.set(Key, Value), removeItem: (Key: string) => Local.delete(Key) },
 		require(Name: string)
 		{
 			Required.push(Name);
@@ -195,7 +196,7 @@ async function mobile_fixture(Http?: (Params: any) => Promise<any>, Saved?: { Fi
 	const Instance = new Export.exports.default(); await Instance.onload();
 	// This fixture implements native JSON transport, not SSE or function-call responses.
 	const Activate=Instance.start_backend.bind(Instance);
-	Instance.start_backend=(Profile:any,Key:string,Catalog?:any[])=>Activate(Profile.Kind==="api"?{...Profile,Stream:"buffered",HistoryTools:false}:Profile,Key,Catalog);
+	Instance.start_backend=(Profile:any,Key:string,Catalog?:any[],SecretLink?:string)=>Activate(Profile.Kind==="api"?{...Profile,Stream:"buffered",HistoryTools:false}:Profile,Key,Catalog,SecretLink);
 	return { Instance, activate_backend: Activate, Files, Required, Local, Tabs, Settings, Notices, Modals, MarkdownView: Component, Views, emit: (Name: string, ...Args: any[]) => WorkspaceEvents.get(Name)?.forEach(Handler => Handler(...Args)), browser_requests: () => BrowserRequests };
 }
 
@@ -421,6 +422,52 @@ test("mobile API mode saves a confirmed-write proposal locally, isolates provide
 		await assert.rejects(Restart.Instance.ensure_connection(), /API Key/); assert.equal(Requests.length, 1);
 	}
 	finally { Restart.Instance.onunload(); }
+});
+
+test("mobile reopens a remembered Go buffered connection without storing the key in plugin state or resubmitting", async () =>
+{
+	const Key = "fixture-only-go-secret", Alias = "fixture-go", Model = "deepseek-v4.1-flash";
+	const Profile = { Kind: "api", Provider: "opencode", Model, Stream: "buffered", HistoryTools: false };
+	const Secrets = new Map([[Alias, Key]]), Catalog = [{ Id: Model, Protocol: "chat" }];
+	let Posts = 0;
+	const Http = async (Params: any) =>
+	{
+		if(Params.method === "GET") { assert.equal(Params.headers.Authorization, undefined); return { status: 200, json: { data: [{ id: Model, api: { "chat-completions": {} } }] } }; }
+		Posts++;
+		assert.equal(Params.headers.Authorization, `Bearer ${Key}`);
+		assert.equal(JSON.parse(Params.body).stream, false);
+		return { status: 200, json: { id: "receipt-" + Posts, model: Model, choices: [{ message: { content: "OK" }, finish_reason: "stop" }] } };
+	};
+	const F = await mobile_fixture(Http, { Secrets }), P = F.Instance;
+	try
+	{
+		await F.activate_backend(Profile, "", Catalog, Alias);
+		assert.equal(P.ApiSecrets.alias(P.Backend), Alias);
+		await assert.rejects(F.activate_backend({ ...Profile, Identity: "other-account" }, "", Catalog), /API Key/);
+		await assert.rejects(F.activate_backend({ ...Profile, Provider: "compatible", Base: "https://other.invalid/v1" }, "", Catalog), /API Key/);
+		assert.equal(Posts, 0);
+	}
+	finally { P.onunload(); await P.SaveQueue?.catch(() => {}); }
+	const Reopen = () => mobile_fixture(Http, { Files: F.Files, Local: F.Local, Secrets });
+	const R = await Reopen(), Q = R.Instance;
+	try
+	{
+		assert.equal(Q.Backend.Stream, "buffered");
+		await Q.ensure_connection();
+		assert.equal(Posts, 0);
+		assert.equal(await Q.send_message("只回复 OK", null), true);
+		for(let I = 0; I < 200 && (Q.Busy || Q.BackendSaveBlocked); I++) { await new Promise(R => setTimeout(R, 5)); }
+		assert.equal(Q.Session.Messages.at(-1).Text, "OK");
+		assert.equal(Q.Session.Messages.at(-1).BackendResult.Metadata.Transport, "buffered");
+		assert.equal(Posts, 1);
+		assert.ok([...F.Local.values(), ...F.Files.values(), ...R.Notices].every(Value => !Value.includes(Key)));
+		Q.ApiSecrets.set(Q.Backend, null);
+		assert.equal(Secrets.get(Alias), Key, "unlinking must not delete another plugin's secret");
+	}
+	finally { Q.onunload(); await Q.SaveQueue?.catch(() => {}); }
+	const Unlinked = await Reopen();
+	try { await assert.rejects(Unlinked.Instance.ensure_connection(), /API Key/); assert.equal(Posts, 1); }
+	finally { Unlinked.Instance.onunload(); }
 });
 
 test("failed API activation keeps the draft and the selected catalog model for an in-place retry", async () =>
@@ -2030,6 +2077,31 @@ test("R04 slow checkpoint and terminal takeover cannot discard a newer delta or 
   ReleaseHttp({status:200,json:{id:"terminal-receipt",choices:[{finish_reason:"stop",message:{content:"最终完整原说明"}}]}});for(let I=0;I<150&&P.CompletedTurns.size!==1;I++)await new Promise(R=>setTimeout(R,5));
   await P.Checkpoints.flush();assert.equal(P.CompletedTurns.size,1);assert.equal(Posts,1);assert.ok(P.Session.Messages.some((M:any)=>M.Id==="unrelated-new"));assert.ok(JSON.parse(F.Files.get(P.state_path())!).Sessions[0].Messages.some((M:any)=>M.Text==="最终完整原说明"));
  }finally{ReleaseWrite?.();P.onunload();await P.SaveQueue?.catch(()=>{});}
+});
+
+test("mobile API saves the answer after reasoning when SSE events share one cursor", async () =>
+{
+	let Posts = 0;
+	const Text = "正文：$2+2=4$。", Frame = (Delta: object, Finish: string | null = null) => `id: turn-cursor\ndata: ${JSON.stringify({ id: "fixture-reply", choices: [{ index: 0, delta: Delta, finish_reason: Finish }] })}\n\n`;
+	const Fetch: typeof fetch = async () =>
+	{
+		Posts++;
+		return new Response(Frame({ reasoning_content: "fixture reasoning" }) + Frame({ content: Text }) + Frame({}, "stop") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+	};
+	const F = await mobile_fixture(async () => { throw Error("Unexpected native fallback"); }, { Fetch }), P = F.Instance;
+	try
+	{
+		await F.activate_backend({ Kind: "api", Provider: "compatible", Base: "https://fixture.invalid/v1", Model: "fixture" }, "fixture-stream-key", []);
+		assert.equal(await P.send_message("计算 2+2", null), true);
+		for(let I = 0; I < 200 && (P.Busy || P.BackendSaveBlocked); I++) { await new Promise(R => setTimeout(R, 5)); }
+		assert.equal(Posts, 1);
+		assert.equal(P.Busy, false);
+		assert.equal(P.Session.Messages.at(-1).Text, Text);
+		assert.equal(P.Session.Messages.at(-1).BackendResult.Status, "completed");
+		const Saved = JSON.parse(F.Files.get(P.state_path())!);
+		assert.equal(Saved.Sessions.find((S: any) => S.Id === P.Session.Id).Messages.at(-1).Text, Text);
+	}
+	finally { P.onunload(); await P.SaveQueue?.catch(() => {}); }
 });
 
 test("R01 R03 actual host SSE signed history continuation persists terminal retry with exactly two inference requests",async()=>

@@ -118,7 +118,7 @@ async function streaming_request(Request: BrowserRequest, Protocol: "chat" | "re
 	}
 	catch(E)
 	{
-		const Parsed = Stream?.result(Signal.aborted ? "stopped-waiting" : E instanceof Error ? E.message : "stream-interrupted") ?? unknown_result("API 网络请求失败; 结果待核对, 未自动重发", "streaming");
+		const Parsed = Stream?.result(Signal.aborted ? "stopped-waiting" : E instanceof Error ? E.message : "stream-interrupted") ?? unknown_result(Signal.aborted ? "已停止等待，服务端取消未确认" : "API 流式请求未建立；可在设置改为「原生整段」并点「启用 API 直连」。原请求待核对，未自动重发", "streaming");
 		if(E instanceof ApiReplayError)
 		{
 			Parsed.Calls = []; Parsed.Result.Status = Parsed.Result.Text ? "partial" : "failed";
@@ -191,8 +191,13 @@ export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, R
 					// requestUrl cannot be aborted; the original result remains observable after local stop.
 					const Pending = Promise.resolve(Send(Http)).then(Result =>
 					{
-						const Value = Result.status < 200 || Result.status >= 300 ? http_failure(Result.status, Clean(Result.json)) : parse_api_result(Result.json, Protocol, Result.headers?.["x-request-id"], RememberOpaque);
-						try { AccountBytes(Encoder.encode(JSON.stringify(Result.json) ?? "").byteLength); }
+						let Json: any, InvalidJson = false;
+						try { Json = Result.json; } catch { InvalidJson = true; }
+						const Value = Result.status < 200 || Result.status >= 300 ? http_failure(Result.status, Clean(Json)) : InvalidJson
+							? unknown_result(`API 原生整段收到 HTTP ${Result.status}，但正文不是有效 JSON；原请求待核对，未自动重发`, "buffered")
+							: parse_api_result(Json, Protocol, Result.headers?.["x-request-id"], RememberOpaque);
+						if(InvalidJson && Value.Result.Status === "unknown") { Value.Result.Metadata.Wait = "finished"; }
+						try { AccountBytes(Encoder.encode(JSON.stringify(Json) ?? "").byteLength); }
 						catch(E)
 						{
 							if(!(E instanceof ApiReplayError)) { throw E; }
@@ -210,7 +215,7 @@ export function direct_api(Profile: Profile, Key: string, Send: NativeRequest, R
 					});
 					Parsed = await stream_step(Pending, Remaining, "API 整体运行预算已到");
 				}
-				catch { TimedOut = true; Parsed = unknown_result("API 网络请求失败或超时, 服务端结果待核对; 未自动重发", "buffered"); }
+				catch { TimedOut = true; Parsed = unknown_result("API 原生整段请求失败或超时，服务端结果待核对；未自动重发", "buffered"); }
 			}
 			else
 			{
