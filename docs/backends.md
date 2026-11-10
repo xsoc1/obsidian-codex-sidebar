@@ -58,6 +58,12 @@ OpenCode Go 的工作区、套餐、模型与客户端用量限制仍适用. 自
 
 另在受控流中复现并修正：SSE `id` 重用时，旧解析器误丢正文和终态。按 [SSE 标准](https://html.spec.whatwg.org/multipage/server-sent-events.html#the-last-event-id-header)，`id` 是重连游标；只按协议事件序号去重。这项修复不影响原生整段，也不能让不允许跨域的端点支持 Fetch。
 
+### beta.16 验收
+
+- `npm run build`、`npm test`：531 项通过，1 项 opt-in 基准跳过。移动构建模拟重开后读取同一 Obsidian 密钥并保留整段模式，重开不发推理；另覆盖身份与端点隔离、取消关联、旧版临时 Key、响应解析和无自动重发。
+- Windows 原生读回：密钥选择与临时掩码输入可见，本机 Codex、会话、修改记录和设置保留。真实设备上的 Go 整段调用和模拟重开证据分开记录；新版关联仍需在 iPad 重开一次确认。
+- [Windows/Ubuntu CI](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/42772262362)、[发布流程](https://github.com/xsoc1/obsidian-codex-sidebar/actions/runs/42772557066)通过。已发布 [beta.16](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.16)，7 项资产及两份 ZIP 读回，四份 Windows 插件文件与公开资产一致。独立桥保持 beta.15。
+
 ## Windows 本机 Agent
 
 - **Codex** 使用 **启动本机 Codex** 复用已登录的后台 app-server. 同一区也提供临时 OpenAI API Key 登录.
