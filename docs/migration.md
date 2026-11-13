@@ -2,7 +2,7 @@
 
 ## beta.17 交互答案
 
-本次只需升级客户端, beta.15 独立桥继续可用. 会话 schema/远程协议仍为 2, 原问答、来源和修改记录不迁移. 新组件数据保存在原回答的普通 Markdown 代码块内; 旧客户端显示完整正文及原始代码块. 设备参数独立保存在 localStorage, 不被远程聊天状态覆盖. 回退只替换程序, 旧程序忽略新参数记录; 不还原整份旧聊天状态. [使用说明](interactive-answers.md).
+本次只需升级客户端, beta.15 独立桥继续可用. 会话 schema/远程协议仍为 2, 原问答、来源和修改记录不迁移. 新组件数据保存在原回答的普通 Markdown 代码块内; 旧客户端显示完整正文及原始代码块. 设备参数独立保存在 localStorage, 不被远程聊天状态覆盖. 回退只替换程序, 旧程序忽略新参数记录; 不还原整份旧聊天状态. [在线使用说明](https://github.com/xsoc1/obsidian-codex-sidebar/blob/2.0.0-beta.17/docs/interactive-answers.md).
 
 ## beta.16
 
