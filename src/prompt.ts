@@ -1,6 +1,7 @@
 import { ChatWriteRules, EditingRules } from "./edit/rules";
 import { ExpositionRules } from "./exposition/rules";
 import { followup_instructions } from "./followup";
+import { InteractiveRules } from "./interactive/rules";
 import { LegacyInstructions, PreviousInstructions, PriorDefaultInstructions, V09DefaultInstructions, V0111DefaultInstructions } from "./exposition/legacy";
 export { LegacyInstructions, PreviousInstructions, PriorDefaultInstructions, V09DefaultInstructions, V0111DefaultInstructions, EditingRules };
 
@@ -18,13 +19,14 @@ Obsidian 输出:
 - 使用正常 Markdown 段落、标题、callout, 列表前留空行; 不用大代码块包住整篇. 表格竖线转义, 复杂公式放表格外.
 - 仅对已知存在的笔记使用 [[路径|显示文字]] 或标题链接. 网页引用用 [来源名称](完整网址). 不猜测路径或来源.`;
 
-export const ManagedInstructions = ChatWriteRules + "\n\n" + EditingRules + "\n\n" + ExpositionRules;
+const PreviousManagedInstructions = ChatWriteRules + "\n\n" + EditingRules + "\n\n" + ExpositionRules;
+export const ManagedInstructions = PreviousManagedInstructions + "\n\n" + InteractiveRules;
 const ManagedTail = "\n\n" + ManagedInstructions;
 export const DefaultInstructions = CurrentInstructions + ManagedTail;
 
 export function migrate_instructions(Instructions: string): string
 {
-	return [LegacyInstructions, PreviousInstructions, PriorDefaultInstructions, V09DefaultInstructions, V0111DefaultInstructions].includes(Instructions) ? DefaultInstructions : Instructions;
+	return [LegacyInstructions, PreviousInstructions, PriorDefaultInstructions, V09DefaultInstructions, V0111DefaultInstructions, CurrentInstructions + "\n\n" + PreviousManagedInstructions].includes(Instructions) ? DefaultInstructions : Instructions;
 }
 
 export function editing_instructions(Instructions: string): string

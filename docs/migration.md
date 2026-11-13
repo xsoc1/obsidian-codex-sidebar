@@ -1,8 +1,21 @@
 # 2.0 候选升级、迁移与回退
 
+## beta.17 交互答案
+
+本次只需升级客户端, beta.15 独立桥继续可用. 会话 schema/远程协议仍为 2, 原问答、来源和修改记录不迁移. 新组件数据保存在原回答的普通 Markdown 代码块内; 旧客户端显示完整正文及原始代码块. 设备参数独立保存在 localStorage, 不被远程聊天状态覆盖. 回退只替换程序, 旧程序忽略新参数记录; 不还原整份旧聊天状态. [使用说明](interactive-answers.md).
+
 ## beta.16
 
 仅更新客户端即可，beta.15 独立桥无需升级。旧 API 连接和历史无需迁移；临时 Key 不会自动写入 Obsidian 密钥存储。在当前设备通过 [记住 API Key](backends.md#api-直连) 关联密钥后重开即可使用，关联不会改变历史身份。回退旧插件程序会忽略关联，旧版继续使用临时 Key；不要用旧数据覆盖新会话。
+
+### BRAT 提示找不到 manifest.json
+
+先在出错设备的 Safari 打开 [beta.16 清单直链](https://github.com/xsoc1/obsidian-codex-sidebar/releases/download/2.0.0-beta.16/manifest.json)。2026-11-10 本机读回 beta.16 与正式版 1.1.0 的独立清单均为 HTTP 200，ID 和版本正确；用户也确认 iPad Safari 可读 beta.16 清单。BRAT 下载失败也可能显示“没有清单”，不代表发布包缺文件；见 [BRAT 2.2.0 下载代码](https://github.com/TfTHacker/obsidian42-brat/blob/2.2.0/src/features/githubUtils.ts)。
+
+- 直链打不开：先在该设备换一个能访问 GitHub 发布资产的网络，再试 BRAT。下载会从 `github.com` 跳转到 `release-assets.githubusercontent.com`，只打开发布页面不能验证后一跳。
+- 直链可读：在 BRAT 的插件列表编辑 `xsoc1/obsidian-codex-sidebar` 的跟踪版本，明确选 `2.0.0-beta.16` 后确认。已固定旧版本时不要用普通更新按钮等待自动升版。见 [BRAT 版本跟踪说明](https://github.com/TfTHacker/obsidian42-brat/blob/2.2.0/BRAT-DEVELOPER-GUIDE.md)。
+
+无需卸载插件、删除目录或修改 API Key。若直链可读但指定版本仍失败，保留当前安装并提供 BRAT 版本和新的错误文字。
 
 ## beta.15
 

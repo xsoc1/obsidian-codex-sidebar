@@ -4,7 +4,7 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
-**[2.0.0-beta.16](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.16)** 的 API 直连可关联 Obsidian 密钥，重开后无需重填。iPad 使用 OpenCode Go 时建议选择「原生整段」。[设置与验收](docs/backends.md)
+**2.0.0-beta.17** 新增[可调参数图与符号/条件定位](docs/interactive-answers.md): 完整回答后可调参数、核对出处, 带当前状态继续追问. API 直连仍可关联 Obsidian 密钥; iPad 使用 OpenCode Go 时建议选择「原生整段」。[连接设置](docs/backends.md)
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -12,6 +12,7 @@
 
 - **笔记伴读**: 捕获编辑选区或当前阅读位置, 解释概念、说明符号、展开推导、检查证明. Agent 可按需搜索整个当前笔记库并补读相关内容, 长文支持分页与版本检查. 上下文保留原 Markdown 和公式.
 - **数学与 PDF**: 渲染 Markdown、LaTeX 公式、列表和表格; 支持 PDF 选段、选页和阅读器工具栏的 **Codex 框选**, 松手即附局部图. 整页和局部图每轮合计最多两张.
+- **交互解释**: 完整回答可附本地参数图、符号与使用条件; 引用逐字核对原快照后定位来源. 参数按设备保存, 追问先填入草稿, 不自动发送或写笔记.
 - **审核后修改笔记**: 点击“生成修改预览”, 查看目标、原文和拟采用稿, 确认后写入. 支持 AI 自选、严格选区和整篇范围, 并提供冲突检查与安全撤销.
 - **回答追问**: 选中回答中的一段继续提问, 可将补充解释融入完整原说明, 方便连接上下文.
 - **会话管理**: 随笔记切换对应会话, 保留历史; 优先恢复当前会话, 其他正文按需读取, 长会话分段浏览. 问题先保存再提交, 断线后核对原操作. 支持设备本地草稿、编辑问题、分支重发、确认删除与完整会话导出, 沿用原始来源快照.
@@ -38,7 +39,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.16` 属于预发布版本，在 BRAT 中需指定此版本。已有 beta.15 独立桥可继续使用；从更早版本迁移及代码回退请参阅 [升级说明](docs/migration.md)。
+`2.0.0-beta.17` 属于预发布版本，在 BRAT 中需指定此版本。已有 beta.15 独立桥可继续使用；从更早版本迁移及代码回退请参阅 [升级说明](docs/migration.md)。
 
 
 ### iPad

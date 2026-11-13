@@ -18,7 +18,10 @@ import { MessageList, type MessageNode } from "./message-list";
 import { SelectionPreview, selection_in_source, explanation_preview } from "./selection-preview";
 import { accessible_name, error_text } from "./ui-helpers";
 import { HistoryWindow } from "./history-window";
-import { answer_sources, source_path, render_sources } from "./sources";
+import { answer_sources, source_path, render_sources, open_source } from "./sources";
+import { interactive_output } from "./interactive/protocol";
+import { render_interactive } from "./interactive/panel";
+import { interactive_contexts } from "./interactive/context";
 import { followup_index, operation_label } from "./history-view-state";
 import { HistoryRenderState } from "./history-render-state";
 import { EditViewState } from "./edit-view-state";
@@ -1023,7 +1026,34 @@ export class CodexView extends ItemView
 							if(Link && (Link.classList.contains("internal-link") || (!!Href && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(Href)))) { Event.preventDefault(); Event.stopImmediatePropagation(); new Notice(Moved || Missing ? "原来源已移动或缺失, 这条回答仍保留产生时的相对链接基准; 请从来源清单核对目标, 未按新目录或同名文件猜测跳转" : "这条旧回答缺少可靠来源路径, 请从原快照核对链接; 未按当前笔记或同名文件猜测跳转"); }
 						}, { capture: true });
 					}
-					if(Message.Role === "assistant") { bind_answer_blocks(Body, Message.Text, MessageKey); }
+					if(Message.Role === "assistant")
+					{
+						bind_answer_blocks(Body, Message.Text, MessageKey);
+						const OriginalText = Message.Text;
+						const Output = interactive_output(OriginalText, Message.Phase !== "commentary" && Message.CompletionStatus === "completed" && (!Message.BackendResult || Message.BackendResult.Status === "completed"));
+						if(Output.Status !== "none")
+						{
+							const Refs = structuredClone(Source?.Sources ?? answer_sources(Messages, Message));
+							const Contexts = interactive_contexts(Messages, Message);
+							const Active = () => RenderScope === this.draft_scope() && RenderSessionId === this.Owner.Session.Id && this.Owner.Session.Messages.some(M => M.Id === Message.Id && M.Text === OriginalText);
+							const Dispose = await render_interactive(Card, Body, OriginalText, Output, {
+									Scope: RenderScope, SessionId: RenderSessionId, MessageId: Message.Id, Contexts, Sources: Refs, Storage: localStorage, Active,
+								Markdown: (Text, Root) => MarkdownRenderer.render(this.app, Text, Root, Path, RenderComponent),
+								OpenSource: async Ref => (await open_source(this.app, Ref)).Message,
+								Copy: async Text => { if(!navigator.clipboard?.writeText) { throw Error("当前环境无法访问剪贴板"); } await navigator.clipboard.writeText(Text); },
+								Followup: (Question, Selection) =>
+								{
+									if(!Active() || this.input_blocked() || this.Owner.BackendSaveBlocked) { return; }
+									this.sync_draft();
+									if(this.Input.value.trim() || this.Owner.AnswerQuote || this.DraftRestore || this.DraftBlocked) { new Notice("请先处理当前草稿或引用, 再带入交互追问"); return; }
+									this.Owner.AnswerQuote = answer_quote(RenderSessionId, Message.Id, Selection, OriginalText, "completed", { SourcePath: Path, SourceReferences: Refs });
+									this.SelectedAnswer = null; this.Input.value = Question; this.save_draft(); this.refresh();
+									if(this.ComposePanel) { reveal_sidebar_panel(this.ComposePanel); } this.Input.focus();
+								}
+							});
+							RenderComponent.register(Dispose);
+						}
+					}
 				}
 			}
 			else

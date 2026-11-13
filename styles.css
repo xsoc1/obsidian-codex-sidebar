@@ -496,3 +496,50 @@
 }
 .pdf-toolbar button.codex-pdf-toolbar-action:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
 .is-mobile .pdf-toolbar button.codex-pdf-toolbar-action { min-height: 36px; }
+.codex-interactive {
+	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 16px;
+	padding-top: 12px;
+	min-width: 0;
+}
+.codex-interactive-status:empty { display: none; }
+.codex-interactive-status, .codex-symbol-origin, .codex-symbol-metadata, .codex-plot-status, .codex-plot-caption {
+	font-size: var(--font-small);
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}
+.codex-interactive-status:not(:empty) { margin-bottom: 8px; }
+.codex-plot { min-width: 0; }
+.codex-plot-title { margin: 8px 0 6px; font-size: 1em; }
+.codex-plot-kind { display: block; color: var(--text-muted); font-size: var(--font-small); margin-bottom: 6px; }
+.codex-plot-expression { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.codex-plot-svg { display: block; width: 100%; height: auto; margin: 8px 0; }
+.codex-plot-controls { display: grid; gap: 12px; margin: 8px 0; }
+.codex-plot-parameter { display: grid; gap: 4px; }
+.codex-plot-parameter-heading { display: flex; justify-content: space-between; gap: 12px; }
+.codex-plot-value { font-variant-numeric: tabular-nums; color: var(--text-accent); }
+.codex-plot input.codex-plot-slider[type="range"] { width: 100%; min-width: 0; height: 32px; min-height: 0; margin: 0; padding: 0; border: 0; background: transparent; appearance: none; }
+.codex-plot-slider::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--background-modifier-border); }
+.codex-plot-slider::-webkit-slider-thumb { appearance: none; width: 20px; height: 20px; margin-top: -8px; border: 2px solid var(--background-primary); border-radius: 50%; background: var(--interactive-accent); }
+.codex-plot-slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--background-modifier-border); }
+.codex-plot-slider::-moz-range-thumb { width: 18px; height: 18px; border: 2px solid var(--background-primary); border-radius: 50%; background: var(--interactive-accent); }
+.codex-plot-range { color: var(--text-muted); font-size: var(--font-small); }
+.codex-plot-status { margin: 6px 0; }
+.codex-interactive-plot + .codex-interactive-plot, .codex-interactive-symbols { margin-top: 16px; }
+.codex-interactive-heading { font-weight: var(--font-semibold); margin-bottom: 8px; }
+.codex-symbol-choices { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.codex-symbol-choice { min-width: 40px; min-height: 34px; height: auto; padding: 5px 12px; }
+.codex-symbol-choice[aria-pressed="true"] { background: var(--background-modifier-active-hover); box-shadow: inset 0 0 0 1px var(--interactive-accent); color: var(--text-normal); }
+.codex-symbol-choice p { margin: 0; }
+.codex-symbol-inline { cursor: pointer; text-decoration: underline dotted var(--text-accent); text-underline-offset: 4px; }
+.codex-symbol-inline:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 3px; border-radius: 3px; }
+.codex-symbol-detail { border-left: 2px solid var(--background-modifier-border); padding-left: 12px; }
+.codex-symbol-meaning > :first-child, .codex-symbol-conditions > :first-child { margin-top: 0; }
+.codex-symbol-source { margin: 8px 0; padding: 2px 10px; border-left: 2px solid var(--text-accent); }
+.codex-symbol-metadata { margin: 4px 0 8px; }
+.codex-symbol-open, .codex-symbol-back, .codex-interactive-followup, .codex-interactive-copy, .codex-plot-reset { white-space: normal; height: auto; min-height: 32px; margin: 4px 6px 4px 0; max-width: 100%; }
+.codex-interactive-copy { margin-top: 14px; }
+.codex-interactive-raw { margin-top: 8px; font-size: var(--font-small); color: var(--text-muted); }
+.codex-interactive-raw pre { max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.is-mobile .codex-plot input.codex-plot-slider[type="range"] { height: 44px; }
+.is-mobile .codex-symbol-choice, .is-mobile .codex-symbol-open, .is-mobile .codex-interactive-followup, .is-mobile .codex-interactive-copy, .is-mobile .codex-plot-reset { min-height: 40px; }

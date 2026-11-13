@@ -577,7 +577,8 @@ test("an API transport failure retains an unknown result and allows switching wi
 		await P.start_backend({ Kind: "api", Provider: "openai", Model: "fixture" }, "fixture-transport-key");
 		assert.equal(Requests,0,"model catalog GET is not inference");assert.equal(CatalogReads,1);
 		assert.equal(await P.send_message("original", null), true);
-		for(let I = 0; I < 20 && P.Busy; I++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
+		// Busy=false precedes the durable unknown-result observation on this path.
+		for(let I = 0; I < 200 && (P.Busy || P.State.Sync.Operations[0]?.Status !== "submission-unknown"); I++) { await new Promise(Resolve => setTimeout(Resolve, 5)); }
 		assert.equal(P.State.Sync.Operations[0].Status, "submission-unknown"); assert.equal(P.Busy, false);
 		assert.match(P.Status, /待核对/); assert.equal(P.Session.Messages.length, 1); assert.equal(Requests, 1);
 		await P.set_remote_mode(true);
