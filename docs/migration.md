@@ -1,5 +1,11 @@
 # 2.0 候选升级、迁移与回退
 
+## beta.18 自动交互选择
+
+只更新客户端, beta.15 独立桥继续可用. 已知 beta.17 默认工作说明精确升级为自动选择规则; 自定义文字不重置, 仅匹配完整旧宿主后缀时替换该后缀. 原问题/来源快照、会话 schema/远程协议2及 `codex-ui` v1 不变. 不新增分类请求或模型 API 字段.
+
+回退程序仍须保留新状态. beta.17 可能继续使用保存的新工作说明; 若要恢复旧默认判断, 在旧版设置中明确重置工作提示词, 不通过旧数据备份覆盖聊天或自定义内容. [在线规则与验证](https://github.com/xsoc1/obsidian-codex-sidebar/blob/2.0.0-beta.18/docs/releases/2.0.0-beta.18.md).
+
 ## beta.17 交互答案
 
 本次只需升级客户端, beta.15 独立桥继续可用. 会话 schema/远程协议仍为 2, 原问答、来源和修改记录不迁移. 新组件数据保存在原回答的普通 Markdown 代码块内; 旧客户端显示完整正文及原始代码块. 设备参数独立保存在 localStorage, 不被远程聊天状态覆盖. 回退只替换程序, 旧程序忽略新参数记录; 不还原整份旧聊天状态. [在线使用说明](https://github.com/xsoc1/obsidian-codex-sidebar/blob/2.0.0-beta.17/docs/interactive-answers.md).
