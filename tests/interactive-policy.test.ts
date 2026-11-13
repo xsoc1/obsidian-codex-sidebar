@@ -37,16 +37,28 @@ test("only a full known host suffix is replaced; opaque custom text is preserved
 test("the same automatic policy reaches desktop, remote, API snapshots and custom instructions", () =>
 {
 	const Environment = { Vault: "Original", Root: "/original-vault", Cli: "/host/obsidian" };
-	for(const Custom of ["custom user wording", V017DefaultInstructions, DefaultInstructions])
+	const PrefixLength = DefaultInstructions.length - ("\n\n" + ManagedInstructions).length;
+	const OldCustom = "custom user wording" + V017DefaultInstructions.slice(PrefixLength), CurrentCustom = "custom user wording\n\n" + ManagedInstructions;
+	for(const Custom of ["custom user wording", V017DefaultInstructions, DefaultInstructions, OldCustom, CurrentCustom])
 	{
 		const Desktop = client_instructions(Custom, Environment), Remote = client_instructions(Custom, null), Api = snapshot_instructions(Custom, "source rules");
 		for(const Work of [Desktop, Remote, Api, environment_instructions(Remote, Environment)])
 		{
 			assert.ok(Work.includes(InteractiveDecisionRules)); assert.ok(Work.endsWith("\n\n" + ManagedInstructions));
 			assert.equal(Work.split("automatic-v1").length - 1, 1);
+			assert.equal(Work.split("可选交互答案 (codex-ui v1)").length - 1, 1);
 			assert.equal(instruction_items(Work)[0].role, "developer");
 		}
 	}
+});
+
+test("API snapshot restrictions stay after custom text while the managed suffix occurs once", () =>
+{
+	const Custom = "Custom CLI wording remains opaque.", Work = snapshot_instructions(Custom + "\n\n" + ManagedInstructions, "source rules");
+	assert.ok(Work.includes(Custom));
+	assert.ok(Work.indexOf(Custom) < Work.indexOf("本轮由 Obsidian 侧栏的快照模式发出"));
+	assert.ok(Work.endsWith("\n\n" + ManagedInstructions));
+	assert.equal(Work.split("automatic-v1").length - 1, 1);
 });
 
 test("policy states concrete benefit and mathematical gates, not trigger-word classification", () =>

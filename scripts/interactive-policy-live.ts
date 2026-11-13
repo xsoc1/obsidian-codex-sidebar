@@ -13,6 +13,7 @@ import { locate_symbol } from "../src/interactive/symbols";
 import { answer_quote } from "../src/quote";
 import { history_items } from "../src/history";
 import { InteractivePolicyCases } from "../tests/fixtures/interactive-policy";
+import { ProductVersion } from "../src/version";
 
 async function main(): Promise<void>
 {
@@ -36,7 +37,7 @@ async function main(): Promise<void>
 	console.log(JSON.stringify({ directory: Directory }));
 	try
 	{
-		await Connection.request("initialize", { clientInfo: { name: "obsidian_interactive_policy", version: "2.0.0-beta.18" }, capabilities: { experimentalApi: true } }); Connection.send({ method: "initialized", params: {} });
+		await Connection.request("initialize", { clientInfo: { name: "obsidian_interactive_policy", version: ProductVersion }, capabilities: { experimentalApi: true } }); Connection.send({ method: "initialized", params: {} });
 		const Skill = math_writing_skill(await Connection.request("skills/list", { cwds: [Workspace], forceReload: true }), Workspace);
 		const SkillVersion = readFileSync(Skill.path, "utf8").match(/version:\s*"?([^"\r\n]+)/)?.[1] ?? "unconfirmed";
 		const Models = (await Connection.request("model/list", { limit: 100, includeHidden: false })).data, Model = Models.find((M: any) => M.isDefault) ?? Models[0]; assert.ok(Model);
