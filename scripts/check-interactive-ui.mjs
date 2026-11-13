@@ -12,8 +12,9 @@ const Root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const Directory = mkdtempSync(join(tmpdir(), 'codex-interactive-ui-'));
 const Browser = process.env.CODEX_LAYOUT_BROWSER;
 const AppCss = process.env.CODEX_LAYOUT_APP_CSS;
+const Focus = process.env.CODEX_INTERACTIVE_FOCUS;
 const Report = { directory:Directory, startedAt:new Date().toISOString(), tier:'actual CodexView + production panel/protocol/state/plot/symbols; SDK/Markdown/clipboard/vault boundaries simulated', boundaries:['No real inference, publication, deployment or daily Obsidian access','Chrome mobile/touch emulation, not iPad hardware or native MathJax validation','Authored Markdown subset renderer; synthetic MathJax exact data-latex metadata, not math typesetting','State is real localStorage in a unique disposable loopback origin and Chrome profile'], command:'node scripts/check-interactive-ui.mjs', browser:Browser, appCss:AppCss, surfaces:[], screenshots:[], failures:[], requests:[], browserErrors:[] };
-const SourcePaths = ['src/view.ts','src/interactive/protocol.ts','src/interactive/panel.ts','src/interactive/state.ts','src/interactive/plot.ts','src/interactive/plot-view.ts','src/interactive/symbols.ts','styles.css'];
+const SourcePaths = ['src/view.ts','src/explanation-actions.ts','src/interactive/protocol.ts','src/interactive/panel.ts','src/interactive/state.ts','src/interactive/plot.ts','src/interactive/plot-view.ts','src/interactive/symbols.ts','src/interactive/structures.ts','src/interactive/structures-view.ts','src/interactive/symbol-view.ts','styles.css'];
 const source_times = () => Object.fromEntries(SourcePaths.map(Path => [Path,statSync(join(Root,Path)).mtime.toISOString()]));
 let Server, Child, Socket, Sequence = 0;
 const Pending = new Map();
@@ -132,6 +133,7 @@ try
 			for(const Width of [320,420,820])
 			{
 				const Name = `${Width}-${Theme}-${Mobile?'mobile':'desktop'}`, Surface = {name:Name,width:Width,theme:Theme,mobileEmulated:Mobile,checks:[]};
+				if(Focus && Focus !== Name) { continue; }
 				Report.surfaces.push(Surface);
 				try
 				{
@@ -146,6 +148,11 @@ try
 					writeFileSync(join(Directory,'reading-'+Name+'.md'),Result.exportedMarkdown ?? '');
 					await evaluate('interactive_screenshot_position(false)'); await screenshot('interactive-plot-'+Name,Width);
 					if(Width===320) { await evaluate('interactive_screenshot_position(true)'); await screenshot('interactive-symbols-'+Name,Width); }
+					await evaluate('exercise_explanation_actions()');
+					if(Width===320) { await screenshot('explanation-actions-'+Name,Width); }
+					await evaluate('exercise_structure_components()');
+					if(Width===320) { await screenshot('structure-components-'+Name,Width); }
+					if(Width===320) { await evaluate('InteractiveCase.Root.querySelector(".codex-walkthrough").scrollIntoView({block:"start"});true'); await screenshot('walkthrough-'+Name,Width); }
 					await evaluate('exercise_interactive_fallbacks()');
 					Surface.checks = await evaluate('InteractiveCase.Checks'); Surface.storage = await evaluate('Object.fromEntries(Object.keys(localStorage).filter(K=>K.startsWith("codex-sidebar-interactive:v1:"+encodeURIComponent(InteractiveCase.OriginalScope))).map(K=>[K,localStorage.getItem(K)]))');
 					Surface.networkRequestsDuringInteraction = Report.requests.slice(NetworkStart);
@@ -185,7 +192,7 @@ try
 catch(ErrorValue) { Report.failures.push({name:'harness-error',error:String(ErrorValue.stack ?? ErrorValue)}); }
 finally
 {
-	Report.finishedAt = new Date().toISOString(); Report.passed = Report.failures.length === 0 && Report.surfaces.length === 12 && !!Report.reload;
+	Report.finishedAt = new Date().toISOString(); Report.focus = Focus ?? null; Report.passed = Report.failures.length === 0 && Report.surfaces.length === (Focus ? 1 : 12) && !!Report.reload;
 	writeFileSync(join(Directory,'report.json'),JSON.stringify(Report,null,2));
 	Socket?.close(); Child?.kill(); if(Server) { Server.closeAllConnections(); await new Promise(Resolve=>Server.close(Resolve)); }
 	for(const Pair of Pending.values()) { Pair.reject(Error('Browser fixture closed')); } Pending.clear();

@@ -3,6 +3,7 @@ import type { SidebarOwner } from "./view-owner";
 import type { AnswerQuote, ContextSnapshot } from "./prompt";
 import { answer_quote, answer_status, bind_answer_blocks, quote_blocks } from "./quote";
 import { followup_summary } from "./followup";
+import { ExplanationActionBar, explanation_draft, type ExplanationAction } from "./explanation-actions";
 import type { ChatMessage } from "./history";
 import { sidebar_panel, reveal_sidebar_panel, type SidebarPanel } from "./sidebar-layout";
 import { SidebarContextPanel } from "./sidebar-context-panel";
@@ -80,6 +81,7 @@ export class CodexView extends ItemView
 	private Input!: HTMLTextAreaElement;
 	private QuoteElement!: HTMLDetailsElement;
 	private SelectedAnswer: AnswerQuote | null = null;
+	private ExplanationBar: ExplanationActionBar | null = null;
 	private ComposeActions!: ComposerActions;
 	private SessionsElement!: HTMLSelectElement;
 	private DeleteSessionButton!: HTMLButtonElement;
@@ -239,6 +241,11 @@ export class CodexView extends ItemView
 		this.ComposeActions = new ComposerActions(Actions, this.Input, Mode => void this.send_input(Mode), () => void this.Owner.stop_turn());
 		this.ActivityTimer = setInterval(() => this.refresh_activity(), 1000);
 		const CaptureAnswer = () => this.capture_answer_selection();
+		this.ExplanationBar?.dispose();
+		this.ExplanationBar = new ExplanationActionBar(Root, (Action, Quote) => this.explain_selection(Action, Quote));
+		this.register(() => { this.ExplanationBar?.dispose(); this.ExplanationBar = null; });
+		this.registerDomEvent(this.MessagesElement, "scroll", () => this.ExplanationBar?.hide(), { passive: true });
+		this.registerDomEvent(Root.ownerDocument, "keydown", Event => { if(Event.key === "Escape") { this.ExplanationBar?.hide(); } });
 		this.registerDomEvent(Root.ownerDocument, "selectionchange", CaptureAnswer);
 		this.registerDomEvent(this.MessagesElement, "pointerup", CaptureAnswer);
 		this.registerDomEvent(this.MessagesElement, "keyup", CaptureAnswer);
@@ -262,6 +269,22 @@ export class CodexView extends ItemView
 		this.SelectedAnswer = RangeValue && !RangeValue.collapsed && Body && !Body.dataset.editStructured && this.MessagesElement.contains(Body) && Message && SelectionValue!.toString().trim()
 			? answer_quote(this.Owner.Session.Id, Message.Id, SelectionValue!.toString(), Message.Text, answer_status(Message, this.Owner.TurnId, this.Owner.Busy), { ...quote_blocks(Body, RangeValue, Message.Text, JSON.stringify([this.Owner.Remote?.Enabled ? this.Owner.Remote.CacheId : "desktop", this.Owner.Session.Id]) + ":" + Message.Id), SourcePath: source_path(this.Owner.Session.Messages, Message), RootMessageId: Previous?.RootMessageId ?? Previous?.MessageId ?? Message.Id, ...(Previous ? { ParentMessageId: Previous.MessageId } : {}), SourceReferences: answer_sources(this.Owner.Session.Messages, Message) }) : null;
 		this.refresh_quote();
+		this.ExplanationBar?.show(this.SelectedAnswer, this.SelectedAnswer ? RangeValue!.getBoundingClientRect() : undefined);
+	}
+
+	private explain_selection(Action: ExplanationAction, Quote: AnswerQuote): void
+	{
+		if(this.input_blocked() || this.Owner.BackendSaveBlocked) { new Notice("请先完成当前操作, 再带入解释"); return; }
+		this.sync_draft();
+		if(this.DraftRestore || this.DraftBlocked) { new Notice("请先处理待恢复的草稿"); return; }
+		try
+		{
+			const Draft = explanation_draft(Action, Quote, this.Owner.Session.Id, this.Owner.Session.Messages, this.Input.value, this.Owner.AnswerQuote);
+			this.Owner.AnswerQuote = Draft.Quote; this.SelectedAnswer = null; this.Input.value = Draft.Question;
+			this.contentEl.ownerDocument.defaultView?.getSelection()?.removeAllRanges();
+			this.save_draft(); this.refresh(); reveal_sidebar_panel(this.ComposePanel); this.Input.focus();
+		}
+		catch(E) { new Notice(error_text(E)); }
 	}
 
 	private refresh_quote(): void
@@ -274,6 +297,7 @@ export class CodexView extends ItemView
 		{
 			this.SelectedAnswer = null;
 		}
+		if(!this.SelectedAnswer) { this.ExplanationBar?.hide(); }
 		const Quote = this.Owner.AnswerQuote ?? this.SelectedAnswer;
 		const CanStop = (this.Owner as SidebarOwner & { CanStop?: boolean }).CanStop ?? (this.Owner.Busy && !!this.Owner.TurnId);
 		this.ComposeActions?.refresh(this.input_blocked() || !!this.Owner.BackendSaveBlocked, CanStop, !!this.Owner.AnswerQuote);
@@ -1249,6 +1273,7 @@ export class CodexView extends ItemView
 	async onClose(): Promise<void>
 	{
 		this.save_draft();
+		this.ExplanationBar?.dispose(); this.ExplanationBar = null;
 		this.ContextPanel?.hide(); this.ContextPanel = null;
 		this.ReleaseFooter?.(); this.ReleaseFooter = null;
 		this.Opened = false;

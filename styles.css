@@ -543,3 +543,188 @@
 .codex-interactive-raw pre { max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .is-mobile .codex-plot input.codex-plot-slider[type="range"] { height: 44px; }
 .is-mobile .codex-symbol-choice, .is-mobile .codex-symbol-open, .is-mobile .codex-interactive-followup, .is-mobile .codex-interactive-copy, .is-mobile .codex-plot-reset { min-height: 40px; }
+
+.codex-explanation-actions {
+	position: fixed; z-index: 50; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+	padding: 7px; border: 1px solid var(--background-modifier-border); border-radius: 10px;
+	background: var(--background-primary); box-shadow: 0 4px 16px var(--background-modifier-box-shadow);
+}
+.codex-explanation-actions[hidden] { display: none; }
+.codex-explanation-actions > span { width: 100%; min-height: 28px; display: flex; align-items: center; padding-right: 45px; font-size: var(--font-small); color: var(--text-muted); }
+.codex-explanation-actions button { min-height: 34px; height: auto; padding: 4px 9px; white-space: normal; }
+.is-mobile .codex-explanation-actions button { min-height: 40px; }
+.codex-explanation-actions .codex-explanation-close { position: absolute; top: 3px; right: 5px; min-height: 28px; background: transparent; box-shadow: none; font-size: var(--font-small); }
+.is-mobile .codex-explanation-actions > span, .is-mobile .codex-explanation-actions .codex-explanation-close { min-height: 40px; }
+.codex-structure {
+	margin-block: 14px;
+	padding-block: 12px;
+	border-top: 1px solid var(--background-modifier-border);
+	min-width: 0;
+}
+
+.codex-structure-title {
+	margin: 0 0 10px;
+	font-size: var(--font-ui-medium);
+}
+
+.codex-structure .markdown-rendered > :first-child {
+	margin-top: 0;
+}
+
+.codex-structure .markdown-rendered > :last-child {
+	margin-bottom: 0;
+}
+
+.codex-relation-canvas {
+	position: relative;
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	column-gap: 42px;
+	row-gap: 38px;
+	padding: 36px;
+	min-width: 0;
+}
+
+.codex-relation-arrows {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+	overflow: visible;
+}
+
+.codex-relation-edge {
+	stroke: var(--text-muted);
+}
+
+.codex-relation-edge[data-selected="true"] {
+	stroke: var(--interactive-accent);
+	stroke-width: 3;
+}
+
+.codex-structure button.codex-relation-node,
+.codex-structure button.codex-walkthrough-step {
+	position: relative;
+	height: auto;
+	min-height: 44px;
+	min-width: 0;
+	padding: 9px 10px;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	text-align: start;
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+	color: var(--text-normal);
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: none;
+}
+
+.codex-structure button[aria-pressed="true"] {
+	border-color: var(--interactive-accent);
+	background: var(--background-primary-alt);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.codex-structure button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 3px;
+}
+
+.codex-structure-label {
+	display: block;
+	min-width: 0;
+}
+
+.codex-relation-edges {
+	margin: 6px 0 12px;
+	padding-inline-start: 24px;
+	font-size: var(--font-ui-small);
+	line-height: 1.6;
+}
+
+.codex-relation-edge-label {
+	padding-block: 3px;
+	overflow-wrap: anywhere;
+}
+
+.codex-structure-edge-text,
+.codex-structure-edge-text > p {
+	display: inline;
+}
+
+.codex-walkthrough-choices {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.codex-structure button.codex-walkthrough-step {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.codex-walkthrough-number {
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.codex-walkthrough-controls {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 10px;
+	margin-block: 12px;
+}
+
+.codex-walkthrough-position {
+	min-width: 0;
+	text-align: center;
+	font-size: var(--font-ui-small);
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+.codex-structure-detail {
+	margin-top: 10px;
+	padding: 12px;
+	border-inline-start: 3px solid var(--interactive-accent);
+	background: var(--background-secondary);
+	overflow-wrap: anywhere;
+}
+
+.codex-structure-current {
+	font-weight: var(--font-semibold);
+	margin-bottom: 8px;
+}
+
+.codex-structure-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.codex-structure-action {
+	min-height: 36px;
+	font-size: var(--font-ui-small);
+}
+
+.codex-structure .codex-symbol-origin,
+.codex-structure .codex-symbol-metadata {
+	margin-block: 10px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+}
+
+.codex-structure .codex-symbol-open,
+.codex-structure .codex-interactive-followup {
+	margin-inline-end: 8px;
+	margin-top: 8px;
+	min-height: 36px;
+}
+
+.is-mobile .codex-structure :is(button.codex-structure-action, button.codex-walkthrough-next, button.codex-walkthrough-previous) { min-height: 40px; }

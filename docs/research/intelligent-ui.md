@@ -2,6 +2,8 @@
 
 本页保留实施前的调研判断. 后续首版选择两类固定组件而不引入通用 UI 库, 使用与当前协议见[交互答案](../interactive-answers.md).
 
+2026-11-14 补充: 针对同属 Obsidian 场景的 ICAP Learning Agent, 另见[源码设计对照](icap-intelligent-ui.md). 重点评估解释层级快捷动作、关系/步骤图和交互模式选择, 不将其通用 HTML/JS 运行时当作当前协议的直接替换.
+
 查阅日期：2026-11-13。目标：理解 Intelligent UI，并判断它是否适合现有 Obsidian Sidebar。结论是**保留完整正文，把交互作为按需附加能力；优先验证 OpenUI 核心与原生组件的轻量接法，不搬另一套聊天系统。**
 
 ## Intelligent UI 是什么，哪些能力可以接入

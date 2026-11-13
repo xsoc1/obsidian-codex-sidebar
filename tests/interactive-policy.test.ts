@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DefaultInstructions, V017DefaultInstructions, ManagedInstructions, migrate_instructions, editing_instructions, client_instructions, snapshot_instructions, environment_instructions, instruction_items, build_prompt } from "../src/prompt";
+import { DefaultInstructions, V017DefaultInstructions, V019DefaultInstructions, ManagedInstructions, migrate_instructions, editing_instructions, client_instructions, snapshot_instructions, environment_instructions, instruction_items, build_prompt } from "../src/prompt";
 import { InteractiveDecisionRules, InteractiveRules } from "../src/interactive/rules";
 import { V017InteractiveRules } from "../src/interactive/legacy";
 import { MathCompletionInstructions } from "../src/completion-prompt";
@@ -69,7 +69,22 @@ test("policy states concrete benefit and mathematical gates, not trigger-word cl
 	}
 	assert.ok(InteractiveRules.includes("完整的 Markdown 正文、定义、条件和主要证明必须先给出"));
 	assert.ok(InteractiveDecisionRules.includes("不增加一次分类请求"));
-	assert.ok(InteractiveRules.includes("最多2幅图、12个符号"));
+	assert.ok(InteractiveRules.includes("最多2幅参数图、12个符号"));
+});
+
+test("beta.19 defaults and complete custom tails migrate once without changing snapshot precedence", () =>
+{
+	assert.notEqual(V019DefaultInstructions, DefaultInstructions);
+	assert.equal(migrate_instructions(V019DefaultInstructions), DefaultInstructions);
+	const PrefixLength = DefaultInstructions.length - ("\n\n" + ManagedInstructions).length;
+	const Custom = "My mathematical wording.", Old = Custom + V019DefaultInstructions.slice(PrefixLength);
+	for(const Work of [editing_instructions(Old), client_instructions(Old, null), snapshot_instructions(Old, "sources")])
+	{
+		assert.ok(Work.includes(Custom)); assert.ok(Work.endsWith("\n\n" + ManagedInstructions));
+		assert.equal(Work.split("automatic-v1").length - 1, 1); assert.ok(Work.includes("walkthroughs"));
+	}
+	const Api = snapshot_instructions(Old, "sources");
+	assert.ok(Api.indexOf(Custom) < Api.indexOf("本轮由 Obsidian 侧栏的快照模式发出"));
 });
 
 test("literal output tasks and native completion retain their original contracts", () =>

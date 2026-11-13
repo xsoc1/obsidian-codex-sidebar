@@ -93,6 +93,8 @@
 	const Note = '---\ntitle: 原创热方程示例\n---\n\n# 参数的意义\n\n设 $t\\ge0$. 时间参数只改变衰减，空间区间为 $0\\le x\\le\\pi$.\n\n振幅参数由初值给定。';
 	const Context = {Path:'原创夹具/热方程.md', Kind:'当前位置', Mode:'阅读', Mapping:'源文本', CapturedAt:'2026-11-13T00:00:00Z', Text:Note, SelectedText:'', LineStart:0, LineEnd:8, Heading:'参数的意义', Truncated:false};
 	const Spec = {schemaVersion:1, plots:[{id:'heat', title:'热方程的时间衰减', expression:'a*exp(-t)*sin(x)', x:{min:0,max:Math.PI}, y:{min:-2,max:2}, parameters:[{name:'t',label:'时间',min:0,max:5,step:0.1,value:0},{name:'a',label:'初始振幅',min:-2,max:2,step:0.1,value:1}], caption:'固定区间与纵轴，比较同一振型在不同时刻的振幅。'}], symbols:[{id:'time',symbol:'$t$',meaning:'时间参数，决定振幅的指数衰减。',conditions:'要求 $t\\ge0$；保持空间区间及边界条件不变。',quote:'设 $t\\ge0$.'},{id:'amplitude',symbol:'$a$',meaning:'初始振幅，正负号改变曲线方向。',conditions:'本例 $-2\\le a\\le2$，不是一般定理的范围。'}]};
+	Spec.relations = [{id:'decayRelation',title:'时间与振幅的关系',nodes:[{id:'clock',symbol:'$t$',meaning:'时间是可调整的非负参数。',conditions:'$t\\ge0$',quote:'设 $t\\ge0$.'},{id:'factor',symbol:'$e^{-t}$',meaning:'时间增大时，这个衰减因子变小。'}],edges:[{from:'clock',to:'factor',label:'决定衰减因子'}]}];
+	Spec.walkthroughs = [{id:'heatSteps',title:'对照方程与边界',steps:[{id:'differentiate',symbol:'先求导',meaning:'$u_t=-a e^{-t}\\sin x$, $u_{xx}=-a e^{-t}\\sin x$.',conditions:'保持 $a$ 固定。'},{id:'compare',symbol:'比较两侧',meaning:'两个导数相同，因此 $u_t=u_{xx}$.',conditions:'本例 $t\\ge0$.',quote:'设 $t\\ge0$.'},{id:'boundary',symbol:'核对边界',meaning:'$\\sin0=\\sin\\pi=0$, 所以两端边界为零。'}]}];
 	const Before = '# 一个热方程振型\n\n考虑齐次 Dirichlet 边界，初值为正弦振型。令 $t$ 表示时间，$a$ 表示初始振幅。\n\n$$\nu(x,t)=a e^{-t}\\sin x.\n$$\n\n直接计算可得时间导数与二阶空间导数相同；两端的正弦值为零。';
 	const After = '这段在交互数据之后，仍属于完整原创回答。它说明边界始终为零，参数调整不改变证明或初始条件的含义。';
 	const Text = Before + '\n\n```codex-ui\n' + JSON.stringify(Spec, null, 2) + '\n```\n\n' + After;
@@ -197,7 +199,8 @@
 		for(let Index = 0; Index < 100 && !C.Opened.length; Index++) { await tick(); }
 		check('source-button-actual-navigation', C.Opened.length === 1 && C.Opened[0].path === Context.Path && C.Opened[0].options.eState.line === Note.slice(0,Note.indexOf(Spec.symbols[0].quote)).split('\n').length-1,{opened:C.Opened});
 		await choose(1);
-		check('unverified-symbol-has-no-source-button', !panel().querySelector('.codex-symbol-open') && panel().querySelector('.codex-symbol-origin').textContent.includes('来源未核验'));
+		const SymbolDetail = require_element('.codex-interactive-symbols .codex-symbol-detail',panel());
+		check('unverified-symbol-has-no-source-button', !SymbolDetail.querySelector('.codex-symbol-open') && SymbolDetail.querySelector('.codex-symbol-origin').textContent.includes('来源未核验'));
 		await choose(0);
 		const Body = require_element('.codex-message-body',card()), Inline = [...Body.querySelectorAll('.math-inline')].find(Element=>Element.querySelector('mjx-math')?.getAttribute('data-latex') === 'a');
 		check('inline-exact-tex-accessible', !!Inline?.classList.contains('codex-symbol-inline') && Inline.getAttribute('role') === 'button' && Inline.tabIndex === 0 && !!document.getElementById(Inline.getAttribute('aria-controls')));
@@ -273,6 +276,59 @@
 		C.Export = Markdown;
 		check('original-history-never-rewritten', JSON.stringify([C.A,C.B]) === C.BeforeMessages && C.Calls.length === 0 && !E.requests.length);
 		return {checks:C.Checks, exportedMarkdown:Markdown, scope:C.Scope, storage:stored()};
+	};
+
+	window.exercise_structure_components = async () =>
+	{
+		const C = InteractiveCase, {View,Owner} = C;
+		const Relation = () => require_element('.codex-relation',panel()), Walk = () => require_element('.codex-walkthrough',panel());
+		const Nodes = () => [...Relation().querySelectorAll('button[aria-pressed]')];
+		clear_draft();
+		check('relation-direction-is-rendered',!!Relation().querySelector('svg') && Relation().textContent.includes('决定衰减因子'));
+		Nodes().at(-1).click(); require_element('.codex-walkthrough-next',Walk()).click(); await settle(); await tick();
+		const Position = require_element('.codex-walkthrough-position',Walk()).textContent;
+		const PrevBounds = require_element('.codex-walkthrough-previous',Walk()).getBoundingClientRect(), NextBounds = require_element('.codex-walkthrough-next',Walk()).getBoundingClientRect();
+		check('step-navigation-stays-on-one-row',Math.abs(PrevBounds.top-NextBounds.top)<1);
+		check('structure-node-step-selection',Nodes().at(-1).getAttribute('aria-pressed')==='true' && Position.includes('2'));
+		require_element('[data-action="step"]',Walk()).click(); await settle();
+		check('structure-explanation-draft-is-frozen',View.Input.value.includes('中间推导') && View.Input.value.includes('整合后的完整说明') && Owner.AnswerQuote?.SourceText===Text && Owner.AnswerQuote.SourcePath===Context.Path && !C.Calls.length);
+		clear_draft();
+		require_element('.codex-interactive-copy',panel()).click(); await tick();
+		const Copy=InteractiveEvidence.clipboard.at(-1);
+		check('structure-copy-includes-all-items',Copy.includes(Spec.relations[0].nodes[0].meaning) && Copy.includes(Spec.relations[0].nodes[1].meaning) && Copy.includes('决定衰减因子') && Spec.walkthroughs[0].steps.every(S=>Copy.includes(S.meaning)) && !Copy.includes('```codex-ui'));
+		await View.onClose(); View.unload(); View.load(); await View.onOpen(); await settle();
+		check('structure-reopen-restores-node-and-step',Nodes().at(-1).getAttribute('aria-pressed')==='true' && require_element('.codex-walkthrough-position',Walk()).textContent===Position);
+		Relation().scrollIntoView({block:'start'}); await tick();
+	};
+
+	window.exercise_explanation_actions = async () =>
+	{
+		const C = window.InteractiveCase, {View,Owner} = C;
+		const Body = require_element('.codex-message-body',card()), Tail = [...Body.querySelectorAll(':scope > p')].find(Element=>Element.textContent === After);
+		const Select = () =>
+		{
+			Tail.scrollIntoView({block:'center'});
+			const R = document.createRange(); R.selectNodeContents(Tail);
+			const S = getSelection(); S.removeAllRanges(); S.addRange(R); View.capture_answer_selection();
+		};
+		clear_draft(); await settle();
+		const Requests = C.Calls.length, Renders = InteractiveEvidence.renders.length;
+		for(const [Label, Phrase] of [['展开这一步','中间推导'],['举个例子','最小而完整'],['说通俗些','直白']])
+		{
+			Select(); const Bar = require_element('.codex-explanation-actions'), Bounds = Bar.getBoundingClientRect();
+			check('explanation-toolbar-visible-and-contained-'+Label,!Bar.hidden && Bounds.width > 0 && Bounds.left >= 0 && Bounds.right <= innerWidth + 1 && Bounds.bottom <= innerHeight + 1);
+			[...Bar.querySelectorAll('button')].find(B=>B.textContent === Label).click(); await settle();
+			check('explanation-draft-'+Label,View.Input.value.includes(Phrase) && View.Input.value.includes('整合后的完整说明') && Owner.AnswerQuote?.SelectedText === After && Owner.AnswerQuote?.SourceText === Text && Owner.AnswerQuote?.SourcePath === Context.Path && C.Calls.length === Requests);
+			clear_draft(); await settle();
+		}
+		Select(); View.Input.value='已有草稿';
+		[...require_element('.codex-explanation-actions').querySelectorAll('button')].find(B=>B.textContent==='举个例子').click();
+		check('explanation-draft-protected',View.Input.value==='已有草稿' && !Owner.AnswerQuote && C.Calls.length === Requests);
+		clear_draft(); Select();
+		document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+		check('explanation-escape-dismisses',require_element('.codex-explanation-actions').hidden);
+		check('explanation-does-not-rebuild-body',InteractiveEvidence.renders.length===Renders && Body===require_element('.codex-message-body',card()));
+		Select();
 	};
 
 	async function choose_wait(Id)

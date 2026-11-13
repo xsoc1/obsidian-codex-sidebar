@@ -2,7 +2,7 @@ import { text_identity } from "../markdown-blocks";
 import { plot_values } from "./plot";
 import type { InteractiveSpec } from "./protocol";
 
-export interface InteractiveState { Values: Record<string, Record<string, number>>; Symbol: string; }
+export interface InteractiveState { Values: Record<string, Record<string, number>>; Symbol: string; Views?: Record<string, string>; }
 interface StorageLike { getItem(Key: string): string | null; setItem(Key: string, Value: string): void; }
 interface SavedState extends InteractiveState { schemaVersion: 1; Spec: string; Revision: number; }
 
@@ -20,14 +20,17 @@ export class InteractiveStateStore
 	}
 	private values(Value?: InteractiveState): InteractiveState
 	{
-		return { Values: Object.fromEntries(this.Spec.plots.map(P => [P.id, plot_values(P, Value?.Values?.[P.id])])), Symbol: this.Spec.symbols.some(S => S.id === Value?.Symbol) ? Value!.Symbol : "" };
+		const State: InteractiveState = { Values: Object.fromEntries(this.Spec.plots.map(P => [P.id, plot_values(P, Value?.Values?.[P.id])])), Symbol: this.Spec.symbols.some(S => S.id === Value?.Symbol) ? Value!.Symbol : "" };
+		const Groups = [...(this.Spec.relations ?? []).map(R => ({ id: R.id, items: R.nodes })), ...(this.Spec.walkthroughs ?? []).map(W => ({ id: W.id, items: W.steps }))];
+		if(Groups.length) { State.Views = Object.fromEntries(Groups.map(G => [G.id, G.items.find(S => S.id === Value?.Views?.[G.id])?.id ?? G.items[0].id])); }
+		return State;
 	}
 	load(): InteractiveState
 	{
 		const Raw = this.Storage.getItem(this.Key);
 		if(!Raw) { this.Expected = null; return this.values(); }
 		const V = JSON.parse(Raw) as SavedState;
-		if(!V || V.schemaVersion !== 1 || V.Spec !== this.SpecText || !Number.isSafeInteger(V.Revision) || V.Revision < 1 || !V.Values || typeof V.Values !== "object" || Array.isArray(V.Values) || typeof V.Symbol !== "string" || Object.keys(V).some(K => !["schemaVersion", "Spec", "Revision", "Values", "Symbol"].includes(K))) { throw Error("交互状态损坏或版本不匹配, 原数据保留"); }
+		if(!V || V.schemaVersion !== 1 || V.Spec !== this.SpecText || !Number.isSafeInteger(V.Revision) || V.Revision < 1 || !V.Values || typeof V.Values !== "object" || Array.isArray(V.Values) || typeof V.Symbol !== "string" || V.Views !== undefined && (!V.Views || typeof V.Views !== "object" || Array.isArray(V.Views) || Object.values(V.Views).some(S => typeof S !== "string")) || Object.keys(V).some(K => !["schemaVersion", "Spec", "Revision", "Values", "Symbol", "Views"].includes(K))) { throw Error("交互状态损坏或版本不匹配, 原数据保留"); }
 		this.Expected = Raw; return this.values(V);
 	}
 	save(State: InteractiveState): void

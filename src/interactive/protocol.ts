@@ -1,17 +1,23 @@
 import { markdown_blocks } from "../markdown-blocks";
 import { validate_plot, type PlotSpec } from "./plot";
 import { validate_symbol, type SymbolSpec } from "./symbols";
+import { validate_relation, validate_walkthrough, type RelationSpec, type WalkthroughSpec } from "./structures";
+import { data_list, data_record } from "./validation";
 
-export interface InteractiveSpec { schemaVersion: 1; plots: PlotSpec[]; symbols: SymbolSpec[]; }
+export interface InteractiveSpec { schemaVersion: 1; plots: PlotSpec[]; symbols: SymbolSpec[]; relations?: RelationSpec[]; walkthroughs?: WalkthroughSpec[]; }
 export interface InteractiveOutput { Status: "none" | "pending" | "ready" | "invalid"; Spec?: InteractiveSpec; Raw?: string; From?: number; To?: number; Error?: string; }
 export const InteractiveBudget = 24000;
 
 export function validate_interactive(Value: unknown): InteractiveSpec
 {
-	const V = Value as InteractiveSpec;
-	if(!V || typeof V !== "object" || Array.isArray(V) || Object.keys(V).some(K => !["schemaVersion", "plots", "symbols"].includes(K)) || V.schemaVersion !== 1 || !Array.isArray(V.plots) || !Array.isArray(V.symbols) || V.plots.length > 2 || V.symbols.length > 12 || !V.plots.length && !V.symbols.length) { throw Error("交互内容格式无效或超过预算"); }
-	const Spec: InteractiveSpec = { schemaVersion: 1, plots: V.plots.map(validate_plot), symbols: V.symbols.map(validate_symbol) };
-	const Ids = [...Spec.plots, ...Spec.symbols].map(V => V.id);
+	const V = data_record(Value, ["schemaVersion", "plots", "symbols", "relations", "walkthroughs"], ["schemaVersion", "plots", "symbols"]);
+	if(V.schemaVersion !== 1) { throw Error("交互内容格式无效或超过预算"); }
+	const Spec: InteractiveSpec = { schemaVersion: 1, plots: data_list(V.plots, 2).map(validate_plot), symbols: data_list(V.symbols, 12).map(validate_symbol) };
+	// Absent optional fields stay absent: legacy spec serialization is a state key.
+	if(Object.hasOwn(V, "relations")) { Spec.relations = data_list(V.relations, 2).map(validate_relation); }
+	if(Object.hasOwn(V, "walkthroughs")) { Spec.walkthroughs = data_list(V.walkthroughs, 2).map(validate_walkthrough); }
+	const Ids = [...Spec.plots, ...Spec.symbols, ...(Spec.relations ?? []), ...(Spec.walkthroughs ?? [])].map(V => V.id);
+	if(!Ids.length) { throw Error("交互组件不能为空"); }
 	if(new Set(Ids).size !== Ids.length) { throw Error("交互组件 ID 重复"); }
 	if(JSON.stringify(Spec).length > InteractiveBudget) { throw Error("交互内容超过预算"); }
 	return Spec;
