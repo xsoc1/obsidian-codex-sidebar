@@ -2,6 +2,8 @@
 
 调研日期：2026-11-14。范围：上游源码核验与设计判断；本轮不实施功能。
 
+调研后用户已采纳就地分层解释与受控关系/步骤组件, 实现并交付于[beta.20](../releases/2.0.0-beta.20.md). 下文保留当时的设计依据与取舍, 当前使用以[交互答案](../interactive-answers.md)为准.
+
 ## 结论
 
 **最值得借鉴的是“围绕同一段解释继续展开”的操作，不是 `icap-ui` 的执行机制。** ICAP 把“更深入、举例、说浅一点、对比”写成了有区别的提示任务，保留前文并把新内容追加在解释下方。这适合在 Sidebar 现有回答上增加宿主定义的层级动作。上游的交互图则是模型编写 HTML/CSS/JavaScript、iframe 执行，和本项目“不执行模型 JS/HTML”的边界不同。[解释提示](https://github.com/EdwinZhanCN/obsidian-icap-agent/blob/354aad5355ac4208cf0e289fa0c203d1067d0e0b/src/agent/prompts.ts)、[动作与就地呈现](https://github.com/EdwinZhanCN/obsidian-icap-agent/blob/354aad5355ac4208cf0e289fa0c203d1067d0e0b/src/ui/GlossView.svelte)、[执行文档构造](https://github.com/EdwinZhanCN/obsidian-icap-agent/blob/354aad5355ac4208cf0e289fa0c203d1067d0e0b/src/genui/widget.ts)。

@@ -4,7 +4,7 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
-**2.0.0-beta.20** 加入[选段分层解释、关系图与推导步骤](docs/interactive-answers.md): 选中回答后可“展开这一步 / 举个例子 / 说通俗些”, 问题先进入草稿; 完整正文和整合追问保留. 模型按需选择组件, 不执行模型 HTML/JS. API 直连仍可关联 Obsidian 密钥; iPad 使用 OpenCode Go 时建议选择「原生整段」。[连接设置](docs/backends.md)
+**[2.0.0-beta.20](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.20)** 加入[选段分层解释、关系图与推导步骤](docs/interactive-answers.md): 选中回答后可“展开这一步 / 举个例子 / 说通俗些”, 问题先进入草稿; 完整正文和整合追问保留. 模型按需选择组件, 不执行模型 HTML/JS. API 直连仍可关联 Obsidian 密钥; iPad 使用 OpenCode Go 时建议选择「原生整段」。[连接设置](docs/backends.md)
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
