@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DevelopmentCases, HoldoutCases } from "../examples/exposition/cases";
 import { exposition_input } from "../scripts/exposition-input";
-import { DefaultInstructions, ManagedInstructions, V0111DefaultInstructions, editing_instructions, environment_instructions, client_instructions, migrate_instructions, instruction_items } from "../src/prompt";
-import { ExpositionRules, CompletionExposition } from "../src/exposition/rules";
+import { DefaultInstructions, ManagedInstructions, V0111DefaultInstructions, V020DefaultInstructions, editing_instructions, environment_instructions, client_instructions, snapshot_instructions, migrate_instructions, instruction_items } from "../src/prompt";
+import { ExpositionRules, V1ExpositionRules, CompletionExposition } from "../src/exposition/rules";
 import { MathCompletionInstructions } from "../src/completion";
 import { branch_prefix, history_items, type ChatMessage } from "../src/history";
 import { parse_edit } from "../src/edit/protocol";
@@ -43,6 +43,29 @@ test("client and bridge composition is idempotent, with server facts and a compl
 	assert.equal(count(client_instructions(DefaultInstructions, Host), ManagedInstructions), 1);
 });
 
+test("candidate.6 writing guidance replaces beta.20 defaults and exact tails across all chat backends", () =>
+{
+	assert.notEqual(V020DefaultInstructions, DefaultInstructions);
+	assert.equal(migrate_instructions(V020DefaultInstructions), DefaultInstructions);
+	const Custom = "保留我的用语和标题。";
+	const Old = Custom + V020DefaultInstructions.slice(DefaultInstructions.length - ManagedInstructions.length - 2);
+	assert.equal(migrate_instructions(Old), Old);
+	const Remote = client_instructions(Old, null);
+	const Api = snapshot_instructions(Old, "来源只作材料");
+	for(const Work of [editing_instructions(Old), client_instructions(Old, Host), Remote, environment_instructions(Remote, Host), Api])
+	{
+		assert.equal(count(Work, Custom), 1);
+		assert.equal(count(Work, ExpositionRules), 1);
+		assert.equal(count(Work, V1ExpositionRules), 0);
+		for(const Rule of ["先用常用词讲清结论或核心直觉", "主要证明完成必要论证", "反例与证明缺口留在对应推导处", "使用现有 rationale 字段", "不自动创建第二份笔记"])
+		{
+			assert.ok(Work.includes(Rule), Rule);
+		}
+	}
+	assert.ok(Api.indexOf(Custom) < Api.indexOf("当前未提供 Obsidian 读库"));
+	assert.equal(migrate_instructions(V020DefaultInstructions + "\n" + Custom), V020DefaultInstructions + "\n" + Custom);
+});
+
 test("only explicit edits use structured output; former workbench examples are ordinary questions", async () =>
 {
 	for(const Id of ["D04", "D08"])
@@ -57,6 +80,8 @@ test("only explicit edits use structured output; former workbench examples are o
 	assert.equal(Edit.Task?.Action, "edit");
 	assert.equal(Edit.Task?.Target?.Before, Edit.Source?.Text);
 	assert.ok(Edit.Prompt.includes("明确的文风修改"));
+	assert.ok(Edit.Prompt.includes("有实际验收或交接事项时也放在 rationale"));
+	assert.ok(Edit.Prompt.includes("数学条件、反例和论证缺口留在相关正文"));
 	assert.equal(parse_edit('{"schemaVersion":1,"kind":"note-edit","status":"needs-decision","markdown":null,"rationale":"原路线不成立"}').markdown, null);
 	assert.throws(() => parse_edit('{"schemaVersion":1,"kind":"note-edit","status":"no-change","markdown":null,"rationale":"ok","verification":"unverified"}'));
 });

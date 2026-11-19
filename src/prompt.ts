@@ -1,5 +1,5 @@
 import { ChatWriteRules, EditingRules } from "./edit/rules";
-import { ExpositionRules } from "./exposition/rules";
+import { ExpositionRules, V1ExpositionRules } from "./exposition/rules";
 import { followup_instructions } from "./followup";
 import { InteractiveRules } from "./interactive/rules";
 import { V017InteractiveRules } from "./interactive/legacy";
@@ -21,25 +21,27 @@ Obsidian 输出:
 - 使用正常 Markdown 段落、标题、callout, 列表前留空行; 不用大代码块包住整篇. 表格竖线转义, 复杂公式放表格外.
 - 仅对已知存在的笔记使用 [[路径|显示文字]] 或标题链接. 网页引用用 [来源名称](完整网址). 不猜测路径或来源.`;
 
-const PreviousManagedInstructions = ChatWriteRules + "\n\n" + EditingRules + "\n\n" + ExpositionRules;
+const PreviousManagedInstructions = ChatWriteRules + "\n\n" + EditingRules + "\n\n" + V1ExpositionRules;
 const V017ManagedTail = "\n\n" + PreviousManagedInstructions + "\n\n" + V017InteractiveRules;
 export const V017DefaultInstructions = CurrentInstructions + V017ManagedTail;
 const V019ManagedTail = "\n\n" + PreviousManagedInstructions + "\n\n" + V019InteractiveRules;
 export const V019DefaultInstructions = CurrentInstructions + V019ManagedTail;
-export const ManagedInstructions = PreviousManagedInstructions + "\n\n" + InteractiveRules;
+const V020ManagedTail = "\n\n" + PreviousManagedInstructions + "\n\n" + InteractiveRules;
+export const V020DefaultInstructions = CurrentInstructions + V020ManagedTail;
+export const ManagedInstructions = ChatWriteRules + "\n\n" + EditingRules + "\n\n" + ExpositionRules + "\n\n" + InteractiveRules;
 const ManagedTail = "\n\n" + ManagedInstructions;
 export const DefaultInstructions = CurrentInstructions + ManagedTail;
 
 export function migrate_instructions(Instructions: string): string
 {
-	return [LegacyInstructions, PreviousInstructions, PriorDefaultInstructions, V09DefaultInstructions, V0111DefaultInstructions, CurrentInstructions + "\n\n" + PreviousManagedInstructions, V017DefaultInstructions, V019DefaultInstructions].includes(Instructions) ? DefaultInstructions : Instructions;
+	return [LegacyInstructions, PreviousInstructions, PriorDefaultInstructions, V09DefaultInstructions, V0111DefaultInstructions, CurrentInstructions + "\n\n" + PreviousManagedInstructions, V017DefaultInstructions, V019DefaultInstructions, V020DefaultInstructions].includes(Instructions) ? DefaultInstructions : Instructions;
 }
 
 export function editing_instructions(Instructions: string): string
 {
 	const Work = migrate_instructions(Instructions.trim() ? Instructions : DefaultInstructions);
 	// Only recognize our complete exact suffix; custom text remains opaque.
-	for(const Tail of [V017ManagedTail, V019ManagedTail]) { if(Work.endsWith(Tail)) { return Work.slice(0, -Tail.length) + ManagedTail; } }
+	for(const Tail of [V017ManagedTail, V019ManagedTail, V020ManagedTail]) { if(Work.endsWith(Tail)) { return Work.slice(0, -Tail.length) + ManagedTail; } }
 	return Work.endsWith(ManagedTail) ? Work : Work + ManagedTail;
 }
 

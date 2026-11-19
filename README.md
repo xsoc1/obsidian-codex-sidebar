@@ -4,7 +4,7 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
-**[2.0.0-beta.20](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.20)** 加入[选段分层解释、关系图与推导步骤](docs/interactive-answers.md): 选中回答后可“展开这一步 / 举个例子 / 说通俗些”, 问题先进入草稿; 完整正文和整合追问保留. 模型按需选择组件, 不执行模型 HTML/JS. API 直连仍可关联 Obsidian 密钥; iPad 使用 OpenCode Go 时建议选择「原生整段」。[连接设置](docs/backends.md)
+**[2.0.0-beta.21](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.21)** 更新内置数学写作规则：问答先用白话讲清核心，稿件正文保留完整推导，交付说明与正文分开。“生成修改预览”把修改依据与交接事项放在预览理由里，不写进笔记。[写作规则与技能依赖](docs/development.md#math-writing-是独立的私有依赖) · [选段追问及交互说明](docs/interactive-answers.md) · [连接设置](docs/backends.md)
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -39,7 +39,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.20` 属于预发布版本，在 BRAT 中需指定此版本。已有 beta.15 独立桥可继续使用；从更早版本迁移及代码回退请参阅 [升级说明](docs/migration.md)。
+`2.0.0-beta.21` 属于预发布版本，在 BRAT 中需指定此版本。已有 beta.15 独立桥可继续使用；从更早版本迁移及代码回退请参阅 [升级说明](docs/migration.md)。
 
 
 ### iPad

@@ -16,7 +16,7 @@ import { EventEmitter } from "node:events";
 import * as PathApi from "node:path";
 import * as DecoderApi from "node:string_decoder";
 import { ApiKeyEndpoint } from "../src/api-auth";
-import { DefaultInstructions, V017DefaultInstructions, ManagedInstructions } from "../src/prompt";
+import { DefaultInstructions, V017DefaultInstructions, V020DefaultInstructions, ManagedInstructions } from "../src/prompt";
 
 test("compiled mobile API sends one managed policy after custom text and snapshot restrictions", async () =>
 {
@@ -30,16 +30,19 @@ test("compiled mobile API sends one managed policy after custom text and snapsho
 	{
 		await P.start_backend({ Kind: "api", Provider: "compatible", Base: "https://fixture.invalid/v1", Model: "fixture-policy", Stream: "buffered", HistoryTools: false }, "fixture-policy-key");
 		const PrefixLength = DefaultInstructions.length - ("\n\n" + ManagedInstructions).length;
-		for(const Tail of [V017DefaultInstructions.slice(PrefixLength), "\n\n" + ManagedInstructions])
+		const Tails = [V017DefaultInstructions.slice(PrefixLength), V020DefaultInstructions.slice(PrefixLength), "\n\n" + ManagedInstructions];
+		for(const Tail of Tails)
 		{
 			P.State.Settings.Instructions = "Original custom wording." + Tail;
 			assert.equal(await P.send_message("original short question", null), true);
 			for(let I = 0; I < 400 && (P.Busy || P.BackendSaveBlocked || P.Session.Messages.at(-1)?.CompletionStatus !== "completed"); I++) { await new Promise(R => setTimeout(R, 5)); }
 			const System = Requests.at(-1).messages.find((M: any) => ["system", "developer"].includes(M.role))?.content;
 			assert.equal(typeof System, "string"); assert.equal(System.split("automatic-v1").length - 1, 1); assert.equal(System.split("可选交互答案 (codex-ui v1)").length - 1, 1);
+			assert.equal(System.split("数学表达规则 v2").length - 1, 1);
+			assert.ok(!System.includes("数学表达规则 v1"));
 			assert.ok(System.indexOf("Original custom wording.") < System.indexOf("本轮由 Obsidian 侧栏的快照模式发出"));
 		}
-		assert.equal(Requests.length, 2);
+		assert.equal(Requests.length, Tails.length);
 	}
 	finally { P.onunload(); }
 });
