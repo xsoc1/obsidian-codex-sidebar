@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-21 beta.22 delivery: Windows daily plugin installed and GitHub prerelease verified from source tag `2c5791cadb65f9b27ede48362d429482b087e717`. Native readback kept the existing Astra/Fast setting, history and operations; Sol alone advertised Ultrafast in the live catalog. [Verification and release receipt](docs/releases/2.0.0-beta.22.md) distinguishes real metadata, browser fixtures and untested live generation/iPad. Standalone bridge remains beta.15.
+
 - 2026-11-21: User requested improving Fast starting with Codex Super Fast. Local model catalog advertises `gpt-6.2-sol` with distinct `priority` and `ultrafast`; the generated app-server bindings and real read-only ephemeral thread verify the wire value. beta.22 adds a host-aware speed picker, preserves old Fast choices and in-flight operation bindings, and gates Ultrafast on the bridge's explicit capability without downgrading requests. Native/remote compatibility and rollback: [beta.22](docs/releases/2.0.0-beta.22.md). Standing Windows install and publication do not replace the existing standalone service.
 
 - 2026-11-20 beta.21 delivery: source/tag `187798445f6acbdb4e19efe0d5c9bdd8e7b24da0` is published and installed in the Windows daily vault. [Release receipt](docs/releases/2.0.0-beta.21.md) records CI, public/installed asset readback and preserved native state. Local Codex recognizes candidate.6; the independent bridge remains beta.15. Backups are private and no inference was submitted during installation.
