@@ -1,5 +1,9 @@
 # 选择连接方式
 
+## Codex 速度
+
+打开侧栏 **模型与选项 → 速度**。标准、Fast 和 Ultrafast 使用不同的 Codex 服务档位；思考档次单独选择。Ultrafast 仅在当前 Codex 模型目录报告支持时可选。独立远程模式还需要 beta.22 或更新的兼容桥；旧桥继续支持原有档位，不会把 Ultrafast 悄悄降成标准。直连 API 和非 Codex Agent 不显示这个控件。
+
 当前 beta.15 的结果保存、模型依据、签名续轮、字段导出、PDF 来源及阅读返回见 [R01—R09 验证与兼容说明](reliability-r01-r09.md)。真实厂商 Key 与 iPad 验收边界以该表为准。
 
 ## beta.13：配置与活动连接分开

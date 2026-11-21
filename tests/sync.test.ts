@@ -11,7 +11,7 @@ import { ProductVersion } from "../src/version";
 import { load_state_file, write_state_file } from "../src/runtime/state-store";
 import { entity_key } from "../src/sync/types";
 
-async function fixture(Seed?: (Config: any) => Promise<void>)
+async function fixture(Seed?: (Config: any) => Promise<void>, Ultra = false)
 {
 	const Directory = mkdtempSync(join(tmpdir(), "codex-sync-original-")), Skill = join(Directory, "SKILL.md"); writeFileSync(Skill, "Original acceptance skill");
 	const Tokens = ["a".repeat(48), "b".repeat(48)], Peers: any[] = []; let Submits = 0, Crash = false;
@@ -21,10 +21,10 @@ async function fixture(Seed?: (Config: any) => Promise<void>)
 		const Peer: any = { emit: Emit, count: Peers.length, closed: false }; Peers.push(Peer);
 		return { async request(Method: string, Params: any)
 		{
-			if(Method === "model/list") { return { data: [{ model: "original-model", displayName: "Original", supportedReasoningEfforts: [{ reasoningEffort: "low" }], defaultReasoningEffort: "low" }], nextCursor: null }; }
+			if(Method === "model/list") { return { data: [{ model: "original-model", displayName: "Original", supportedReasoningEfforts: [{ reasoningEffort: "low" }], defaultReasoningEffort: "low", ...(Ultra ? { serviceTiers: [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }] } : {}) }], nextCursor: null }; }
 			if(Method === "skills/list") { return { data: [{ cwd: Directory, skills: [{ name: "math-writing", path: Skill, enabled: true }] }] }; }
-			if(Method === "thread/start") { return { model: "original-model", thread: { id: "thread-" + Peer.count, ephemeral: true, path: null, turns: [] } }; }
-			if(Method === "turn/start") { Submits++; if(Crash) { throw new Error("Original crash after possible submission"); } return { turn: { id: "turn-" + Submits, status: "inProgress" } }; }
+			if(Method === "thread/start") { Peer.Start = Params; return { model: "original-model", serviceTier: Params.serviceTier, thread: { id: "thread-" + Peer.count, ephemeral: true, path: null, turns: [] } }; }
+			if(Method === "turn/start") { Peer.Turn = Params; Submits++; if(Crash) { throw new Error("Original crash after possible submission"); } return { turn: { id: "turn-" + Submits, status: "inProgress" } }; }
 			return {};
 		}, send() {}, close() { Peer.closed = true; } };
 	};
@@ -40,6 +40,27 @@ async function fixture(Seed?: (Config: any) => Promise<void>)
 	return { Directory, Config, Peers, Http, connection, submissions: () => Submits, crash: () => { Crash = true; }, max_post: () => MaxPost, restart: async () => { await Bridge.close(); Bridge = new RemoteBridge(Config, Create); Port = await Bridge.listen(); }, close: async () => { await Bridge.close(); assert.ok(resolve(Directory).startsWith(resolve(tmpdir()) + sep)); rmSync(Directory, { recursive: true }); } };
 }
 function state(Messages: any[] = []) { return { Settings: { Model: "original-model", Effort: "low", Instructions: "Original" }, Sessions: [{ Id: "original-session", Title: "Original", ThreadId: null, Messages }], ActiveId: "original-session" }; }
+
+test("bridge keeps Ultrafast through startup, operation binding, actual RPC and replay", async () =>
+{
+	const F = await fixture(undefined, true), C = F.connection();
+	try
+	{
+		await C.connect(); assert.equal(C.Info.capabilities.codexSpeedTiers, 1);
+		await C.sync_state(state([{ Id: "q", Role: "user", Text: "Original", Prompt: "Original prompt" }]));
+		const Start = { clientSessionId: "original-session", model: "original-model", serviceTier: "ultrafast", config: { model_reasoning_effort: "low" } };
+		const Thread = await C.request("thread/start", Start); assert.equal(F.Peers[0].Start.serviceTier, "ultrafast");
+		const Params = { threadId: Thread.thread.id, model: "original-model", effort: "low", serviceTier: "ultrafast", input: [{ type: "text", text: "Original prompt" }, { type: "skill", name: "math-writing", path: "/client/path" }] };
+		const Legacy = await create_send_operation(C.scope(), "original-session", "q", { Prompt: "Original prompt", Run: { Model: "original-model", Effort: "low", Fast: true } });
+		await assert.rejects(C.request_operation(Legacy, Params), /待核对/); assert.equal(F.submissions(), 0);
+		assert.equal(await C.operation_status(Legacy.Id), null);
+		const Op = await create_send_operation(C.scope(), "original-session", "q", { Prompt: "Original prompt", Run: { Model: "original-model", Effort: "low", Fast: false, Speed: "ultrafast" } });
+		await C.request_operation(Op, Params); await C.request_operation(Op, Params);
+		assert.equal(F.submissions(), 1); assert.equal(F.Peers[0].Turn.serviceTier, "ultrafast");
+		assert.equal((await C.request("bridge/resume", { threadId: Thread.thread.id })).serviceTier, "ultrafast");
+	}
+	finally { C.close(); await F.close(); }
+});
 
 test("protocol2 syncs history larger than one HTTP budget by content pages and rejects stale legacy writes", async () =>
 {

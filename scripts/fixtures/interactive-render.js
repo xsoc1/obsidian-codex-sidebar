@@ -184,6 +184,37 @@
 		return {x:Bounds.left + 8,y:Bounds.top + Bounds.height/2,toX:Bounds.left + 8 + (Bounds.width - 16)*0.46, width:Bounds.width, value:value()};
 	};
 
+	window.exercise_speed_dropdown = async () =>
+	{
+		const {View,Owner,Root}=window.InteractiveCase, Model=Owner.Models[0], Settings=Owner.State.Settings;
+		const Panel=require_element(".codex-options",Root), Select=require_element(".codex-speed-control select",Panel);
+		Panel.open=true;
+		Model.serviceTiers=[{id:"priority",name:"Fast"},{id:"ultrafast",name:"Ultrafast"}];
+		const Selected=[];
+		Owner.supports_ultrafast=()=>true;
+		Owner.update_run_settings=(_Model,_Effort,Speed)=>{Selected.push(Speed);Settings.Speed=Speed;Owner.refresh();};
+		Settings.Fast=true;Owner.refresh();
+		check('legacy-fast-visible-in-speed-picker', Select.value==="fast" && [...Select.options].map(O=>O.textContent).join("|")==="标准|Fast|Ultrafast");
+		Select.value="ultrafast";Select.dispatchEvent(new Event("change"));
+		check('ultrafast-choice-and-summary', Selected.join()==="ultrafast" && Select.value==="ultrafast" && Panel.querySelector('summary').textContent.includes("Ultrafast"));
+		const P=Panel.getBoundingClientRect(),S=Select.getBoundingClientRect();
+		check('speed-label-and-width', Select.labels[0]?.textContent.startsWith("速度") && S.width>0 && S.left>=P.left && S.right<=P.right+1);
+		Owner.supports_ultrafast=()=>false;Owner.refresh();
+		check('legacy-bridge-ultrafast-not-attempted', Select.options[Select.selectedIndex].disabled && Select.options[Select.selectedIndex].textContent.includes("需更新远程桥"));
+		Model.serviceTiers=undefined;Owner.supports_ultrafast=()=>true;Owner.refresh();
+		check('missing-catalog-tier-not-substituted', Select.value==="ultrafast" && Select.options[Select.selectedIndex].disabled);
+		Model.serviceTiers=[{id:"priority",name:"Fast"},{id:"ultrafast",name:"Ultrafast"}];Owner.refresh();
+		await settle();
+	};
+
+	window.restore_speed_fixture = () =>
+	{
+		const {Owner,Root}=window.InteractiveCase;
+		Owner.State.Settings.Fast=false;delete Owner.State.Settings.Speed;
+		delete Owner.Models[0].serviceTiers;delete Owner.supports_ultrafast;delete Owner.update_run_settings;
+		require_element(".codex-options",Root).open=false;Owner.refresh();
+	};
+
 	window.exercise_interactive_case = async () =>
 	{
 		const C = window.InteractiveCase, {View,Owner,Root} = C, E = window.InteractiveEvidence;

@@ -8,7 +8,7 @@ import type { ChatMessage } from "./history";
 import { sidebar_panel, reveal_sidebar_panel, type SidebarPanel } from "./sidebar-layout";
 import { SidebarContextPanel } from "./sidebar-context-panel";
 import { observe_sidebar_footer } from "./sidebar-footer";
-import { selected_model, fast_tier, context_usage } from "./controls";
+import { selected_model, run_speed, speed_options, speed_label, tier_label, context_usage, type RunSpeed } from "./controls";
 import { structured_task, question_label } from "./edit/presentation";
 import { safe_math_markdown } from "./edit/safe-markdown";
 import { pdf_preview, PdfPageModal } from "./pdf/panel";
@@ -87,7 +87,8 @@ export class CodexView extends ItemView
 	private DeleteSessionButton!: HTMLButtonElement;
 	private ModelElement!: HTMLSelectElement;
 	private EffortElement!: HTMLSelectElement;
-	private FastElement!: HTMLInputElement;
+	private SpeedElement!: HTMLSelectElement;
+	private SpeedLabel!: HTMLLabelElement;
 	private UsageToggle!: HTMLInputElement;
 	private CompletionToggle!: HTMLInputElement;
 	private UsageElement!: HTMLElement;
@@ -208,10 +209,10 @@ export class CodexView extends ItemView
 		const EffortLabel = Controls.createEl("label");
 		EffortLabel.createSpan({ text: "思考档次" });
 		this.EffortElement = EffortLabel.createEl("select");
+		this.SpeedLabel = Controls.createEl("label", { cls: "codex-speed-control" });
+		this.SpeedLabel.createSpan({ text: "速度" });
+		this.SpeedElement = this.SpeedLabel.createEl("select");
 		const Toggles = OptionsPanel.Body.createDiv({ cls: "codex-run-toggles" });
-		const FastLabel = Toggles.createEl("label");
-		this.FastElement = FastLabel.createEl("input", { type: "checkbox" });
-		FastLabel.createSpan({ text: "Fast" });
 		const UsageLabel = Toggles.createEl("label");
 		this.UsageToggle = UsageLabel.createEl("input", { type: "checkbox" });
 		UsageLabel.createSpan({ text: "上下文占用" });
@@ -219,10 +220,10 @@ export class CodexView extends ItemView
 		this.CompletionToggle = CompletionLabel.createEl("input", { type: "checkbox" });
 		CompletionLabel.createSpan({ text: "行内补全" });
 		this.CompletionToggle.addEventListener("change", () => void this.Owner.set_completion(this.CompletionToggle.checked));
-		const ApplyOptions = () => void this.Owner.update_run_settings(this.ModelElement.value, this.EffortElement.value, this.FastElement.checked);
+		const ApplyOptions = () => void this.Owner.update_run_settings(this.ModelElement.value, this.EffortElement.value, this.SpeedElement.value as RunSpeed);
 		this.ModelElement.addEventListener("change", ApplyOptions);
 		this.EffortElement.addEventListener("change", ApplyOptions);
-		this.FastElement.addEventListener("change", ApplyOptions);
+		this.SpeedElement.addEventListener("change", ApplyOptions);
 		this.UsageToggle.addEventListener("change", () =>
 		{
 			this.Owner.State.Settings.ShowUsage = this.UsageToggle.checked;
@@ -365,7 +366,7 @@ export class CodexView extends ItemView
 		}
 	}
 
-	private set_options(ElementValue: HTMLSelectElement, Options: { Value: string; Label: string }[], Current: string): void
+	private set_options(ElementValue: HTMLSelectElement, Options: { Value: string; Label: string; Disabled?: boolean }[], Current: string): void
 	{
 		const Signature = JSON.stringify(Options);
 		if(ElementValue.dataset.options !== Signature)
@@ -373,7 +374,7 @@ export class CodexView extends ItemView
 			ElementValue.empty();
 			for(const Option of Options)
 			{
-				ElementValue.createEl("option", { text: Option.Label, value: Option.Value });
+				ElementValue.createEl("option", { text: Option.Label, value: Option.Value, ...(Option.Disabled ? { attr: { disabled: "" } } : {}) });
 			}
 			ElementValue.dataset.options = Signature;
 		}
@@ -384,7 +385,11 @@ export class CodexView extends ItemView
 	{
 		const Settings = this.Owner.State.Settings;
 		const Selected = selected_model(Settings, this.Owner.Models);
-		this.OptionsSummary?.setText(`模型与选项 · ${[Settings.Model || "加载中", Settings.Effort, Settings.Fast ? "Fast" : ""].filter(Boolean).join(" / ")}`);
+		const Speed = run_speed(Settings), Alternate = !!this.Owner.Backend;
+		const AllowUltra = this.Owner.supports_ultrafast?.() ?? false;
+		const Available = speed_options(Selected, AllowUltra), SpeedAvailable = Available.includes(Speed);
+		const SpeedText = !SpeedAvailable ? `${speed_label(Speed)}（不可用）` : speed_label(Speed);
+		this.OptionsSummary?.setText(`模型与选项 · ${[Settings.Model || "加载中", Settings.Effort, !Alternate && Speed !== "default" ? SpeedText : ""].filter(Boolean).join(" / ")}`);
 		const ModelOptions = this.Owner.Models.map(Value => ({ Value: Value.model, Label: Value.displayName }));
 		if(Settings.Model && !ModelOptions.some(Value => Value.Value === Settings.Model))
 		{
@@ -395,7 +400,6 @@ export class CodexView extends ItemView
 			ModelOptions.push({ Value: "", Label: "加载模型..." });
 		}
 		this.set_options(this.ModelElement, ModelOptions, Settings.Model);
-		const Alternate = !!this.Owner.Backend;
 		const EffortOptions = (Selected?.supportedReasoningEfforts ?? []).map(Value => ({ Value: Value.reasoningEffort, Label: Value.reasoningEffort }));
 		if(Alternate) { EffortOptions.unshift({ Value: "", Label: "使用服务商默认" }); }
 		if(Settings.Effort && !EffortOptions.some(Value => Value.Value === Settings.Effort))
@@ -409,8 +413,16 @@ export class CodexView extends ItemView
 		this.set_options(this.EffortElement, EffortOptions, Settings.Effort);
 		this.ModelElement.disabled = this.input_blocked() || Alternate || !this.Owner.Models.length;
 		this.EffortElement.disabled = this.input_blocked() || !Selected || (!Selected.supportedReasoningEfforts.length && !(Alternate && Settings.Effort));
-		this.FastElement.disabled = this.input_blocked() || (!fast_tier(Selected) && !Settings.Fast);
-		this.FastElement.checked = Settings.Fast;
+		const NeedsBridge = !AllowUltra && speed_options(Selected, true).includes("ultrafast");
+		const SpeedOptions: { Value: RunSpeed; Label: string; Disabled?: boolean }[] = Available.map(Value => ({ Value, Label: speed_label(Value) }));
+		if(NeedsBridge) { SpeedOptions.push({ Value: "ultrafast", Label: "Ultrafast（需更新远程桥）", Disabled: true }); }
+		if(!SpeedAvailable && !(NeedsBridge && Speed === "ultrafast"))
+		{
+			SpeedOptions.push({ Value: Speed, Label: SpeedText, Disabled: true });
+		}
+		this.set_options(this.SpeedElement, SpeedOptions, Speed);
+		this.SpeedLabel.hidden = Alternate;
+		this.SpeedElement.disabled = Alternate || this.input_blocked() || Available.length === 1 && SpeedAvailable;
 		this.UsageToggle.checked = Settings.ShowUsage;
 		this.CompletionToggle.checked = Settings.Completion;
 		this.CatalogElement.setText(this.Owner.CatalogError);
@@ -668,7 +680,7 @@ export class CodexView extends ItemView
 			render_sync_conflicts(this.ConflictsElement, Conflicts, this.Owner.State, (Key, Choice) => this.Owner.resolve_message_conflict(Key, Choice));
 		}
 		this.NavigationSummary?.setText(`会话与连接 · ${Session.Title}`);
-		const Effective = [Session.EffectiveModel, Session.EffectiveEffort, Session.EffectiveTier === "priority" || Session.EffectiveTier === "fast" ? "Fast" : ""].filter(Boolean).join(" / ");
+		const Effective = [Session.EffectiveModel, Session.EffectiveEffort, tier_label(Session.EffectiveTier)].filter(Boolean).join(" / ");
 		this.StatusElement.setText(`${this.Owner.Status}${Effective ? ` | 最近请求: ${Effective}` : ""} | ${this.Owner.SkillStatus}`);
 		const Notes = this.Owner.NoteSessions;
 		this.NoteSessionBind.disabled = !Notes?.Path || this.input_blocked();

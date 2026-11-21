@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { CodexConnection, type RpcMessage } from "./rpc";
 import { CompletionService } from "./completion";
 import { math_writing_skill, skill_input } from "./skills";
-import { run_options, type ModelInfo } from "./controls";
+import { bridge_run_options, run_speed, wire_speed, type ModelInfo } from "./controls";
 import { environment_instructions, derived_message_prompt } from "./prompt";
 import { ObsidianTool, run_obsidian_read } from "./obsidian-tool";
 import type { RpcConnection } from "./remote";
@@ -378,7 +378,7 @@ class DeviceAgent
 	async info(): Promise<any>
 	{
 		await this.ready();
-		return { client: this.Id, dataIdentity: this.Store.Data.Identity, agentInstance: this.AgentInstance, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, bridgeVersion: ProductVersion, protocolVersion: SyncProtocol, capabilities: { ...SyncCapabilities, historyRead: 1, historyReadBodyVersions: 1 }, budgets: SyncBudgets, pdfPageImages: 1, mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
+		return { client: this.Id, dataIdentity: this.Store.Data.Identity, agentInstance: this.AgentInstance, cwd: this.Config.Cwd, vault: this.Config.Vault, cli: this.Config.ObsidianCli, isolated: true, bridgeVersion: ProductVersion, protocolVersion: SyncProtocol, capabilities: { ...SyncCapabilities, historyRead: 1, historyReadBodyVersions: 1, codexSpeedTiers: 1 }, budgets: SyncBudgets, pdfPageImages: 1, mathWritingVersion: this.Skill ? skill_version(this.Skill.path) : "未确认" };
 	}
 
 	events(After: number, Protocol = 1): any
@@ -467,7 +467,7 @@ class DeviceAgent
 				throw new Error("远程补全正在进行, 请稍后重试");
 			}
 			const Input = { Path: bounded_string(Params.input?.Path, 512), Before: bounded_string(Params.input?.Before, 6000), After: bounded_string(Params.input?.After, 2000) };
-			const Options = run_options({ Model: Params.options?.model, Effort: Params.options?.effort, Fast: ["priority", "fast"].includes(Params.options?.serviceTier) }, this.Models);
+			const Options = bridge_run_options(Params.options?.model, Params.options?.effort, Params.options?.serviceTier, this.Models);
 			const Controller = new AbortController(); this.Jobs.set(Job, Controller);
 			try
 			{
@@ -496,7 +496,7 @@ class DeviceAgent
 				throw new Error("远程运行会话过多, 请重启桥并从历史恢复");
 			}
 			const Instructions = environment_instructions(bounded_string(Params.developerInstructions ?? "", 64000), { Vault: this.Config.Vault, Root: this.Config.Cwd, Cli: this.Config.ObsidianCli });
-			const Options = run_options({ Model: Params.model, Effort: Params.config?.model_reasoning_effort, Fast: ["priority", "fast"].includes(Params.serviceTier) }, this.Models);
+			const Options = bridge_run_options(Params.model, Params.config?.model_reasoning_effort, Params.serviceTier, this.Models);
 			const Work = (async () =>
 			{
 				const Result = await Connection.request(Method, { cwd: this.Config.Cwd, model: Options.model, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", dynamicTools: [ObsidianTool, HistoryReadTool], developerInstructions: Instructions, serviceTier: Options.serviceTier, config: { model_reasoning_effort: Options.effort, model_reasoning_summary: "auto" } });
@@ -535,7 +535,7 @@ class DeviceAgent
 				throw new Error("远程请求必须包含问题与 math-writing");
 			}
 			const Text = bounded_string(Params.input[0].text, 96000);
-			const Options = run_options({ Model: Params.model, Effort: Params.effort, Fast: ["priority", "fast"].includes(Params.serviceTier) }, this.Models);
+			const Options = bridge_run_options(Params.model, Params.effort, Params.serviceTier, this.Models);
 			const Images = Params.input.slice(2).map((Item: any) => ({ type: "image", url: this.PdfImages.resolve(Item.url) }));
 			const Model = this.Models.find(Value => Value.model === Options.model);
 			if(Images.length && Model?.inputModalities && !Model.inputModalities.includes("image")) { throw new Error("当前模型不支持 PDF 页图"); }
@@ -645,7 +645,9 @@ class DeviceAgent
 		const Digest = token_hash(canonical_json({ Scope: Incoming.Scope, SessionId: Incoming.SessionId, MessageId: Incoming.MessageId, Input })), RequestDigest = token_hash(canonical_json(Params));
 		if(Digest !== Incoming.Digest) { throw new Error("发送操作输入摘要不一致"); }
 		if(typeof Input?.Prompt !== "string" || Params?.input?.[0]?.type !== "text" || ![Input.Prompt, derived_message_prompt({ Text: "", Prompt: Input.Prompt, Context: Input.Context, Quote: Input.Quote })].includes(Params.input[0].text)) { throw new Error("解析后的问题不等于不可变操作输入或其已核对派生表示, 不复用身份提交"); }
-		if(Input.Run?.Model && Input.Run.Model !== Params.model || Input.Run?.Effort && Input.Run.Effort !== Params.effort || typeof Input.Run?.Fast === "boolean" && Input.Run.Fast !== ["priority", "fast"].includes(Params.serviceTier)) { throw new Error("解析后的模型选择不同于已保存操作, 请新建分支"); }
+		const Speed = wire_speed(Params.serviceTier), HasSpeed = Input.Run?.Speed !== undefined || typeof Input.Run?.Fast === "boolean";
+		if(Input.Run?.Model && Input.Run.Model !== Params.model || Input.Run?.Effort && Input.Run.Effort !== Params.effort ||
+			(HasSpeed ? run_speed(Input.Run) !== Speed : Speed === "ultrafast")) { throw new Error("解析后的模型或速度选择不同于已保存操作, 请新建分支"); }
 		const Images = Params.input.slice(2);
 		if(Images.length && (!Array.isArray(Input.PdfRefs) || Images.length !== Input.PdfRefs.length || Images.some((I: any, N: number) => I.url !== "obsidian-pdf:" + Input.PdfRefs[N]?.Id))) { throw new Error("PDF 输入不同于已保存的原始引用"); }
 		const Existing = this.Store.operation(Incoming.Id);
@@ -656,6 +658,8 @@ class DeviceAgent
 		}
 		if(this.Store.is_deleted(Incoming.SessionId)) { throw new Error("会话已删除, 不注册发送操作"); }
 		await this.ready();
+		// Reject an unsupported tier before journaling an attempted inference.
+		bridge_run_options(Params.model, Params.effort, Params.serviceTier, this.Models);
 		const Registered = this.Store.operation(Incoming.Id);
 		if(Registered)
 		{

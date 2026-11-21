@@ -17,7 +17,7 @@ import { RemoteConnection, remote_url, type RemoteConfig, type RpcConnection } f
 import { browser_http, type BrowserRequest } from "./browser-http";
 import { native_http } from "./native-http";
 import { math_writing_skill, skill_input, type SkillInput } from "./skills";
-import { selected_model, initial_selection, fast_tier, run_options, context_usage, type ModelInfo } from "./controls";
+import { selected_model, initial_selection, run_speed, speed_options, run_options, context_usage, type ModelInfo, type RunSettings, type RunSpeed } from "./controls";
 import { ObsidianWriteHost } from "./edit/obsidian-host";
 import { task_prompt, type TaskSpec } from "./edit/task";
 import { structured_task, question_label } from "./edit/presentation";
@@ -90,6 +90,7 @@ interface SidebarSettings
 	Model: string;
 	Effort: string;
 	Fast: boolean;
+	Speed?: "ultrafast";
 	ShowUsage: boolean;
 	Instructions: string;
 	AttachContext: boolean;
@@ -895,7 +896,7 @@ export default class CodexSidebarPlugin extends Plugin
 		{
 			throw new Error("补全已取消");
 		}
-		const Options = run_options(this.State.Settings, this.Models);
+		const Options = run_options(this.State.Settings, this.Models, this.supports_ultrafast());
 		const Selected = selected_model(this.State.Settings, this.Models);
 		Options.effort = Selected?.supportedReasoningEfforts.find(Value => Value.reasoningEffort === "low")?.reasoningEffort ?? Selected?.defaultReasoningEffort ?? "low";
 		if(this.Remote.Enabled)
@@ -1206,6 +1207,7 @@ export default class CodexSidebarPlugin extends Plugin
 		const Model = backend_model(this.Backend), Current = this.State.Settings;
 		const Effort = this.Backend.Kind === "api" && api_reasoning_supported(this.Backend.Provider) && Current.Model === Model ? Current.Effort : "";
 		Object.assign(Current, { Model, Effort, Fast: false });
+		delete Current.Speed;
 		for(const Operation of this.State.Sync?.Operations ?? [])
 		{
 			if(Operation.Status === "running") { update_operation(this.State.Sync!, Operation.Id, "submission-unknown", { ...this.local_operation_version(Operation), Error: "此前的直连或本机进程已关闭, 不自动重发" }); }
@@ -1236,7 +1238,7 @@ export default class CodexSidebarPlugin extends Plugin
 		this.RemoteStatePath = this.state_path(true);
 		this.save_remote_config();
 		localStorage.setItem(this.BackendStorage, JSON.stringify(Backend));
-		this.State = prune_sessions(Saved?.Sessions?.length ? Saved : { Settings: { ...this.State.Settings, Model: "", Effort: "", Fast: false, Completion: !Backend }, Sessions: [new_session()], ActiveId: "" });
+		this.State = prune_sessions(Saved?.Sessions?.length ? Saved : { Settings: { ...this.State.Settings, Model: "", Effort: "", Fast: false, Speed: undefined, Completion: !Backend }, Sessions: [new_session()], ActiveId: "" });
 		this.State.Settings.EditScope = edit_scope(this.State.Settings.EditScope);
 		if(!this.State.Sessions.some(Value => Value.Id === this.State.ActiveId))
 		{
@@ -1286,6 +1288,7 @@ export default class CodexSidebarPlugin extends Plugin
 			if(!Next.Sessions.some(S=>S.Id===Next.ActiveId)){Next.ActiveId=Next.Sessions[0].Id;}
 			const Model=backend_model(Profile),OldModel=Next.Settings.Model;
 			Object.assign(Next.Settings,{Model,Effort:OldModel===Model?Next.Settings.Effort:"",Fast:false});
+			delete Next.Settings.Speed;
 			for(const S of Next.Sessions){S.ThreadId=null;S.InstructionsHash="";}
 			for(const O of Next.Sync?.Operations??[]){if(O.Status==="running"){O.Status="submission-unknown";O.Error="原连接已停止等待，未重新提交";}}
 			// Validate and read back the candidate before closing the original live driver.
@@ -1364,7 +1367,24 @@ export default class CodexSidebarPlugin extends Plugin
 		this.refresh();
 	}
 
-	async update_run_settings(Model: string, Effort: string, Fast: boolean): Promise<void>
+	supports_ultrafast(): boolean
+	{
+		return !this.Backend && (!this.Remote.Enabled || this.Connection instanceof RemoteConnection && this.Connection.Info?.capabilities?.codexSpeedTiers === 1);
+	}
+
+	private operation_run_settings(Input: unknown): RunSettings
+	{
+		const Current = this.State.Settings, Chosen = (Input as { Run?: Partial<RunSettings> } | undefined | null)?.Run;
+		if(!Chosen) { return Current; }
+		return {
+			Model: Chosen.Model || Current.Model,
+			Effort: this.Backend ? Chosen.Effort ?? Current.Effort : Chosen.Effort || Current.Effort,
+			Fast: Chosen.Fast ?? Current.Fast,
+			...(Chosen.Speed === "ultrafast" ? { Speed: Chosen.Speed } : {})
+		};
+	}
+
+	async update_run_settings(Model: string, Effort: string, Speed: RunSpeed | boolean): Promise<void>
 	{
 		if(this.Runtime.BlocksInput || this.Busy || this.ChatPreparing || this.SessionDeleting)
 		{
@@ -1392,7 +1412,12 @@ export default class CodexSidebarPlugin extends Plugin
 		Settings.Model = Model;
 		const Selected = selected_model(Settings, this.Models);
 		Settings.Effort = ModelChanged && !Selected?.supportedReasoningEfforts.some(Value => Value.reasoningEffort === Effort) ? Selected?.defaultReasoningEffort ?? Selected?.supportedReasoningEfforts[0]?.reasoningEffort ?? "" : Effort;
-		Settings.Fast = Fast && !!fast_tier(Selected);
+		const Requested = typeof Speed === "boolean" ? Speed ? "fast" : "default" : Speed;
+		// A deliberate model change may remove the selected speed. Refresh alone never downgrades it.
+		const Available = speed_options(Selected, this.supports_ultrafast());
+		const Mode = Available.includes(Requested) ? Requested : ModelChanged ? "default" : run_speed(Settings);
+		Settings.Fast = Mode === "fast";
+		if(Mode === "ultrafast") { Settings.Speed = Mode; } else { delete Settings.Speed; }
 		this.refresh();
 		await this.persist();
 	}
@@ -1592,7 +1617,7 @@ export default class CodexSidebarPlugin extends Plugin
 		return Ids;
 	}
 
-	private async ensure_thread(Ticket?: PreparationTicket, ExcludeMessageId?: string, Target = this.state_target()): Promise<void>
+	private async ensure_thread(Ticket?: PreparationTicket, ExcludeMessageId?: string, Target = this.state_target(), Frozen?: ReturnType<typeof run_options>): Promise<void>
 	{
 		await this.ensure_connection();
 		if(!this.Backend) { await this.ensure_math_skill(); }
@@ -1612,7 +1637,7 @@ export default class CodexSidebarPlugin extends Plugin
 			if(Visible()) { this.LoadedThread = LiveId; }
 			return;
 		}
-		const Options = this.Backend ? { model: backend_model(this.Backend), serviceTier: "default", effort: undefined } : run_options(this.State.Settings, this.Models);
+		const Options = this.Backend ? { model: backend_model(this.Backend), serviceTier: "default", effort: undefined } : Frozen ?? run_options(this.State.Settings, this.Models, this.supports_ultrafast());
 		const Instructions = this.work_instructions();
 		let Existing: any = null;
 		if(Target.Remote && Session.ThreadId)
@@ -1804,7 +1829,7 @@ export default class CodexSidebarPlugin extends Plugin
 				if(Prompt.length > 95000) { throw new Error("本轮输入超过已核对的协议上限, 请缩小来源或分段; 历史不删除"); }
 				Message = { Id: crypto.randomUUID(), Role: "user", ...Material, Text: Task ? question_label(Task) : Question.trim(), Prompt, Context: Context ? structuredClone(Context) : null, Quote: Quote ? structuredClone(Quote) : null, Task: PublicTask, ContextLabel: Quote ? "追问选中的回答 / 渲染选区 + 原回答 Markdown" : Context ? `${Context.Path} / ${Context.Kind} / ${Context.Mapping}` : undefined, Sources: [...(Context ? source_reference(Context, Target.Remote ? "client-snapshot" : "desktop-read") : []), ...structuredClone(Quote?.SourceReferences??[])] };
 				const Refs = message_pdf_refs(Message); if(Refs.length > 2) { throw new Error("每轮最多两张 PDF 图片, 整页和局部图共同占用名额"); }
-				Intent = await send_intent(Target.Scope, Session.Id, Message.Id, { Prompt, Context: Message.Context, Quote: Message.Quote, Task: PublicTask, ...(Message.ContinuesMessageId?{ContinuesMessageId:Message.ContinuesMessageId}:{}), ...(Message.MaterialOrigin?{MaterialOrigin:Message.MaterialOrigin}:{}), PdfRefs: Refs, Run: { Model: this.State.Settings.Model, Effort: this.State.Settings.Effort, Fast: this.State.Settings.Fast, Scope: Target.Scope, ...(this.Backend ? { Backend: structuredClone(this.Backend) } : {}) } });
+				Intent = await send_intent(Target.Scope, Session.Id, Message.Id, { Prompt, Context: Message.Context, Quote: Message.Quote, Task: PublicTask, ...(Message.ContinuesMessageId?{ContinuesMessageId:Message.ContinuesMessageId}:{}), ...(Message.MaterialOrigin?{MaterialOrigin:Message.MaterialOrigin}:{}), PdfRefs: Refs, Run: { Model: this.State.Settings.Model, Effort: this.State.Settings.Effort, Fast: this.State.Settings.Fast, ...(this.State.Settings.Speed === "ultrafast" ? { Speed: this.State.Settings.Speed } : {}), Scope: Target.Scope, ...(this.Backend ? { Backend: structuredClone(this.Backend) } : {}) } });
 				this.Runtime.check(Ticket); Message.OperationId = Intent.Id; Ticket.OperationId = Intent.Id;
 				const Latest = this.target_state(Target).Sessions.find(S => S.Id === Ticket.SessionId);
 				if(!Latest) { throw new PreparationCancelled(); }
@@ -1825,7 +1850,8 @@ export default class CodexSidebarPlugin extends Plugin
 			if(!Sync.Operations.some(O => O.Id === Operation!.Id)) { Sync.Operations.push(Operation); }
 			await this.save_target(Target); this.Runtime.check(Ticket);
 			this.target_state(Target).Outbox = this.target_state(Target).Outbox?.filter(I => I.Id !== Operation!.Id);
-			await preparation_step(this.ensure_thread(Ticket, Message.Id, Target), Ticket, this.Runtime);
+			const Frozen = this.Backend ? undefined : run_options(this.operation_run_settings(Operation.Input), this.Models, this.supports_ultrafast());
+			await preparation_step(this.ensure_thread(Ticket, Message.Id, Target, Frozen), Ticket, this.Runtime);
 			CurrentSession = this.target_state(Target).Sessions.find(S => S.Id === Ticket.SessionId)!; Message = CurrentSession?.Messages.find(M => M.Id === Message!.Id);
 			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId) ?? Operation;
 			if(!CurrentSession || !Message) { throw new PreparationCancelled(); }
@@ -1846,19 +1872,18 @@ export default class CodexSidebarPlugin extends Plugin
 			this.Runtime.check(Ticket); this.Activity = "保存提问与待同步操作"; this.refresh(); await preparation_step(this.save_target(Target, true), Ticket, this.Runtime);
 			Operation = this.target_state(Target).Sync?.Operations.find(O => O.Id === Ticket.OperationId);
 			if(!Operation || Operation.Conflicts?.length) { throw new Error("原发送操作缺失或有冲突, 不自动提交"); }
-			const Chosen = ((Operation.Input as any)?.Run ?? this.State.Settings), Settings = { ...this.State.Settings, Model: Chosen.Model || this.State.Settings.Model,
-				Effort: this.Backend ? Chosen.Effort ?? this.State.Settings.Effort : Chosen.Effort || this.State.Settings.Effort, Fast: Chosen.Fast ?? this.State.Settings.Fast };
+			const Chosen = (Operation.Input as any)?.Run, Settings = this.operation_run_settings(Operation.Input);
 			const BodyVersions = this.Backend ? this.backend_history_tools() : !Target.Remote || (this.HostInfo as any)?.capabilities?.historyReadBodyVersions === 1;
 			quote_input_ready(Message.Quote,CurrentSession.Id,CurrentSession.Messages,BodyVersions,this.quote_ancestors(CurrentSession));
 			const DerivedPrompt = derived_message_prompt(Message);
 			if(Target.Remote && !BodyVersions && DerivedPrompt !== Message.Prompt) { throw new Error("当前桥不支持已保存引用的派生输入校验, 请升级桥; 原 Prompt 和来源保留"); }
-			if(Chosen.Scope && Chosen.Scope !== Target.Scope || Chosen.Backend && JSON.stringify(Chosen.Backend) !== JSON.stringify(this.Backend)) { throw new Error("本轮冻结的连接与活动 driver 不同，请恢复原配置或明确重发；原输入保留"); }
+			if(Chosen?.Scope && Chosen.Scope !== Target.Scope || Chosen?.Backend && JSON.stringify(Chosen.Backend) !== JSON.stringify(this.Backend)) { throw new Error("本轮冻结的连接与活动 driver 不同，请恢复原配置或明确重发；原输入保留"); }
 			if(this.Backend && Settings.Model !== backend_model(this.Backend)) { throw new Error("已保存操作使用另一模型, 请恢复原模型或明确建立重发分支"); }
 			if(this.Backend && Settings.Effort && !selected_model(Settings, this.Models)?.supportedReasoningEfforts.some(Value => Value.reasoningEffort === Settings.Effort))
 			{
 				throw new Error("当前目录无法确认本轮的思考档次. 请重连核对, 或用可用档次明确重发.");
 			}
-			const Options = this.Backend ? { model: Settings.Model, serviceTier: "default", effort: Settings.Effort || undefined } : run_options(Settings, this.Models);
+			const Options = this.Backend ? { model: Settings.Model, serviceTier: "default", effort: Settings.Effort || undefined } : run_options(Settings, this.Models, this.supports_ultrafast());
 			const Params = { threadId: CurrentSession.ThreadId, input: [...(Skill ? skill_input(DerivedPrompt, Skill) : [{ type: "text", text: DerivedPrompt }]), ...Images], ...Options };
 			let Result: any;
 			const BeforePost = async () =>

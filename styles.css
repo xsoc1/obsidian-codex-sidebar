@@ -328,6 +328,8 @@
 .codex-controls { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px; margin-bottom: 8px; }
 .codex-controls label { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 11px; color: var(--text-muted); }
 .codex-controls select { width: 100%; min-width: 0; font-size: 12px; }
+.codex-controls .codex-speed-control { grid-column: 1 / -1; }
+.codex-controls .codex-speed-control[hidden] { display: none; }
 @container (max-width: 300px) {
 	.codex-controls { grid-template-columns: minmax(0, 1fr); }
 }

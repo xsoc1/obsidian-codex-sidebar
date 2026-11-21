@@ -1033,6 +1033,38 @@ test("mobile native transport selection is device-local and reaches the same rem
 	Instance.onunload();
 });
 
+test("compiled client only sends Ultrafast through a bridge that explicitly supports it", async () =>
+{
+	for(const NewBridge of [false, true])
+	{
+		const Requests: any[] = [], Http = bootstrap_http();
+		const { Instance: P } = await mobile_fixture(async Params =>
+		{
+			const R = await Http(Params), Body = Params.body ? JSON.parse(Params.body) : null;
+			if(new URL(Params.url).pathname === "/info" && NewBridge) { (R.json as any).capabilities = { codexSpeedTiers: 1 }; }
+			if(Body?.method === "model/list") { R.json.data[0].serviceTiers = [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }]; }
+			if(Body?.method) { Requests.push(Body); }
+			return R;
+		});
+		try
+		{
+			Object.assign(P.Remote, { Url: "https://example.test", Token: "fixture", Transport: "native" });
+			await P.ensure_connection(); assert.equal(P.supports_ultrafast(), NewBridge);
+			await P.update_run_settings("test-model", "low", "fast");
+			assert.equal(P.State.Settings.Fast, true);
+			if(NewBridge) { await P.update_run_settings("test-model", "low", "ultrafast"); assert.equal(P.State.Settings.Fast, false); }
+			else { Object.assign(P.State.Settings, { Fast: false, Speed: "ultrafast" }); } // previously paired to a new bridge
+			assert.equal(P.State.Settings.Speed, "ultrafast");
+			assert.equal(await P.send_message("Original speed question", null), NewBridge);
+			const Sends = Requests.filter(R => ["thread/start", "turn/start"].includes(R.method));
+			assert.deepEqual(Sends.map(R => [R.method, R.params.serviceTier]), NewBridge ? [["thread/start", "ultrafast"], ["turn/start", "ultrafast"]] : []);
+			if(!NewBridge) { assert.match(P.Status, /独立桥未确认支持 Ultrafast/); }
+			else { assert.equal(P.State.Sync.Operations.at(-1).Input.Run.Speed, "ultrafast"); }
+		}
+		finally { P.onunload(); }
+	}
+});
+
 test("built mobile entry loads and initializes without Node, Electron or desktop adapter calls", async () =>
 {
 	const { Instance, Files, Required } = await mobile_fixture();

@@ -4,7 +4,7 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
-**[2.0.0-beta.21](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.21)** 更新内置数学写作规则：问答先用白话讲清核心，稿件正文保留完整推导，交付说明与正文分开。“生成修改预览”把修改依据与交接事项放在预览理由里，不写进笔记。[写作规则与技能依赖](docs/development.md#math-writing-是独立的私有依赖) · [选段追问及交互说明](docs/interactive-answers.md) · [连接设置](docs/backends.md)
+**[2.0.0-beta.22](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.22)**：Codex 的「模型与选项 → 速度」支持 **标准 / Fast / Ultrafast**。按当前模型目录显示，已有 Fast 不自动升档。[速度设置](docs/backends.md#codex-速度) · [数学写作规则](docs/development.md#math-writing-是独立的私有依赖) · [交互说明](docs/interactive-answers.md)
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -18,7 +18,7 @@
 - **会话管理**: 随笔记切换对应会话, 保留历史; 优先恢复当前会话, 其他正文按需读取, 长会话分段浏览. 问题先保存再提交, 断线后核对原操作. 支持设备本地草稿、编辑问题、分支重发、确认删除与完整会话导出, 沿用原始来源快照.
 - **来源回跳**: 回答的链接基准随原问题固定, 来源清单可回到原笔记或 PDF 页; 实际补读范围和 Windows 副本有明确标记. 连续追问可跳回原说明与最新整合回答.
 - **行内补全**: 编辑停顿后提出短续写, 在侧栏确认插入. 保留 Obsidian 原生 Tab 和中文输入法行为.
-- **模型选择**: 选择实际可用的模型、思考档次与 Fast, 自动保存选择; 按需显示上下文占用和请求状态.
+- **模型选择**: 选择实际可用的模型、思考档次与 Codex 速度, 自动保存选择; 按需显示上下文占用和请求状态.
 - **磨砂界面**: 顶部工具区与输入区采用局部磨砂, 正文保持清晰. 支持明暗主题、窄栏和独立折叠; 系统要求减少透明效果时使用不透明表面.
 
 ## 安装
@@ -39,7 +39,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.21` 属于预发布版本，在 BRAT 中需指定此版本。已有 beta.15 独立桥可继续使用；从更早版本迁移及代码回退请参阅 [升级说明](docs/migration.md)。
+`2.0.0-beta.22` 属于预发布版本，在 BRAT 中需指定此版本。beta.15 独立桥可继续用标准或 Fast；远程 Ultrafast 需要更新独立桥。[升级说明](docs/migration.md)
 
 
 ### iPad

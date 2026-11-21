@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { run_options, initial_selection, context_usage, fast_tier, type ModelInfo } from "../src/controls";
+import { run_options, initial_selection, context_usage, fast_tier, bridge_run_options, run_speed, speed_options, type ModelInfo } from "../src/controls";
 
 const Models: ModelInfo[] = [
 	{ model: "model-a", displayName: "Model A", supportedReasoningEfforts: [{ reasoningEffort: "low", description: "" }, { reasoningEffort: "high", description: "" }], defaultReasoningEffort: "low", serviceTiers: [{ id: "priority", name: "Fast", description: "" }], isDefault: true },
@@ -41,4 +41,25 @@ test("context occupancy uses the last request, not accumulated consumption; unkn
 	assert.equal(context_usage({ ...Usage, modelContextWindow: null })?.Percent, null);
 	assert.equal(context_usage(undefined), null);
 	assert.equal(context_usage({ ...Usage, last: { ...Usage.last, totalTokens: -1 } }), null);
+});
+
+test("Ultrafast is a separately advertised Codex speed, never an upgrade or fallback for Fast", () =>
+{
+	const Ultra = { ...Models[0], serviceTiers: [...Models[0].serviceTiers!, { id: "ultrafast", name: "Ultrafast", description: "" }] };
+	const Standard = { Model: Ultra.model, Effort: "high", Fast: false };
+	const Saved = { ...Standard, Speed: "ultrafast" as const };
+	assert.deepEqual(speed_options(Ultra, true), ["default", "fast", "ultrafast"]);
+	assert.deepEqual(speed_options(Ultra, false), ["default", "fast"]);
+	assert.deepEqual(speed_options(Models[1], true), ["default"]);
+	assert.equal(run_speed({ Fast: true }), "fast");
+	assert.equal(run_speed({ Fast: false }), "default");
+	assert.deepEqual(initial_selection(Saved, [Ultra]), Saved);
+	assert.equal(run_options(Saved, [Ultra]).serviceTier, "ultrafast");
+	assert.equal(run_options({ ...Standard, Fast: true }, [Ultra]).serviceTier, "priority");
+	assert.equal(bridge_run_options(Ultra.model, "low", "ultrafast", [Ultra]).serviceTier, "ultrafast");
+	assert.equal(bridge_run_options(Ultra.model, "low", "fast", [Ultra]).serviceTier, "priority");
+	assert.equal(bridge_run_options(Ultra.model, "low", undefined, [Ultra]).serviceTier, "default");
+	assert.throws(() => run_options(Saved, [Ultra], false), /独立桥未确认支持 Ultrafast/);
+	assert.throws(() => run_options(Saved, Models), /未报告 Ultrafast 支持/);
+	assert.throws(() => bridge_run_options(Ultra.model, "low", "superfast", [Ultra]), /不支持此 Codex 速度档位/);
 });

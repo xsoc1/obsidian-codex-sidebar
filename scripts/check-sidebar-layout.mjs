@@ -50,8 +50,9 @@ function render(folded,css,height,width,mobile=true,currentComposer=css===styles
 	const o=Layout.sidebar_panel(toolbar===r?p:toolbar,'codex-options','模型与选项 · gpt-6.1-sol / xhigh',mobile);
 	const controls=el(o.Body,'div','codex-controls');
 	['模型','思考档次'].forEach(t=>{const l=el(controls,'label','',t);el(el(l,'select'),'option','',t==='模型'?'gpt-6.1-sol':'xhigh');});
+	if(currentComposer){const speed=el(el(controls,'label','codex-speed-control','速度'),'select');['标准','Fast','Ultrafast'].forEach(t=>el(speed,'option','',t));speed.selectedIndex=2;}
 	const toggles=el(o.Body,'div','codex-run-toggles');
-	['Fast','上下文占用','行内补全'].forEach(t=>{const l=el(toggles,'label');const input=el(l,'input');input.type='checkbox';el(l,'span','',t);});
+	(currentComposer?['上下文占用','行内补全']:['Fast','上下文占用','行内补全']).forEach(t=>{const l=el(toggles,'label');const input=el(l,'input');input.type='checkbox';el(l,'span','',t);});
 	el(o.Body,'div','codex-usage','上下文 ~28%');
 	const send=folded?Layout.sidebar_panel(p,'codex-send-tools','提问与发送',mobile):{Body:p};
 	const input=el(send.Body,'textarea');input.placeholder='随时提问... Enter 提问, Shift+Enter 换行';

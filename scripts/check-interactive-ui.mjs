@@ -138,7 +138,11 @@ try
 				try
 				{
 					await emulate(Width,Mobile);
-					const Position = await evaluate('start_interactive_case('+JSON.stringify({Width,Theme,Mobile})+')');
+					await evaluate('start_interactive_case('+JSON.stringify({Width,Theme,Mobile})+')');
+					await evaluate('exercise_speed_dropdown()');
+					if(Width===320) { await screenshot('speed-dropdown-'+Name,Width); }
+					await evaluate('restore_speed_fixture()');
+					const Position = await evaluate('interactive_drag_position()');
 					// The public app stylesheet lazily requests its code font when raw fallback code first appears.
 					// Resolve that fixture asset before measuring any user interaction, including failed font loads.
 					await evaluate('document.fonts.load(\'14px "Source Code Pro"\').catch(()=>[]).then(()=>document.fonts.ready).then(()=>true)');
