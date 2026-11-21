@@ -421,8 +421,13 @@ export class CodexView extends ItemView
 			SpeedOptions.push({ Value: Speed, Label: SpeedText, Disabled: true });
 		}
 		this.set_options(this.SpeedElement, SpeedOptions, Speed);
-		this.SpeedLabel.hidden = Alternate;
-		this.SpeedElement.disabled = Alternate || this.input_blocked() || Available.length === 1 && SpeedAvailable;
+		const OnlyStandard = Available.length === 1 && SpeedAvailable;
+		const SpeedReported = Array.isArray(Selected?.serviceTiers) || Array.isArray(Selected?.additionalSpeedTiers);
+		const HideSpeed = Alternate || SpeedReported && OnlyStandard && !NeedsBridge;
+		const MoveFocus = HideSpeed && this.SpeedElement.ownerDocument.activeElement === this.SpeedElement;
+		this.SpeedLabel.hidden = HideSpeed;
+		this.SpeedElement.disabled = Alternate || this.input_blocked() || OnlyStandard;
+		if(MoveFocus) { (this.ModelElement.disabled ? this.OptionsSummary : this.ModelElement)?.focus({ preventScroll: true }); }
 		this.UsageToggle.checked = Settings.ShowUsage;
 		this.CompletionToggle.checked = Settings.Completion;
 		this.CatalogElement.setText(this.Owner.CatalogError);

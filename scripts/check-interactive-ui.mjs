@@ -140,7 +140,12 @@ try
 					await emulate(Width,Mobile);
 					await evaluate('start_interactive_case('+JSON.stringify({Width,Theme,Mobile})+')');
 					await evaluate('exercise_speed_dropdown()');
-					if(Width===320) { await screenshot('speed-dropdown-'+Name,Width); }
+					if(Width===320)
+					{
+						await screenshot('speed-dropdown-'+Name,Width);
+						await evaluate('(()=>{const {Owner}=InteractiveCase;Owner.Models[0].serviceTiers=[];delete Owner.State.Settings.Speed;Owner.refresh();return true})()');
+						await screenshot('speed-standard-only-'+Name,Width);
+					}
 					await evaluate('restore_speed_fixture()');
 					const Position = await evaluate('interactive_drag_position()');
 					// The public app stylesheet lazily requests its code font when raw fallback code first appears.

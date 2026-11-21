@@ -186,13 +186,13 @@
 
 	window.exercise_speed_dropdown = async () =>
 	{
-		const {View,Owner,Root}=window.InteractiveCase, Model=Owner.Models[0], Settings=Owner.State.Settings;
-		const Panel=require_element(".codex-options",Root), Select=require_element(".codex-speed-control select",Panel);
+		const {Owner,Root}=window.InteractiveCase, Model=Owner.Models[0], Settings=Owner.State.Settings;
+		const Panel=require_element(".codex-options",Root), Label=require_element(".codex-speed-control",Panel), Select=require_element("select",Label);
 		Panel.open=true;
 		Model.serviceTiers=[{id:"priority",name:"Fast"},{id:"ultrafast",name:"Ultrafast"}];
 		const Selected=[];
 		Owner.supports_ultrafast=()=>true;
-		Owner.update_run_settings=(_Model,_Effort,Speed)=>{Selected.push(Speed);Settings.Speed=Speed;Owner.refresh();};
+		Owner.update_run_settings=(_Model,_Effort,Speed)=>{Selected.push(Speed);Settings.Fast=Speed==="fast";if(Speed==="ultrafast"){Settings.Speed=Speed;}else{delete Settings.Speed;}Owner.refresh();};
 		Settings.Fast=true;Owner.refresh();
 		check('legacy-fast-visible-in-speed-picker', Select.value==="fast" && [...Select.options].map(O=>O.textContent).join("|")==="标准|Fast|Ultrafast");
 		Select.value="ultrafast";Select.dispatchEvent(new Event("change"));
@@ -203,7 +203,21 @@
 		check('legacy-bridge-ultrafast-not-attempted', Select.options[Select.selectedIndex].disabled && Select.options[Select.selectedIndex].textContent.includes("需更新远程桥"));
 		Model.serviceTiers=undefined;Owner.supports_ultrafast=()=>true;Owner.refresh();
 		check('missing-catalog-tier-not-substituted', Select.value==="ultrafast" && Select.options[Select.selectedIndex].disabled);
+		Model.serviceTiers=[];Owner.refresh();
+		check('unavailable-remembered-speed-can-be-reset', !Label.hidden && Select.checkVisibility() && !Select.disabled && Select.value==="ultrafast" && [...Select.options].some(O=>O.value==="default" && !O.disabled));
+		Select.focus();Select.value="default";Select.dispatchEvent(new Event("change"));
+		check('standard-only-speed-row-removed-from-layout', Label.hidden && !Select.checkVisibility() && Label.getBoundingClientRect().height===0 && Selected.at(-1)==="default");
+		check('hidden-speed-row-returns-focus-to-model', document.activeElement===Panel.querySelector(".codex-controls select"));
+		delete Model.serviceTiers;Owner.refresh();
+		check('unreported-speed-not-treated-as-confirmed-standard-only', !Label.hidden && Select.disabled);
+		Model.additionalSpeedTiers=[];Owner.refresh();
+		check('legacy-confirmed-standard-only-hides-speed', Label.hidden);
+		delete Model.additionalSpeedTiers;
+		Model.serviceTiers=[{id:"ultrafast",name:"Ultrafast"}];Owner.supports_ultrafast=()=>false;Owner.refresh();
+		check('standard-only-old-bridge-keeps-upgrade-hint', !Label.hidden && [...Select.options].some(O=>O.value==="ultrafast" && O.disabled && O.textContent.includes("需更新远程桥")));
+		Owner.supports_ultrafast=()=>true;Settings.Speed="ultrafast";
 		Model.serviceTiers=[{id:"priority",name:"Fast"},{id:"ultrafast",name:"Ultrafast"}];Owner.refresh();
+		check('supported-speed-reappears', !Label.hidden && Select.checkVisibility() && !Select.disabled && Select.value==="ultrafast");
 		await settle();
 	};
 

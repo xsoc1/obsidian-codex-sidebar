@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-21: User approved hiding a redundant speed row. beta.23 hides it only when the selected model reports speed metadata, standard is the sole available choice, the current setting is standard, and no old-bridge upgrade hint applies. A saved unavailable speed remains visible and resettable; if reset hides the focused selector, focus returns to the model control. No speed settings, submission behavior or bridge protocol change. [beta.23](docs/releases/2.0.0-beta.23.md).
+
 - 2026-11-21 beta.22 delivery: Windows daily plugin installed and GitHub prerelease verified from source tag `2c5791cadb65f9b27ede48362d429482b087e717`. Native readback kept the existing Astra/Fast setting, history and operations; Sol alone advertised Ultrafast in the live catalog. [Verification and release receipt](docs/releases/2.0.0-beta.22.md) distinguishes real metadata, browser fixtures and untested live generation/iPad. Standalone bridge remains beta.15.
 
 - 2026-11-21: User requested improving Fast starting with Codex Super Fast. Local model catalog advertises `gpt-6.2-sol` with distinct `priority` and `ultrafast`; the generated app-server bindings and real read-only ephemeral thread verify the wire value. beta.22 adds a host-aware speed picker, preserves old Fast choices and in-flight operation bindings, and gates Ultrafast on the bridge's explicit capability without downgrading requests. Native/remote compatibility and rollback: [beta.22](docs/releases/2.0.0-beta.22.md). Standing Windows install and publication do not replace the existing standalone service.
