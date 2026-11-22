@@ -46,6 +46,7 @@ export interface HistoryInputLedger
 	ReadRecordsTruncated?: boolean;
 }
 export interface HistoryPlan { Messages: ChatMessage[]; Ledger: HistoryInputLedger; Navigation: string; }
+const NavigationReserve = 8192;
 const Bytes = (Text: string) => new TextEncoder().encode(Text).byteLength;
 const Saved = (M: ChatMessage) => M.Role === "user" ? M.Prompt ?? build_prompt(M.Text, M.Context ?? null, M.Quote ?? null) : M.Text;
 
@@ -148,7 +149,7 @@ export function plan_history_input(Messages: ChatMessage[], Options: HistoryBudg
 		const Cost = Derived.reduce((N, M) => N + Bytes(Saved(M)) + 192, 0) + Images.size * 4096;
 		return { Selected, Messages: Derived, Materials, Images, Cost, Deduplicated: Result.Deduplicated };
 	};
-	const Fits = (R: ReturnType<typeof Evaluate>) => R.Cost <= Budget - 8192 && R.Messages.length <= MaxMessages && R.Images.size <= MaxImages;
+	const Fits = (R: ReturnType<typeof Evaluate>) => R.Cost <= Budget - NavigationReserve && R.Messages.length <= MaxMessages && R.Images.size <= MaxImages;
 	const Add = (Index: number, Mandatory: boolean) =>
 	{
 		if(Chosen.has(Index)) { return; }
@@ -173,11 +174,24 @@ export function plan_history_input(Messages: ChatMessage[], Options: HistoryBudg
 	for(let I = Groups.length - 2; I >= 0; I--) { Add(I, false); }
 	const Result = Evaluate(Chosen), SelectedIds = new Set(Result.Selected.map(M => M.Id));
 	const Omitted = Messages.filter(M => ["user", "assistant"].includes(M.Role) && !SelectedIds.has(M.Id));
-	const Index = Omitted.filter(M => M.Role === "user").slice(-24).map(M => ({ id: M.Id, turn: M.TurnId ?? null, question: M.Text.slice(0, 96), source: M.Context?.Path ?? M.Task?.Source?.Path ?? null, status: M.CompletionStatus ?? "unknown" }));
+	const OmittedQuestions = Omitted.filter(M => M.Role === "user");
+	const Index = OmittedQuestions.slice(-24).map(M => ({ id: M.Id, turn: M.TurnId ?? null, question: M.Text.slice(0, 96), source: M.Context?.Path ?? M.Task?.Source?.Path ?? null, status: M.CompletionStatus ?? "unknown" }));
 	const Constraints = Options.UserConstraints ?? [];
-	const ReadInstructions = Options.HistoryReadAvailable === false ? "当前连接使用宿主预算预取，不提供历史读取工具；必要原文未附带时请指出缺失部分，请用户分段提供，不假装已读." : "需要省略的证明、符号或原文时调用 obsidian_history_read, 不猜补. 带 source_version 的定位符约束引用时原文; 第一页读取返回正文 version, 随后的页必须使用正文版本, 目录版本不能用于正文.";
-	const Navigation = Omitted.length || Constraints.length || Result.Materials.length ? "历史输入构造 bounded-history-v1. 完整历史仍由客户端保存, 本轮提供下列ID的材料或明确补读定位符, 不是删除历史. 历史索引仅供定位, 不作为定理条件或证明的替代. " + ReadInstructions + " 未知状态仍为未知. 字节预算是保守策略, 不是精确token数; 每张图另留保守容量, 不代表精确视觉token计数.\n" + JSON.stringify({ included: Result.Selected.map(M => M.Id), deferred_originals: Result.Materials, omitted_count: Omitted.length, recent_omitted_questions: Index, user_constraints: Constraints }) : "";
-	if(Bytes(Navigation) > 8192) { throw new Error("用户约束或历史导航超过恢复预算; 请缩小本轮材料, 原历史保留."); }
+	let Navigation = "";
+	if(Omitted.length || Constraints.length || Result.Materials.length)
+	{
+		const ReadInstructions = Options.HistoryReadAvailable === false ? "当前连接使用宿主预算预取，不提供历史读取工具；必要原文未附带时请指出缺失部分，请用户分段提供，不假装已读." : "需要省略的证明、符号或原文时调用 obsidian_history_read, 可用 list 找到目录未列出的历史问题, 不猜补. 带 source_version 的定位符约束引用时原文; 第一页读取返回正文 version, 随后的页必须使用正文版本, 目录版本不能用于正文.";
+		const Header = "历史输入构造 bounded-history-v1. 完整历史仍由客户端保存, 本轮提供下列ID的材料或明确补读定位符, 不是删除历史. 历史索引仅供定位, 不作为定理条件或证明的替代. " + ReadInstructions + " 未知状态仍为未知. 字节预算是保守策略, 不是精确token数; 每张图另留保守容量, 不代表精确视觉token数.\n";
+		const Details = { included: [...SelectedIds], deferred_originals: Result.Materials, omitted_count: Omitted.length, omitted_question_count: OmittedQuestions.length, recent_omitted_questions: Index, user_constraints: Constraints };
+		const Serialize = () => Header + JSON.stringify(Details);
+		Navigation = Serialize();
+		while(Bytes(Navigation) > NavigationReserve && Index.length)
+		{
+			Index.shift();
+			Navigation = Serialize();
+		}
+		if(Bytes(Navigation) > NavigationReserve) { throw new Error("必需的历史定位信息或用户约束超过恢复预算; 请缩小本轮材料, 原历史保留."); }
+	}
 	const Actual = Result.Messages.reduce((N, M) => N + Bytes(Saved(M)), 0) + Bytes(Navigation), Envelope = Result.Messages.length * 192;
 	if(Actual + Envelope + Result.Images.size * 4096 > Budget) { throw new Error("派生历史超出字节预算; 请缩小来源或分段. 原记录未改动."); }
 	return { Messages: Result.Messages, Navigation, Ledger: { SchemaVersion: 1, Construction: "bounded-history-v1", BudgetKind: Window ? "reported-window-conservative-bytes" : "unknown-window-conservative-bytes", ReportedModelWindow: Window, Utf8Budget: Budget, ActualUtf8Bytes: Actual, MessageEnvelopeReserveBytes: Envelope, IncludedMessageIds: Result.Selected.map(M => M.Id), IncludedMessageVersions: Result.Selected.map(M => ({ Id: M.Id, Revision: M.SyncVersion?.Revision ?? null, Digest: M.SyncVersion?.Digest ?? null })), OmittedMessageIds: Omitted.length <= 64 ? Omitted.map(M => M.Id) : [...Omitted.slice(0, 32), ...Omitted.slice(-32)].map(M => M.Id), OmittedMessageCount: Omitted.length, OmittedLocatorTruncated: Omitted.length > 64, ImageIds: [...Result.Images], Deduplicated: Result.Deduplicated, CurrentUtf8Bytes: CurrentBytes, WorkReserveUtf8Bytes: WorkReserve, ImageReserveBytes: (CurrentImages + Result.Images.size) * 4096, DeferredMaterials: Result.Materials } };

@@ -26,6 +26,36 @@ test("mandatory original material refuses an oversized request instead of trunca
 	const Plan = plan_history_input(history(2, 4)); assert.equal(Plan.Ledger.BudgetKind, "unknown-window-conservative-bytes"); assert.equal(Plan.Ledger.ReportedModelWindow, null);
 });
 
+test("a long UTF-8 history directory shrinks without dropping the prompt or mandatory history", () =>
+{
+	const Messages = history(101, 18);
+	for(const M of Messages.filter(M=>M.Role==="user"))
+	{
+		M.Text = "先核对原题中的边界条件与符号约定".repeat(9);
+		M.TurnId = M.TurnId!.padEnd(36, "0");
+		M.Context = { Path: "原创课程/数学写作与证明方法/".repeat(9) + "原始讲义.md", Mode: "阅读", Kind: "选区", Text: "原创材料", SelectedText: "原创材料", LineStart: 0, LineEnd: 0, Heading: "", Mapping: "源块", CapturedAt: "original-time", Truncated: false };
+	}
+	const Before = JSON.stringify(Messages), Constraint = "保持原证明路线，不把目录当成材料", CurrentMessage: ChatMessage = { Id: "current", Role: "user", Text: "继续解释这一段", Prompt: "继续解释这一段。以本轮原始选区为准。" };
+	const Plan = plan_history_input(Messages, { MaxUtf8Bytes: 60000, CurrentMessage, RequiredMessageIds: ["a-0"], UserConstraints: [Constraint], HistoryReadAvailable: true, HistoryReadBodyVersionsAvailable: true });
+	const Index = JSON.parse(Plan.Navigation.split("\n").at(-1)!);
+	assert.ok(Buffer.byteLength(Plan.Navigation) <= 8192);
+	assert.ok(Index.recent_omitted_questions.length > 0 && Index.recent_omitted_questions.length < 24);
+	assert.equal(Index.omitted_count, Plan.Ledger.OmittedMessageCount);
+	assert.ok(Index.omitted_question_count > Index.recent_omitted_questions.length);
+	const OmittedQuestionIds = Messages.filter(M => M.Role === "user" && !Index.included.includes(M.Id)).map(M => M.Id);
+	assert.deepEqual(Index.recent_omitted_questions.map((Q: { id: string }) => Q.id), OmittedQuestionIds.slice(-Index.recent_omitted_questions.length));
+	assert.ok(Index.included.includes("a-0") && Index.included.includes("a-100"));
+	assert.deepEqual(Index.user_constraints, [Constraint]);
+	assert.match(Plan.Navigation, /obsidian_history_read.*list/);
+	assert.equal(JSON.stringify(Messages), Before);
+	assert.equal(CurrentMessage.Prompt, "继续解释这一段。以本轮原始选区为准。");
+});
+
+test("required constraints that exceed the navigation reserve still fail without truncation", () =>
+{
+	assert.throws(() => plan_history_input([], { UserConstraints: ["必须保留此数学条件。".repeat(500)] }), /恢复预算/);
+});
+
 test("derived input deduplicates exact repeated snapshots only after their actual earlier inclusion", () =>
 {
 	const Text = "Definition: $x=1$.\n".repeat(70), Context: ContextSnapshot = { Path: "Original.md", Mode: "阅读", Kind: "当前位置", Text, SelectedText: "", LineStart: 0, LineEnd: 70, Heading: "Original", Mapping: "源块", CapturedAt: "original-time", Truncated: false };
