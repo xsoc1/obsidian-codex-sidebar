@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-22 beta.25 delivery: installed in the Windows daily vault and published as an immutable GitHub prerelease. Original history, draft, active session, settings and saved operation survived reload; the original card's resume action is available. No inference was submitted and the independent bridge was not changed. [Release receipt](docs/releases/2.0.0-beta.25.md).
+
 - 2026-11-22: User reported the recovery-budget warning. The active Windows session reproduced the old 8 KiB navigation failure before model submission. beta.25 drops only older optional directory rows, preserving the latest complete turn, required history locators, fixed constraints and original records; an oversized required payload still fails. The same saved local turn passes the candidate planner with no inference or retry. [Verification and rollout](docs/releases/2.0.0-beta.25.md).
 
 - 2026-11-22 beta.24 delivery: Windows daily plugin installed and GitHub prerelease verified at immutable source `c37796384bc4f11a5088f05678563c4cd8f0c250`. In the same 201-message session, live chat-box elements dropped from 24,073 to 6,695; all history/settings/operation comparisons passed. The browser probe verifies the hidden layout gate and reading restore, not a new native stall timing. No host or bridge modification. [Verification record](docs/releases/2.0.0-beta.24.md).
