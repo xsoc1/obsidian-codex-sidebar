@@ -1,4 +1,15 @@
-class Component { load() {} unload() {} registerDomEvent() {} }
+class Component
+{
+	Cleanups = [];
+	load() {}
+	register(Dispose) { this.Cleanups.push(Dispose); }
+	registerDomEvent(Target, Type, Handler, Options)
+	{
+		Target.addEventListener(Type, Handler, Options);
+		this.register(() => Target.removeEventListener(Type, Handler, Options));
+	}
+	unload() { for(const Dispose of this.Cleanups.splice(0).reverse()) { Dispose(); } }
+}
 class ItemView extends Component { constructor() { super(); this.app = {}; } }
 const Define = () => ({});
 window.RenderCalls = 0;

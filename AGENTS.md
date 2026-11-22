@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-22 beta.24 delivery: Windows daily plugin installed and GitHub prerelease verified at immutable source `c37796384bc4f11a5088f05678563c4cd8f0c250`. In the same 201-message session, live chat-box elements dropped from 24,073 to 6,695; all history/settings/operation comparisons passed. The browser probe verifies the hidden layout gate and reading restore, not a new native stall timing. No host or bridge modification. [Verification record](docs/releases/2.0.0-beta.24.md).
+
 - 2026-11-22: User asked to improve the sidebar after a native CPU profile identified Obsidian 1.15.1's startup-snapshot traversal, not model generation, as the measured stall. beta.24 limits the live history window to 12 recent messages / 24 while paging. When its document is hidden, the transcript has no layout box; visibility restores the same reading anchor or follows the latest answer. No off-focus hiding of still-visible windows, forced host snapshot, history mutation, or bridge change. [Mechanism, verification and release](docs/releases/2.0.0-beta.24.md).
 
 - 2026-11-21 beta.23 delivery: Windows daily plugin installed and public assets verified against immutable source/tag `09ace26868d1c3ce00f76a12068a36c674af4f02`. User's selected Ultrafast, history and operations are unchanged. [Release receipt](docs/releases/2.0.0-beta.23.md) records the browser, Windows and publication checks. The independent bridge was not changed.
