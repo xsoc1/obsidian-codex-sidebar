@@ -32,15 +32,36 @@ export class MessageList
 	private Frame: number | null = null;
 	private Window: (Window & typeof globalThis) | null;
 	private Pinned: { Context: string; MessageId: string; Resolve: (Card: HTMLElement) => HTMLElement | null; Offset: number } | null = null;
+	private BackgroundScroll: number | null = null;
 	constructor(private Root: HTMLElement, private UserInteraction?: () => void)
 	{
 		this.Window = Root.ownerDocument.defaultView;
 		Root.addEventListener("scroll", this.on_scroll, { passive: true });
 		for(const Name of ["wheel", "touchstart", "pointerdown"]) { Root.addEventListener(Name, this.on_user_input, { passive: true }); }
 		Root.addEventListener("keydown", this.on_key);
+		Root.ownerDocument.addEventListener("visibilitychange", this.on_visibility);
+		this.on_visibility();
 		const Resize = this.Window?.ResizeObserver;
 		if(Resize) { this.Observer = new Resize(() => this.schedule_scroll()); this.Observer.observe(Root); }
 	}
+	private on_visibility = (): void =>
+	{
+		if(this.Closed) { return; }
+		const Hidden = this.Root.ownerDocument.visibilityState === "hidden";
+		if(Hidden === (this.BackgroundScroll !== null)) { return; }
+		if(Hidden)
+		{
+			this.BackgroundScroll = this.Root.scrollTop;
+			// Obsidian's startup snapshot skips children without a rendered box.
+			this.Root.hidden = true;
+			return;
+		}
+		const Top = this.BackgroundScroll!;
+		this.BackgroundScroll = null;
+		this.Root.hidden = false;
+		if(!this.Follow) { this.Root.scrollTop = Top; this.LastWritten = this.Root.scrollTop; }
+		this.apply_scroll();
+	};
 	private on_user_input = (): void => { this.Pinned = null; this.UserInteraction?.(); };
 	private on_key = (Event: KeyboardEvent): void =>
 	{
@@ -48,6 +69,7 @@ export class MessageList
 	};
 	private on_scroll = (): void =>
 	{
+		if(this.BackgroundScroll !== null) { return; }
 		if(this.LastWritten !== null && Math.abs(this.Root.scrollTop - this.LastWritten) < 1) { return; }
 		this.LastWritten = null;
 		this.on_user_input();
@@ -56,13 +78,14 @@ export class MessageList
 	};
 	private remember_anchor(): void
 	{
+		if(this.BackgroundScroll !== null) { return; }
 		const Top = this.Root.getBoundingClientRect().top;
 		const Element = [...this.Root.children].find(Child => (Child as HTMLElement).dataset?.historyControls !== "true" && Child.getBoundingClientRect().bottom > Top) as HTMLElement | undefined;
 		this.Anchor = Element ? { Element, Offset: Element.getBoundingClientRect().top - Top } : null;
 	}
 	private apply_scroll(): void
 	{
-		if(this.Closed) { return; }
+		if(this.Closed || this.BackgroundScroll !== null) { return; }
 		if(this.Pinned?.Context === this.Context)
 		{
 			const Card = this.Entries.get(this.Pinned.MessageId)?.Element, Node = Card && this.Pinned.Resolve(Card);
@@ -128,12 +151,13 @@ export class MessageList
 				if(this.Context)
 				{
 					this.Cache.delete(this.Context);
-					this.Cache.set(this.Context, { Entries: this.Entries, Follow: this.Follow, Anchor: this.Anchor, ScrollTop: this.Root.scrollTop });
+					this.Cache.set(this.Context, { Entries: this.Entries, Follow: this.Follow, Anchor: this.Anchor, ScrollTop: this.BackgroundScroll ?? this.Root.scrollTop });
 					for(const Entry of this.Entries.values()) { this.Observer?.unobserve(Entry.Element); }
 				}
 				this.Cache.delete(Context);
 				this.Pinned = null;
 				this.Follow = Cached?.Follow ?? true; this.Anchor = Cached?.Anchor ?? null;
+				if(this.BackgroundScroll !== null) { this.BackgroundScroll = Cached?.ScrollTop ?? 0; }
 			}
 			let Index = 0;
 			for(const Entry of Next.values())
@@ -149,7 +173,7 @@ export class MessageList
 			}
 			for(const Entry of Next.values()) { this.Observer?.observe(Entry.Element); }
 			this.Entries = Next; this.Context = Context; Committed = true;
-			if(Cached && !this.Follow) { this.Root.scrollTop = Cached.ScrollTop; this.LastWritten = this.Root.scrollTop; }
+			if(Cached && !this.Follow && this.BackgroundScroll === null) { this.Root.scrollTop = Cached.ScrollTop; this.LastWritten = this.Root.scrollTop; }
 			this.trim_cache();
 			this.apply_scroll(); return true;
 		}
@@ -163,6 +187,7 @@ export class MessageList
 		{
 			for(const Entry of this.Entries.values()) { this.Observer?.unobserve(Entry.Element); Entry.Element.remove(); Entry.Dispose(); }
 			this.Entries.clear(); this.Context = ""; this.Follow = true; this.Anchor = null; this.LastWritten = null;
+			if(this.BackgroundScroll !== null) { this.BackgroundScroll = 0; }
 		}
 		const Cached = this.Cache.get(Context);
 		if(Cached) { this.Cache.delete(Context); for(const Entry of Cached.Entries.values()) { Entry.Dispose(); } }
@@ -171,6 +196,8 @@ export class MessageList
 	{
 		this.Closed = true; this.Generation++;
 		this.Root.removeEventListener("scroll", this.on_scroll); this.Observer?.disconnect();
+		this.Root.ownerDocument.removeEventListener("visibilitychange", this.on_visibility);
+		if(this.BackgroundScroll !== null) { this.Root.hidden = false; this.BackgroundScroll = null; }
 		for(const Name of ["wheel", "touchstart", "pointerdown"]) { this.Root.removeEventListener(Name, this.on_user_input); }
 		this.Root.removeEventListener("keydown", this.on_key); this.Pinned = null;
 		if(this.Frame !== null) { this.Window?.cancelAnimationFrame(this.Frame); this.Frame = null; }

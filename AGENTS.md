@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-22: User asked to improve the sidebar after a native CPU profile identified Obsidian 1.15.1's startup-snapshot traversal, not model generation, as the measured stall. beta.24 limits the live history window to 12 recent messages / 24 while paging. When its document is hidden, the transcript has no layout box; visibility restores the same reading anchor or follows the latest answer. No off-focus hiding of still-visible windows, forced host snapshot, history mutation, or bridge change. [Mechanism, verification and release](docs/releases/2.0.0-beta.24.md).
+
 - 2026-11-21 beta.23 delivery: Windows daily plugin installed and public assets verified against immutable source/tag `09ace26868d1c3ce00f76a12068a36c674af4f02`. User's selected Ultrafast, history and operations are unchanged. [Release receipt](docs/releases/2.0.0-beta.23.md) records the browser, Windows and publication checks. The independent bridge was not changed.
 
 - 2026-11-21: User approved hiding a redundant speed row. beta.23 hides it only when the selected model reports speed metadata, standard is the sole available choice, the current setting is standard, and no old-bridge upgrade hint applies. A saved unavailable speed remains visible and resettable; if reset hides the focused selector, focus returns to the model control. No speed settings, submission behavior or bridge protocol change. [beta.23](docs/releases/2.0.0-beta.23.md).

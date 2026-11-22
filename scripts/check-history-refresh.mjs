@@ -9,7 +9,7 @@ import { build } from "esbuild";
 
 const Browser = process.env.CODEX_LAYOUT_BROWSER;
 if(!Browser) { throw Error("Set CODEX_LAYOUT_BROWSER to an installed Chromium browser"); }
-const Baseline = process.env.CODEX_HISTORY_BASELINE ?? "4cc440be3e77dcd16d893ff6d9d7bcf1eee90b6a";
+const Baseline = process.env.CODEX_HISTORY_BASELINE ?? "09ace26868d1c3ce00f76a12068a36c674af4f02";
 const Directory = mkdtempSync(join(tmpdir(), "codex-history-refresh-"));
 for(const Old of [true, false])
 {
@@ -26,6 +26,11 @@ for(const Old of [true, false])
 }
 const Fixture = String.raw`
 window.__HistoryMetrics={ScannedMessages:0,SourceBuilds:0};
+// Same visibility gate as the installed host's startup snapshot, without serializing any DOM.
+function snapshot_elements(Element){
+ if(!Element.getClientRects().length&&getComputedStyle(Element).display!=='contents')return 0;
+ return 1+[...Element.children].reduce((N,Child)=>N+snapshot_elements(Child),0);
+}
 window.run_refresh_case=async(Sidebar,Count)=>{
  const Root=document.body.createDiv({cls:'codex-sidebar'});Root.style.cssText='width:420px;height:480px';
  const List=Root.createDiv({cls:'codex-messages'});List.style.cssText='height:440px;overflow:auto';
@@ -50,7 +55,7 @@ window.run_refresh_case=async(Sidebar,Count)=>{
  if(State()){
   Result.streamVisibleChecks=AfterStream.CheckedMessages-BeforeStream.CheckedMessages;Result.streamNavigationScans=AfterStream.NavigationScans-BeforeStream.NavigationScans;
   let CardRenders=0;const Render=View.render_card.bind(View);View.render_card=(...Args)=>{CardRenders++;return Render(...Args);};
-  const Operation=Operations.get(Messages[Count-40].OperationId);Operation.Input.Prompt+=' evidence change';Operation.Request.payload+=' request change';await View.render_messages();Result.operationEvidenceDoesNotRerender=CardRenders===0;
+  const Operation=Operations.get(Messages[Count-View.HistoryWindow.Batch].OperationId);Operation.Input.Prompt+=' evidence change';Operation.Request.payload+=' request change';await View.render_messages();Result.operationEvidenceDoesNotRerender=CardRenders===0;
   Operation.Status='failed';Operation.Error='Original explicit failure';await View.render_messages();Result.operationStatusRefreshes=CardRenders===1&&List.querySelector('.codex-operation-state').textContent==='失败';
   if(Count===240){
    View.contentEl=Root;View.Input=Root.createEl('textarea');View.QuoteElement=Root.createDiv();Owner.State.Settings={AttachContext:true};
@@ -59,7 +64,17 @@ window.run_refresh_case=async(Sidebar,Count)=>{
    let Peak=0;for(let I=0;I<6;I++){View.HistoryWindow.older(ContextKey,Messages);View.LastRendered='';await View.render_messages();Peak=Math.max(Peak,List.querySelectorAll('[data-message-id]').length);}
    Result.mountCap=Peak;Result.crossWindowQuotePreserved=!!Quote&&JSON.stringify(Owner.AnswerQuote)===SavedQuote&&!List.querySelector('[data-message-id="'+Quote.MessageId+'"]');
    await View.reveal_message(Quote.MessageId);Result.quotedHistoryJump=!!List.querySelector('[data-message-id="'+Quote.MessageId+'"]');
-   View.HistoryWindow.latest(ContextKey);View.LastRendered='';await View.render_messages();Result.returnToLatest=List.querySelectorAll('[data-message-id]').length===40&&!!List.querySelector('[data-message-id="m239"]');
+   View.HistoryWindow.latest(ContextKey);View.LastRendered='';await View.render_messages();Result.returnToLatest=List.querySelectorAll('[data-message-id]').length===View.HistoryWindow.Batch&&!!List.querySelector('[data-message-id="m239"]');
+   List.scrollTop=120;List.dispatchEvent(new Event('scroll'));
+   const SavedTop=List.scrollTop, SavedNode=List.querySelector('[data-message-id]'), BeforeHide=CardRenders;
+   Result.snapshotVisibleElements=snapshot_elements(List);
+   let Visibility='hidden';Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>Visibility});
+   try{
+    document.dispatchEvent(new Event('visibilitychange'));
+    Result.snapshotHiddenElements=snapshot_elements(List);
+    Visibility='visible';document.dispatchEvent(new Event('visibilitychange'));
+    Result.backgroundReadingRestored=List.scrollTop===SavedTop&&SavedTop>0&&List.querySelector('[data-message-id]')===SavedNode&&CardRenders===BeforeHide;
+   }finally{delete document.visibilityState;}
   }
  }
  Messages.at(-1).Text=OldText;View.MessageList?.dispose();Selection.removeAllRanges();Root.remove();return Result;
@@ -80,13 +95,19 @@ try
 	assert.ok(!Value.exceptionDetails, JSON.stringify(Value.exceptionDetails)); const Rows = Value.result.value;
 	for(const R of Rows)
 	{
-		assert.equal(R.candidate.visible, 40); assert.equal(R.candidate.streamScannedMessages, 0); assert.equal(R.candidate.streamNavigationScans, 0); assert.equal(R.candidate.streamSourceBuilds, 1);
+		assert.equal(R.candidate.visible, 12); assert.equal(R.candidate.streamScannedMessages, 0); assert.equal(R.candidate.streamNavigationScans, 0); assert.equal(R.candidate.streamSourceBuilds, 1);
 		assert.equal(R.candidate.streamCardRenders, 1); assert.ok(R.candidate.unchangedCardIdentity && R.candidate.selectionPreserved);
 		assert.ok(R.candidate.operationEvidenceDoesNotRerender && R.candidate.operationStatusRefreshes);
-		if(R.candidate.count === 240) { assert.ok(R.candidate.mountCap <= 120 && R.candidate.crossWindowQuotePreserved && R.candidate.quotedHistoryJump && R.candidate.returnToLatest); }
+		if(R.candidate.count === 240)
+		{
+			assert.ok(R.candidate.mountCap <= 24 && R.candidate.crossWindowQuotePreserved && R.candidate.quotedHistoryJump && R.candidate.returnToLatest);
+			assert.equal(R.candidate.snapshotHiddenElements, 0);
+			assert.ok(R.candidate.backgroundReadingRestored);
+			if(R.baseline.snapshotVisibleElements !== undefined) { assert.ok(R.candidate.snapshotVisibleElements < R.baseline.snapshotVisibleElements); }
+		}
 		assert.ok(R.candidate.signatureSerializedBytes < 16000); assert.ok(R.candidate.streamSerializedBytes < 40000);
 	}
-	const Report = { tier: "actual CodexView + original SDK data, 40 mounted messages, same Chromium process; not native MathJax/device", timingIncludesUtf8ByteInstrumentation: true, rendererDelayMs: 18, baseline: Baseline, cases: Rows };
+	const Report = { tier: "actual CodexView + original SDK data; same Chromium process, simulated visibility and observed host snapshot visibility gate; not native MathJax/device", timingIncludesUtf8ByteInstrumentation: true, rendererDelayMs: 18, baseline: Baseline, cases: Rows };
 	writeFileSync(join(Directory, "report.json"), JSON.stringify(Report, null, 2)); console.log(JSON.stringify({ directory: Directory, ...Report }));
 }
 finally { Socket?.close(); Child.kill(); }

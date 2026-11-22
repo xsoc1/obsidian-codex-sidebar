@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HistoryWindow } from "../src/history-window";
+import { HistoryBatch, HistoryMaximum, HistoryWindow } from "../src/history-window";
 import { followup_index, operation_label } from "../src/history-view-state";
 import type { ChatMessage } from "../src/history";
 import { retention_label, target_location, write_status } from "../src/edit/card-state";
@@ -8,16 +8,16 @@ import { retention_label, target_location, write_status } from "../src/edit/card
 const Messages = Array.from({ length: 240 }, (_, I) => ({ Id: "original-" + I }));
 test("cold history starts with one recent batch, loads older on demand and preserves its warm window", () =>
 {
-	const W = new HistoryWindow(), First = W.select("a", Messages, false); assert.equal(First.Items.length, 40); assert.equal(First.Earlier, 200);
-	W.older("a", Messages); const Expanded = W.select("a", Messages, true); assert.equal(Expanded.Items.length, 80); assert.equal(Expanded.Earlier, 160);
-	W.select("b", Messages, false); assert.equal(W.select("a", Messages, true).Items.length, 80);
-	assert.equal(W.select("a", Messages, false).Items.length, 40, "evicted or restarted views are cold, not full-history renders");
+	const W = new HistoryWindow(), First = W.select("a", Messages, false); assert.equal(First.Items.length, HistoryBatch); assert.equal(First.Earlier, Messages.length - HistoryBatch);
+	W.older("a", Messages); const Expanded = W.select("a", Messages, true); assert.equal(Expanded.Items.length, HistoryMaximum); assert.equal(Expanded.Earlier, Messages.length - HistoryMaximum);
+	W.select("b", Messages, false); assert.equal(W.select("a", Messages, true).Items.length, HistoryMaximum);
+	assert.equal(W.select("a", Messages, false).Items.length, HistoryBatch, "evicted or restarted views are cold, not full-history renders");
 });
 test("source-chain navigation loads a bounded neighborhood and returns to latest without changing saved history", () =>
 {
 	const W = new HistoryWindow(), Before = JSON.stringify(Messages); W.select("a", Messages, false);
 	assert.equal(W.focus("a", Messages, "original-10"), true); const Focused = W.select("a", Messages, true);
-	assert.equal(Focused.Items.length, 40); assert.ok(Focused.Items.some(M => M.Id === "original-10")); assert.ok(Focused.Later > 0);
+	assert.equal(Focused.Items.length, HistoryBatch); assert.ok(Focused.Items.some(M => M.Id === "original-10")); assert.ok(Focused.Later > 0);
 	W.latest("a"); assert.equal(W.select("a", Messages, true).Items.at(-1)!.Id, "original-239"); assert.equal(JSON.stringify(Messages), Before);
 	assert.equal(W.focus("a", Messages, "not-here"), false);
 	const Cold = new HistoryWindow(); Cold.focus("unopened", Messages, "original-10"); assert.ok(Cold.select("unopened", Messages, false).Items.some(M => M.Id === "original-10"));
@@ -64,8 +64,8 @@ test("continuous older navigation has a fixed mount capacity and can traverse bo
 {
 	const W = new HistoryWindow(), Many = Array.from({ length: 4000 }, (_, I) => ({ Id: "m" + I }));
 	W.select("a", Many, false);
-	for(let I = 0; I < 100; I++) { W.older("a", Many); assert.ok(W.select("a", Many, true).Items.length <= 120); }
+	for(let I = 0; I < Math.ceil(Many.length / HistoryBatch); I++) { W.older("a", Many); assert.ok(W.select("a", Many, true).Items.length <= HistoryMaximum); }
 	assert.equal(W.select("a", Many, true).Earlier, 0);
-	W.newer("a", Many); const Next = W.select("a", Many, true); assert.equal(Next.Earlier, 40); assert.equal(Next.Items.length, 120);
-	W.latest("a"); const Latest = W.select("a", Many, true); assert.equal(Latest.Items.length, 40); assert.equal(Latest.Items.at(-1)?.Id, "m3999");
+	W.newer("a", Many); const Next = W.select("a", Many, true); assert.equal(Next.Earlier, HistoryBatch); assert.equal(Next.Items.length, HistoryMaximum);
+	W.latest("a"); const Latest = W.select("a", Many, true); assert.equal(Latest.Items.length, HistoryBatch); assert.equal(Latest.Items.at(-1)?.Id, "m3999");
 });

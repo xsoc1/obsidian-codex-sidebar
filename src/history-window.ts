@@ -1,8 +1,11 @@
 interface WindowState { FirstId: string; LastId?: string; Start: number; End?: number; Forced?: boolean; }
+export const HistoryBatch = 12;
+export const HistoryMaximum = HistoryBatch * 2;
+
 export class HistoryWindow
 {
 	private Windows = new Map<string, WindowState>();
-	constructor(readonly Batch = 40, readonly Maximum = Batch * 3) { if(!Number.isInteger(Batch) || Batch < 1 || !Number.isInteger(Maximum) || Maximum < Batch) { throw Error("历史显示批量无效"); } }
+	constructor(readonly Batch = HistoryBatch, readonly Maximum = Batch * 2) { if(!Number.isInteger(Batch) || Batch < 1 || !Number.isInteger(Maximum) || Maximum < Batch) { throw Error("历史显示批量无效"); } }
 	private start(Stored: WindowState | undefined, Messages: readonly { Id: string }[]): number
 	{
 		return Stored ? Messages[Stored.Start]?.Id === Stored.FirstId ? Stored.Start : Messages.findIndex(M => M.Id === Stored.FirstId) : -1;

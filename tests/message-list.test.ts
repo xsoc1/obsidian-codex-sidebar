@@ -6,13 +6,14 @@ class Element
 {
 	children: Element[] = [];
 	parentElement: Element | null = null;
-	ownerDocument = { defaultView: null };
+	ownerDocument = Object.assign(new EventTarget(), { defaultView: null, visibilityState: "visible" });
+	hidden = false;
 	clientHeight = 100;
 	Height = 150;
 	private Top = 0;
 	private Listeners = new Map<string, () => void>();
 	get scrollHeight(): number { return Math.max(this.clientHeight, this.children.reduce((Sum, Child) => Sum + Child.Height, 0)); }
-	get scrollTop(): number { return this.Top; }
+	get scrollTop(): number { return this.hidden ? 0 : this.Top; }
 	set scrollTop(Value: number) { this.Top = Math.max(0, Math.min(Value, this.scrollHeight - this.clientHeight)); }
 	addEventListener(Name: string, Listener: () => void): void { this.Listeners.set(Name, Listener); }
 	removeEventListener(Name: string): void { this.Listeners.delete(Name); }
@@ -28,6 +29,11 @@ class Element
 		const Top = Parent ? Parent.children.slice(0, Parent.children.indexOf(this)).reduce((Sum, Child) => Sum + Child.Height, 0) - Parent.scrollTop : 0;
 		return { top: Top, bottom: Top + (Parent ? this.Height : this.clientHeight) };
 	}
+}
+function visible(Root: Element, IsVisible: boolean): void
+{
+	Root.ownerDocument.visibilityState = IsVisible ? "visible" : "hidden";
+	Root.ownerDocument.dispatchEvent(new Event("visibilitychange"));
 }
 function fixture()
 {
@@ -157,4 +163,30 @@ test("forgetting a conversation disposes its active or cached nodes and prevents
 	const Pending = deferred(), Late = F.List.update("a", [F.item("a", "late", Pending.Wait)], () => true);
 	F.List.forget("a"); Pending.release(); assert.equal(await Late, false); assert.deepEqual(F.Disposed, ["a", "late"]);
 	F.List.forget("b"); assert.equal(F.Root.children.length, 0); F.List.dispose(); assert.deepEqual(F.Disposed, ["a", "late", "b"]);
+});
+
+test("hidden history skips layout and restores its current reading anchor after a background answer update", async () =>
+{
+	const F = fixture(); await F.List.update("session", [F.item("a"), F.item("b"), F.item("c")], () => true);
+	F.Root.scroll(178); const Anchor = F.Root.children[1];
+	visible(F.Root, false); assert.equal(F.Root.hidden, true); assert.equal(F.Root.scrollTop, 0);
+	await F.List.update("session", [F.item("a"), F.item("b"), F.item("c", "new"), F.item("d")], () => true);
+	assert.equal(F.Root.hidden, true); assert.equal(F.Root.children[1], Anchor);
+	visible(F.Root, true);
+	assert.equal(F.Root.hidden, false); assert.equal(F.Root.scrollTop, 178); assert.equal(F.Root.children[1], Anchor);
+	F.List.dispose(); visible(F.Root, false); assert.equal(F.Root.hidden, false);
+});
+
+test("follow mode catches up to the final answer and a cached reading position survives a hidden session switch", async () =>
+{
+	const F = fixture(); await F.List.update("a", [F.item("a1"), F.item("a2"), F.item("a3")], () => true);
+	F.Root.scroll(80);
+	visible(F.Root, false);
+	await F.List.update("b", [F.item("b1"), F.item("b2")], () => true);
+	await F.List.update("b", [F.item("b1"), F.item("b2"), F.item("b3")], () => true);
+	visible(F.Root, true); assert.equal(F.Root.scrollTop, 350);
+	visible(F.Root, false);
+	await F.List.update("a", [F.item("a1"), F.item("a2"), F.item("a3")], () => true);
+	visible(F.Root, true); assert.equal(F.Root.scrollTop, 80);
+	F.List.dispose();
 });

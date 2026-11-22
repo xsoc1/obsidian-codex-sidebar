@@ -145,6 +145,7 @@
 	font-size: 11px;
 }
 .codex-messages { flex: 1; min-height: 80px; overflow-y: auto; overflow-x: hidden; overflow-anchor: none; scroll-behavior: auto; }
+.codex-messages[hidden] { display: none; }
 .codex-ledger-material { margin-block: 10px; overflow-wrap: anywhere; }
 .codex-ledger-material > strong { display: block; font-weight: 600; }
 .codex-input-ledger pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
