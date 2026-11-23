@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-23 beta.26 delivery: Windows daily plugin installed and public prerelease verified from immutable source `acb55227b50afbc7b3e6027b823c9d99fe307227`. Native section/block/source/PDF-page preview and keyboard/scroll return passed, and reload preserved history/settings/operations. No bridge update or iPad device test. [Release receipt](docs/releases/2.0.0-beta.26.md).
+
 - 2026-11-23: User requested click-to-preview sidebar links. beta.26 uses a single native dialog per sidebar for answer links and checked source references, preserving the original link base and focus. Markdown/MathJax previews target the referenced heading or block, and linked PDF previews draw the requested page locally; explicit open retains original source navigation. No preview fetch for external websites and no bridge or history change. [Verification and delivery](docs/releases/2.0.0-beta.26.md).
 
 - 2026-11-22 beta.25 delivery: installed in the Windows daily vault and published as an immutable GitHub prerelease. Original history, draft, active session, settings and saved operation survived reload; the original card's resume action is available. No inference was submitted and the independent bridge was not changed. [Release receipt](docs/releases/2.0.0-beta.25.md).
