@@ -17,12 +17,16 @@ export function text_identity(Text: string): string
 	return (A >>> 0).toString(16).padStart(8, "0") + (B >>> 0).toString(16).padStart(8, "0");
 }
 function body_line(Line: string): string { return Line.replace(/^\s*(?:>\s*)+/, ""); }
+function math_tokens(Line: string)
+{
+	// Consume TeX escapes before delimiters: \\[6pt] is a row break, not \[.
+	return Line.replace(/`[^`]*`/g, "").matchAll(/\\[\\$]|(\$\$|\\\[|\\\]|\\(?:begin|end)\{(?:equation\*?|align\*?|aligned|gather\*?|gathered|multline\*?|cases|split)\})/g);
+}
 function math_state(Line: string, Stack: string[]): void
 {
-	const Clean = Line.replace(/`[^`]*`/g, "");
-	const Tokens = Clean.match(/(?<!\\)\$\$|\\\[|\\\]|\\(?:begin|end)\{(?:equation\*?|align\*?|aligned|gather\*?|gathered|multline\*?|cases|split)\}/g) ?? [];
-	for(const Token of Tokens)
+	for(const [, Token] of math_tokens(Line))
 	{
+		if(!Token) { continue; }
 		if(Token === "$$") { if(Stack.at(-1) === "$$") { Stack.pop(); } else { Stack.push("$$"); } }
 		else if(Token === "\\[") { Stack.push("\\["); }
 		else if(Token === "\\]") { if(Stack.at(-1) === "\\[") { Stack.pop(); } }
@@ -33,7 +37,15 @@ function math_state(Line: string, Stack: string[]): void
 		}
 	}
 }
-function math_open(Line: string): boolean { return /(?<!\\)\$\$|\\\[|\\begin\{(?:equation\*?|align\*?|aligned|gather\*?|gathered|multline\*?|cases|split)\}/.test(Line); }
+function math_open(Line: string): boolean
+{
+	if(!Line.includes("\\") && !Line.includes("$$")) { return false; }
+	for(const [, Token] of math_tokens(Line))
+	{
+		if(Token === "$$" || Token === "\\[" || Token?.startsWith("\\begin")) { return true; }
+	}
+	return false;
+}
 function list_line(Line: string): boolean { return /^\s*(?:[-+*]|\d+[.)])\s+/.test(Line); }
 function table_line(Line: string): boolean { return /^\s*\|.*\|\s*$/.test(Line) || /\|/.test(Line) && /^\s*\|?\s*:?-{3,}/.test(Line); }
 function table_start(Lines: string[], Index: number): boolean { return table_line(Lines[Index]) || Lines[Index].includes("|") && /^\s*\|?\s*:?-{3,}/.test(Lines[Index + 1] ?? ""); }

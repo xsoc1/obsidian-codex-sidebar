@@ -4,7 +4,7 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
-**[2.0.0-beta.26](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.26)**：点击侧栏回答里的库内链接或「来源」，先在浮窗阅读笔记、指定章节、块或 PDF 页。关闭浮窗后接着读原回答，需要完整工作区视图时再点「打开原文」。[速度设置](docs/backends.md#codex-速度) · [数学写作规则](docs/development.md#math-writing-是独立的私有依赖) · [交互说明](docs/interactive-answers.md)
+**[2.0.0-beta.27](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.27)**：修复多行公式的带间距换行被认作公式起点、导致后面的交互图显示成 JSON 的问题。重新打开已有回答即可看到原图，无需重发。[速度设置](docs/backends.md#codex-速度) · [数学写作规则](docs/development.md#math-writing-是独立的私有依赖) · [交互说明](docs/interactive-answers.md)
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -39,7 +39,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.26` 属于预发布版本，在 BRAT 中需指定此版本。beta.15 独立桥可继续用标准或 Fast；远程 Ultrafast 需要更新独立桥。[升级说明](docs/migration.md)
+`2.0.0-beta.27` 属于预发布版本，在 BRAT 中需指定此版本。beta.15 独立桥可继续用标准或 Fast；远程 Ultrafast 需要更新独立桥。[升级说明](docs/migration.md)
 
 
 ### iPad

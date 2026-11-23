@@ -8,6 +8,8 @@ import { answer_quote } from "../src/quote";
 import { readFileSync } from "node:fs";
 import { interactive_contexts } from "../src/interactive/context";
 import type { ChatMessage } from "../src/history";
+import { markdown_blocks } from "../src/markdown-blocks";
+import { sample_plot } from "../src/interactive/plot";
 
 const Spec = { schemaVersion: 1, plots: [{ id: "heat", title: "时间衰减", expression: "exp(-t)*sin(x)", x: { min: 0, max: Math.PI }, parameters: [{ name: "t", label: "时间", min: 0, max: 5, step: 0.1, value: 0 }] }], symbols: [{ id: "t", symbol: "$t$", meaning: "时间", conditions: "$t\\ge0$", quote: "设 $t\\ge0$." }] };
 const Text = "完整说明 $u_t=u_{xx}$.\n\n$$\nu=e^{-t}\\sin x.\n$$\n\n```codex-ui\n" + JSON.stringify(Spec) + "\n```";
@@ -31,6 +33,41 @@ test("complete UI fences validate without changing raw mathematical answer or hi
 	assert.equal(history_items([Message])[0].content[0].text, Text);
 	const Quote = answer_quote("session", "answer", "$u_t=u_{xx}$", Text, "completed");
 	assert.equal(Quote.SourceText, Text); assert.ok(build_prompt("继续", null, Quote).includes("original_answer_markdown"));
+});
+
+test("an aligned row break with optional spacing does not swallow a later interactive graph", () =>
+{
+	const Proof = String.raw`先比较两个量。
+
+$$
+\begin{aligned}
+a &= b \\[6pt]
+  &= c.
+\end{aligned}
+$$
+
+因此读图时可以改变维数。`;
+	const Plot = { id: "shellWeight", title: "薄层权重", expression: "x^(n-1)*exp(-1/(1-x^2))", x: { min: 0, max: 0.999 }, parameters: [{ name: "n", label: "空间维数 n", min: 2, max: 8, step: 1, value: 3 }] };
+	const Answer = Proof + "\n\n" + '```codex-ui\n' + JSON.stringify({ schemaVersion: 1, plots: [Plot], symbols: [] }) + "\n```";
+	const Parsed = interactive_output(Answer, true);
+	assert.equal(Parsed.Status, "ready");
+	assert.equal(interactive_markdown(Answer, Parsed), Proof);
+	assert.deepEqual(markdown_blocks(Answer).map(B => [B.Kind, B.Closed]), [["paragraph", true], ["math", true], ["paragraph", true], ["code", true]]);
+	const Peak = (Dimension: number) => sample_plot(Parsed.Spec!.plots[0], { n: Dimension }).reduce((Best, S) => (S.y ?? 0) > (Best.y ?? 0) ? S : Best).x;
+	assert.ok(Peak(8) > Peak(2));
+});
+
+test("escaped bracket commands are literal but real delimiters still pair", () =>
+{
+	const Literal = String.raw`正文字面量 \\[5pt] 和 \\]。
+
+\[
+u=x \qquad \\[1em]
+v=y \qquad \\]
+\]
+
+之后仍是正文。`;
+	assert.deepEqual(markdown_blocks(Literal).map(B => [B.Kind, B.Closed]), [["paragraph", true], ["math", true], ["paragraph", true]]);
 });
 
 test("unfinished, interrupted, duplicated and nested UI never enable controls", () =>
