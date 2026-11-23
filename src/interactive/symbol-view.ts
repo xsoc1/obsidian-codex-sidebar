@@ -35,12 +35,12 @@ export async function render_symbol_detail(Root: HTMLElement, S: SymbolSpec, Opt
 	{
 		const Ref = Location.Source;
 		ui_element(Root, "div", "codex-symbol-metadata", [Ref.Path, Ref.Page ? `PDF 第 ${Ref.Page} 页` : Ref.LineStart != null ? `第 ${Ref.LineStart + 1} 行` : "", Ref.Host === "windows-copy" ? "Windows 副本" : "原来源快照", Ref.Mapping, Ref.CapturedAt, Ref.Truncated ? "来源已截断" : ""].filter(Boolean).join(" · "));
-		const Open = ui_element(Root, "button", "codex-symbol-open", Ref.Kind === "pdf" ? "打开原 PDF 来源" : "定位原文"); Open.type = "button";
+		const Open = ui_element(Root, "button", "codex-symbol-open", Ref.Kind === "pdf" ? "预览 PDF 来源" : "预览原文"); Open.type = "button"; Open.setAttribute("aria-haspopup", "dialog");
 		Open.addEventListener("click", () =>
 		{
 			if(!Active() || Open.disabled) { return; }
 			Open.disabled = true;
-			void Options.OpenSource(Ref).then(Result => { if(Active()) { Options.Status(Result); } }).catch(E => { if(Active()) { Options.Status(String(E)); } }).finally(() => { if(Active()) { Open.disabled = false; } });
+			void Options.OpenSource(Ref, Open).then(Result => { if(Active() && Result) { Options.Status(Result); } }).catch(E => { if(Active()) { Options.Status(String(E)); } }).finally(() => { if(Active()) { Open.disabled = false; } });
 		});
 	}
 	if(Question)

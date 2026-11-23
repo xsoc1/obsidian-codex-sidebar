@@ -32,7 +32,7 @@ export interface SourceReference
 
 interface SourceMessage { Id: string; Role: string; TurnId?: string; Context?: ContextSnapshot | null; Quote?: AnswerQuote | null; Sources?: SourceReference[]; Task?: { Source?: ContextSnapshot | null }; }
 
-function safe_source_path(Path: string): string
+export function safe_source_path(Path: string): string
 {
 	if(typeof Path !== "string" || !Path || Path !== Path.trim() || Path.length > 8000 || /[\\:\u0000-\u001f<>"|?*]/.test(Path) || Path.split("/").some(Part => !Part || Part === "." || Part === ".." || Part.startsWith("."))) { throw new Error("来源必须是当前 vault 内准确的普通文件路径"); }
 	return Path;
@@ -151,7 +151,7 @@ export function rename_sources(Refs: readonly SourceReference[], Old: string, Ne
 
 export interface SourceNavigation { Status: "exact" | "changed" | "unknown"; Path: string; Line?: number; Page?: number; Subpath?: string; Message: string; }
 
-export async function locate_source(AppValue: App, Ref: SourceReference): Promise<SourceNavigation>
+export async function locate_source(AppValue: App, Ref: SourceReference, PreviewText?: (Text: string) => void): Promise<SourceNavigation>
 {
 	if(Ref.PathExact === false) { throw new Error("旧来源只有名称, 无可靠完整路径; 未跳转到另一份同名笔记"); }
 	const Path = safe_source_path(Ref.CurrentPath ?? Ref.Path), File = AppValue.vault.getFileByPath(Path);
@@ -175,6 +175,7 @@ export async function locate_source(AppValue: App, Ref: SourceReference): Promis
 	const OpenText = Editors.map(View => View.getViewData!()), Distinct = [...new Set(OpenText)];
 	if(Distinct.length > 1) { return { Status: "unknown", Path, Message: "同文件的编辑器内容存在差异, 仅打开准确文件; 未将磁盘或另一编辑器内容冒充为当前快照" }; }
 	const Text = Distinct[0] ?? await AppValue.vault.cachedRead(File), Same = Ref.VersionKind === "file-text" && !!Ref.Version && await version_of(Text) === Ref.Version;
+	PreviewText?.(Text);
 	if(Same) { return { Status: "exact", Path, Line: Ref.LineStart ?? undefined, Message: "文件版本与捕获时一致" }; }
 	if(Ref.Anchor)
 	{
@@ -207,16 +208,21 @@ export async function open_source(AppValue: App, Ref: SourceReference): Promise<
 	return Target;
 }
 
-export function render_sources(AppValue: App, Root: HTMLElement, Refs: readonly SourceReference[]): void
+export function render_sources(AppValue: App, Root: HTMLElement, Refs: readonly SourceReference[], Preview?: (Ref: SourceReference, Button: HTMLButtonElement) => void): void
 {
 	if(!Refs.length) { return; }
 	const Details = Root.createEl("details", { cls: "codex-answer-sources" }); Details.createEl("summary", { text: `来源 (${Refs.length})` });
-	const Status = Details.createDiv({ attr: { role: "status" } });
+	const Status = Preview ? null : Details.createDiv({ attr: { role: "status" } });
 	for(const Ref of Refs)
 	{
 		const Row = Details.createDiv(), Label = source_label(Ref, Refs);
 		const Button = Row.createEl("button", { text: Label, attr: { type: "button" } });
-		Button.addEventListener("click", () => { Button.disabled = true; void open_source(AppValue, Ref).then(Target => Status.setText(Target.Message)).catch(ErrorValue => Status.setText(String(ErrorValue))).finally(() => { Button.disabled = false; }); });
+		if(Preview)
+		{
+			Button.setAttribute("aria-haspopup", "dialog");
+			Button.addEventListener("click", () => Preview(Ref, Button));
+		}
+		else { Button.addEventListener("click", () => { Button.disabled = true; void open_source(AppValue, Ref).then(Target => Status?.setText(Target.Message)).catch(ErrorValue => Status?.setText(String(ErrorValue))).finally(() => { Button.disabled = false; }); }); }
 	}
 }
 

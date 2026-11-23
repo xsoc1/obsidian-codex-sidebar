@@ -4,6 +4,7 @@ import { pdf_hash, validate_region, validate_pdf, type PdfCaptureRequest, type P
 import type { PdfImages } from "./image-store";
 import { pdf_region, pdf_selected_text, validated_pdf_target, type PdfTarget } from "./target";
 import { combine_pdf_image } from "../composer-material";
+import { pdf_document_task, PdfByteLimit } from "./page-preview";
 
 export function is_pdf_view(ViewValue: View | null | undefined): ViewValue is FileView & { getViewType(): "pdf" }
 {
@@ -49,7 +50,7 @@ export class PdfReader
 	private async document(File: TFile): Promise<{ Document: any; Version: string }>
 	{
 		if(this.Closed) { throw new Error("PDF 阅读器已关闭"); }
-		if(File.extension.toLowerCase() !== "pdf" || File.stat.size > 80 * 1024 * 1024) { throw new Error("请选择不超过 80 MB 的 PDF"); }
+		if(File.extension.toLowerCase() !== "pdf" || File.stat.size > PdfByteLimit) { throw new Error("请选择不超过 80 MB 的 PDF"); }
 		const Key = File.path + ":" + File.stat.mtime + ":" + File.stat.size;
 		let Pending = this.Documents.get(Key);
 		if(!Pending)
@@ -57,10 +58,10 @@ export class PdfReader
 			Pending = (async () =>
 			{
 				const BufferValue = await this.App.vault.readBinary(File);
-				if(BufferValue.byteLength > 80 * 1024 * 1024) { throw new Error("PDF 超过 80 MB 上限"); }
+				if(BufferValue.byteLength > PdfByteLimit) { throw new Error("PDF 超过 80 MB 上限"); }
 				const Version = await pdf_hash(BufferValue);
 				const Library = await this.Load();
-				const Document = await Library.getDocument({ data: new Uint8Array(BufferValue), isEvalSupported: false, enableXfa: false, cMapUrl: "/lib/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/lib/pdfjs/standard_fonts/", wasmUrl: "/lib/pdfjs/wasm/" }).promise;
+				const Document = await pdf_document_task(Library, BufferValue).promise;
 				if(this.Closed) { await Document.destroy(); throw new Error("PDF 捕获已取消"); }
 				if(Document.numPages < 1 || Document.numPages > 10000) { await Document.destroy(); throw new Error("PDF 页数超出支持范围"); }
 				return { Document, Version };

@@ -4,7 +4,7 @@
 
 从 2.0.0-beta.4 起, iPad 和桌面可以用 API Key 直接连接 OpenAI、DeepSeek、OpenCode Go、Google AI Studio 或 OpenAI 兼容服务. 也可使用原有独立远程桥. Windows 另有后台 Agent 入口. [连接方式与设置](docs/backends.md)
 
-**[2.0.0-beta.25](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.25)**：修复长会话恢复时，历史问题目录太长导致短问题也发不出去的问题。目录超限时优先保留最近条目，不改原历史、当前问题或已保存的选区。[速度设置](docs/backends.md#codex-速度) · [数学写作规则](docs/development.md#math-writing-是独立的私有依赖) · [交互说明](docs/interactive-answers.md)
+**[2.0.0-beta.26](https://github.com/xsoc1/obsidian-codex-sidebar/releases/tag/2.0.0-beta.26)**：点击侧栏回答里的库内链接或「来源」，先在浮窗阅读笔记、指定章节、块或 PDF 页。关闭浮窗后接着读原回答，需要完整工作区视图时再点「打开原文」。[速度设置](docs/backends.md#codex-速度) · [数学写作规则](docs/development.md#math-writing-是独立的私有依赖) · [交互说明](docs/interactive-answers.md)
 
 <img src="docs/assets/sidebar-glass.png" width="420" alt="Codex Sidebar 磨砂界面示例, 展示数学回答与提问区">
 
@@ -16,7 +16,7 @@
 - **审核后修改笔记**: 点击“生成修改预览”, 查看目标、原文和拟采用稿, 确认后写入. 支持 AI 自选、严格选区和整篇范围, 并提供冲突检查与安全撤销.
 - **回答追问**: 选中回答中的一段继续提问, 可将补充解释融入完整原说明, 方便连接上下文.
 - **会话管理**: 随笔记切换对应会话, 保留历史; 优先恢复当前会话, 其他正文按需读取, 长会话分段浏览. 问题先保存再提交, 断线后核对原操作. 支持设备本地草稿、编辑问题、分支重发、确认删除与完整会话导出, 沿用原始来源快照.
-- **来源回跳**: 回答的链接基准随原问题固定, 来源清单可回到原笔记或 PDF 页; 实际补读范围和 Windows 副本有明确标记. 连续追问可跳回原说明与最新整合回答.
+- **链接预览与来源回跳**: 普通点击在浮窗预览库内文件, 网页链接照常打开. 来源清单预览保留原定位; 版本变化时明确说明可核对的位置. 连续追问可跳回原说明与最新整合回答.
 - **行内补全**: 编辑停顿后提出短续写, 在侧栏确认插入. 保留 Obsidian 原生 Tab 和中文输入法行为.
 - **模型选择**: 选择实际可用的模型、思考档次与 Codex 速度, 自动保存选择; 按需显示上下文占用和请求状态.
 - **磨砂界面**: 顶部工具区与输入区采用局部磨砂, 正文保持清晰. 支持明暗主题、窄栏和独立折叠; 系统要求减少透明效果时使用不透明表面.
@@ -39,7 +39,7 @@
 2. 将包内文件放入笔记库的 `.obsidian/plugins/codex-sidebar/`.
 3. 在 Obsidian 中启用插件. 升级时只替换插件程序, 保留会话、事务日志和设备缓存.
 
-`2.0.0-beta.25` 属于预发布版本，在 BRAT 中需指定此版本。beta.15 独立桥可继续用标准或 Fast；远程 Ultrafast 需要更新独立桥。[升级说明](docs/migration.md)
+`2.0.0-beta.26` 属于预发布版本，在 BRAT 中需指定此版本。beta.15 独立桥可继续用标准或 Fast；远程 Ultrafast 需要更新独立桥。[升级说明](docs/migration.md)
 
 
 ### iPad

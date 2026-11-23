@@ -19,7 +19,8 @@ import { MessageList, type MessageNode } from "./message-list";
 import { SelectionPreview, selection_in_source, explanation_preview } from "./selection-preview";
 import { accessible_name, error_text } from "./ui-helpers";
 import { HistoryWindow } from "./history-window";
-import { answer_sources, source_path, render_sources, open_source } from "./sources";
+import { answer_sources, source_path, render_sources } from "./sources";
+import { bind_sidebar_links, SidebarLinkPreview } from "./sidebar-link-preview";
 import { interactive_output } from "./interactive/protocol";
 import { render_interactive } from "./interactive/panel";
 import { interactive_contexts } from "./interactive/context";
@@ -98,6 +99,7 @@ export class CodexView extends ItemView
 	private ActivityTimer: ReturnType<typeof setInterval> | null = null;
 	private MessageList: MessageList | null = null;
 	private HistoryWindow = new HistoryWindow();
+	private LinkPreview: SidebarLinkPreview;
 	private HistoryStates = new Map<string, HistoryRenderState>();
 	private EditState = new EditViewState();
 	private RenderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -121,6 +123,7 @@ export class CodexView extends ItemView
 	constructor(Leaf: WorkspaceLeaf, private Owner: SidebarOwner)
 	{
 		super(Leaf);
+		this.LinkPreview = new SidebarLinkPreview(this.app);
 	}
 
 	getViewType(): string
@@ -1059,14 +1062,7 @@ export class CodexView extends ItemView
 					const Path = Source?.Path ?? source_path(Messages, Message);
 					await MarkdownRenderer.render(this.app, Message.Text || "...", Body, Path, RenderComponent);
 					const Directory = (P: string) => P.slice(0, P.lastIndexOf("/") + 1), Moved = (Source?.Sources ?? answer_sources(Messages, Message)).some(Ref => Ref.Path === Path && Ref.CurrentPath && Directory(Ref.CurrentPath) !== Directory(Path)), Missing = !!Path && typeof this.app?.vault?.getFileByPath === "function" && !this.app.vault.getFileByPath(Path);
-					if(!Path || Moved || Missing)
-					{
-						RenderComponent.registerDomEvent(Body, "click", Event =>
-						{
-							const Node = Event.target as Element | null, Link = Node?.closest?.("a"), Href = Link?.getAttribute("href") ?? "";
-							if(Link && (Link.classList.contains("internal-link") || (!!Href && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(Href)))) { Event.preventDefault(); Event.stopImmediatePropagation(); new Notice(Moved || Missing ? "原来源已移动或缺失, 这条回答仍保留产生时的相对链接基准; 请从来源清单核对目标, 未按新目录或同名文件猜测跳转" : "这条旧回答缺少可靠来源路径, 请从原快照核对链接; 未按当前笔记或同名文件猜测跳转"); }
-						}, { capture: true });
-					}
+					bind_sidebar_links(Body, RenderComponent, this.LinkPreview, Path, Moved || Missing);
 					if(Message.Role === "assistant")
 					{
 						bind_answer_blocks(Body, Message.Text, MessageKey);
@@ -1079,8 +1075,8 @@ export class CodexView extends ItemView
 							const Active = () => RenderScope === this.draft_scope() && RenderSessionId === this.Owner.Session.Id && this.Owner.Session.Messages.some(M => M.Id === Message.Id && M.Text === OriginalText);
 							const Dispose = await render_interactive(Card, Body, OriginalText, Output, {
 									Scope: RenderScope, SessionId: RenderSessionId, MessageId: Message.Id, Contexts, Sources: Refs, Storage: localStorage, Active,
-								Markdown: (Text, Root) => MarkdownRenderer.render(this.app, Text, Root, Path, RenderComponent),
-								OpenSource: async Ref => (await open_source(this.app, Ref)).Message,
+								Markdown: async (Text, Root) => { await MarkdownRenderer.render(this.app, Text, Root, Path, RenderComponent); bind_sidebar_links(Root, RenderComponent, this.LinkPreview, Path, Moved || Missing); },
+								OpenSource: async (Ref, Button) => { this.LinkPreview.source(Ref, Button); return ""; },
 								Copy: async Text => { if(!navigator.clipboard?.writeText) { throw Error("当前环境无法访问剪贴板"); } await navigator.clipboard.writeText(Text); },
 								Followup: (Question, Selection) =>
 								{
@@ -1103,7 +1099,7 @@ export class CodexView extends ItemView
 			}
 			if(Message.Role === "assistant")
 			{
-				render_sources(this.app, Card, Source?.Sources ?? answer_sources(Messages, Message));
+				render_sources(this.app, Card, Source?.Sources ?? answer_sources(Messages, Message), (Ref, Button) => this.LinkPreview.source(Ref, Button));
 				const Related = Followups.get(Message.Id);
 				if(Related)
 				{
@@ -1134,11 +1130,7 @@ export class CodexView extends ItemView
 			if(safe_math_markdown(Value.Text))
 			{
 				await MarkdownRenderer.render(this.app, Value.Text || "未收到正文", Body, "", RenderComponent);
-				RenderComponent.registerDomEvent(Body, "click", Event =>
-				{
-					const Link = (Event.target as Element | null)?.closest?.("a"), Href = Link?.getAttribute("href") ?? "";
-					if(Link && (Link.classList.contains("internal-link") || (!!Href && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(Href)))) { Event.preventDefault(); Event.stopImmediatePropagation(); new Notice("未保存结果尚无可靠来源链接基准, 请核对原问题来源; 未按当前笔记猜测跳转"); }
-				}, { capture: true });
+				bind_sidebar_links(Body, RenderComponent, this.LinkPreview, "");
 			}
 			else { Body.createDiv({ cls: "codex-message-context", text: "为避免执行嵌入内容, 此段按原文展示" }); Body.createEl("pre", { text: Value.Text }); }
 		}
@@ -1290,6 +1282,7 @@ export class CodexView extends ItemView
 	async onClose(): Promise<void>
 	{
 		this.save_draft();
+		this.LinkPreview.close();
 		this.ExplanationBar?.dispose(); this.ExplanationBar = null;
 		this.ContextPanel?.hide(); this.ContextPanel = null;
 		this.ReleaseFooter?.(); this.ReleaseFooter = null;

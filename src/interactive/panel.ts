@@ -14,7 +14,7 @@ export interface InteractivePanelOptions
 	Storage: { getItem(Key: string): string | null; setItem(Key: string, Value: string): void };
 	Active: () => boolean;
 	Markdown: (Text: string, Root: HTMLElement) => Promise<void>;
-	OpenSource: (Source: SourceReference) => Promise<string>;
+	OpenSource: (Source: SourceReference, Trigger: HTMLButtonElement) => Promise<string>;
 	Followup: (Question: string, Selection: string) => void;
 	Copy: (Text: string) => Promise<void>;
 }

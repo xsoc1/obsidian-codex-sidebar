@@ -207,6 +207,17 @@
 .codex-history-load { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0 10px; }
 .codex-sidebar :is(.codex-edit-target, .codex-answer-sources button, .codex-followup-chain button) { text-align: left; overflow-wrap: anywhere; white-space: normal; max-width: 100%; }
 .codex-answer-sources, .codex-followup-chain { font-size: 12px; margin-top: 8px; }
+.modal.codex-link-preview { width: min(680px, calc(100vw - 28px)); max-height: 86vh; max-height: 86dvh; display: flex; flex-direction: column; }
+.codex-link-preview .modal-title { overflow-wrap: anywhere; }
+.codex-link-preview .modal-content { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: hidden; }
+.codex-link-preview-path, .codex-link-preview-status { font-size: var(--font-ui-small); color: var(--text-muted); overflow-wrap: anywhere; }
+.codex-link-preview-status:empty, .codex-link-preview-path:empty, .codex-link-preview-footer:empty { display: none; }
+.codex-link-preview-body { min-height: 0; overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; padding-inline: 3px; }
+.codex-link-preview-body > :first-child { margin-top: 0; }
+.codex-link-preview-body :is(img, canvas) { max-width: 100%; height: auto; }
+.codex-link-preview-pdf:not([hidden]) { display: block; margin-inline: auto; }
+.codex-link-preview-footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; border-top: 1px solid var(--background-modifier-border); }
+.is-mobile .codex-link-preview-footer button { min-height: 44px; }
 .codex-followup-chain button { margin: 4px 4px 0 0; }
 .codex-operation-state, .codex-edit-retention { color: var(--text-muted); font-size: 12px; margin: 6px 0; }
 .codex-sync-conflicts { font-size: 12px; margin-top: 6px; }

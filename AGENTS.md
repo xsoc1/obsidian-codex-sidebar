@@ -2,6 +2,8 @@
 
 ## Current scope
 
+- 2026-11-23: User requested click-to-preview sidebar links. beta.26 uses a single native dialog per sidebar for answer links and checked source references, preserving the original link base and focus. Markdown/MathJax previews target the referenced heading or block, and linked PDF previews draw the requested page locally; explicit open retains original source navigation. No preview fetch for external websites and no bridge or history change. [Verification and delivery](docs/releases/2.0.0-beta.26.md).
+
 - 2026-11-22 beta.25 delivery: installed in the Windows daily vault and published as an immutable GitHub prerelease. Original history, draft, active session, settings and saved operation survived reload; the original card's resume action is available. No inference was submitted and the independent bridge was not changed. [Release receipt](docs/releases/2.0.0-beta.25.md).
 
 - 2026-11-22: User reported the recovery-budget warning. The active Windows session reproduced the old 8 KiB navigation failure before model submission. beta.25 drops only older optional directory rows, preserving the latest complete turn, required history locators, fixed constraints and original records; an oversized required payload still fails. The same saved local turn passes the candidate planner with no inference or retry. [Verification and rollout](docs/releases/2.0.0-beta.25.md).
